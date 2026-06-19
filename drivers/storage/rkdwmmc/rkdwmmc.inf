@@ -1,0 +1,56 @@
+;
+; rkdwmmc.inf - Rockchip RK3576 SD card (dw_mmc) sdport miniport
+;
+; Binds to the SD controller published as ACPI\RKCPFE2C in the EDK2 RK3576 DSDT
+; (Silicon/Rockchip/RK3576/AcpiTables/Sdhc.asl). Target: Windows on ARM64.
+;
+; Copyright (c) 2026, woa-rk3576 project. SPDX-License-Identifier: MIT
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = SDHC
+ClassGuid   = {a0a588a4-c46f-4b37-b7ea-c82fe89870c6}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = rkdwmmc.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+rkdwmmc.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64
+
+[Standard.NTARM64]
+%RKMMC.DeviceDesc% = RKMMC_Inst,ACPI\RKCPFE2C
+
+[RKMMC_Inst.NT]
+CopyFiles = RKMMC_CopyFiles
+
+[RKMMC_CopyFiles]
+rkdwmmc.sys
+
+[RKMMC_Inst.NT.Services]
+AddService = rkdwmmc,0x00000002,RKMMC_Service
+
+[RKMMC_Service]
+DisplayName    = %RKMMC.SvcDesc%
+ServiceType    = 1 ; SERVICE_KERNEL_DRIVER
+StartType      = 3 ; SERVICE_DEMAND_START (removable SD; not the boot volume)
+ErrorControl   = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\rkdwmmc.sys
+LoadOrderGroup = System Bus Extender
+; sdport.sys is bound via sdport.lib + SdPortInitialize.
+
+[Strings]
+ProviderName     = "woa-rk3576"
+DiskName         = "RK3576 SD (dw_mmc) Installation Disk"
+RKMMC.DeviceDesc = "Rockchip RK3576 SD Host Controller (dw_mmc)"
+RKMMC.SvcDesc    = "Rockchip RK3576 dw_mmc SD Host Controller Driver"

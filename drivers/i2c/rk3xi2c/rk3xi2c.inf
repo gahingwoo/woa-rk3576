@@ -1,0 +1,62 @@
+;
+; rk3xi2c.inf - Rockchip rk3x I2C controller (SpbCx controller driver)
+;
+; Binds to the I2C controllers published as ACPI\RKCP3001 in the EDK2 RK3576
+; DSDT (Silicon/Rockchip/RK3576/AcpiTables/I2c.asl). Target: Windows on ARM64.
+;
+; Copyright (c) 2026, woa-rk3576 project. SPDX-License-Identifier: MIT
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = rk3xi2c.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+rk3xi2c.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64
+
+[Standard.NTARM64]
+%RKI2C.DeviceDesc% = RKI2C_Inst,ACPI\RKCP3001
+
+[RKI2C_Inst.NT]
+CopyFiles = RKI2C_CopyFiles
+
+[RKI2C_CopyFiles]
+rk3xi2c.sys
+
+[RKI2C_Inst.NT.Services]
+AddService = rk3xi2c,0x00000002,RKI2C_Service
+
+[RKI2C_Service]
+DisplayName   = %RKI2C.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\rk3xi2c.sys
+; SpbCx (SpbCx.sys) is bound via spbcx.lib + SpbDeviceInitialize; no service
+; dependency needed. PnP resource (I2cSerialBus) ordering handles consumers.
+
+[RKI2C_Inst.NT.Wdf]
+KmdfService = rk3xi2c, RKI2C_wdfsect
+
+[RKI2C_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName     = "woa-rk3576"
+DiskName         = "RK3576 I2C Installation Disk"
+RKI2C.DeviceDesc = "Rockchip rk3x I2C Controller"
+RKI2C.SvcDesc    = "Rockchip rk3x I2C Controller Driver"

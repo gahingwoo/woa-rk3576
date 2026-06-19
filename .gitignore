@@ -1,0 +1,26 @@
+# WDK / MSBuild build output
+[Aa][Rr][Mm]64/
+[Xx]64/
+[Dd]ebug/
+[Rr]elease/
+Build/
+*.obj
+*.pdb
+*.sys
+*.cat
+*.lib
+*.exp
+*.ilk
+*.log
+*.tmp
+*.tmh
+
+# VS / WDK per-user
+*.user
+*.suo
+.vs/
+
+# Test-signing material — never commit private keys/certs
+*.cer
+*.pfx
+*.pvk

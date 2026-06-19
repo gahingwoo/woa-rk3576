@@ -1,0 +1,71 @@
+;
+; dwmac.inf - Rockchip RK3576 GMAC (Synopsys DWMAC-4.20a) NetAdapterCx driver
+;
+; Binds the Ethernet MAC published as ACPI\RKCP6543 (GMAC0) in the EDK2 RK3576
+; DSDT (Silicon/Rockchip/RK3576/AcpiTables/Gmac0.asl). Target: Windows on ARM64.
+;
+; Copyright (c) 2026, woa-rk3576 project. SPDX-License-Identifier: MIT
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Net
+ClassGuid   = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = dwmac.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+dwmac.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64
+
+[Standard.NTARM64]
+%DWMAC.DeviceDesc% = DWMAC_Inst,ACPI\RKCP6543
+
+[DWMAC_Inst.NT]
+CopyFiles      = DWMAC_CopyFiles
+Characteristics = 0x84            ; NCF_PHYSICAL | NCF_HAS_UI
+*IfType        = 6                ; IF_TYPE_ETHERNET_CSMACD
+*MediaType     = 0                ; NdisMedium802_3
+*PhysicalMediaType = 14           ; NdisPhysicalMedium802_3
+AddReg         = DWMAC_Ndi
+
+[DWMAC_CopyFiles]
+dwmac.sys
+
+[DWMAC_Ndi]
+HKR, Ndi,                       Service,    0, "dwmac"
+HKR, Ndi\Interfaces,            UpperRange, 0, "ndis5"
+HKR, Ndi\Interfaces,            LowerRange, 0, "ethernet"
+
+[DWMAC_Inst.NT.Services]
+AddService = dwmac,0x00000002,DWMAC_Service
+
+[DWMAC_Service]
+DisplayName   = %DWMAC.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\dwmac.sys
+; NetAdapterCx + KMDF are bound via netadaptercx.lib + NetDeviceInitConfig.
+
+[DWMAC_Inst.NT.Wdf]
+KmdfService = dwmac, DWMAC_wdfsect
+
+[DWMAC_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName     = "woa-rk3576"
+DiskName         = "RK3576 GMAC Installation Disk"
+DWMAC.DeviceDesc = "Rockchip RK3576 Gigabit Ethernet (DWMAC)"
+DWMAC.SvcDesc    = "Rockchip RK3576 DWMAC Ethernet Driver"

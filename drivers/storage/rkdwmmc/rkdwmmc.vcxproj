@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WDK / EWDK driver project for rkdwmmc (Windows on ARM64).
+
+  This is an sdport miniport (WDM model, not KMDF): DriverEntry calls
+  SdPortInitialize. Build (EWDK prompt, after LaunchBuildEnv.cmd):
+      msbuild rkdwmmc.vcxproj /p:Configuration=Release /p:Platform=ARM64
+
+  If MSBuild cannot resolve the WDK targets, recreate from the VS "Kernel Mode
+  Driver, Empty (WDM)" template and add hw.c / miniport.c + the headers; link
+  sdport.lib. The settings below mirror that template.
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{D5E7F3A4-6B8C-4D0E-9F1A-3B4C5D6E7F80}</ProjectGuid>
+    <TemplateGuid>{497e31cb-056d-4f7a-8b7d-9f8f6e8d9b6d}</TemplateGuid>
+    <RootNamespace>rkdwmmc</RootNamespace>
+    <MinimumVisualStudioVersion>14.0</MinimumVisualStudioVersion>
+    <Configuration>Release</Configuration>
+    <Platform Condition="'$(Platform)' == ''">ARM64</Platform>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>WDM</DriverType>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <PreprocessorDefinitions>_KERNEL_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <!-- sdport.lib provides SdPortInitialize and the miniport imports. -->
+      <AdditionalDependencies>$(DDK_LIB_PATH)sdport.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Inf>
+      <SpecifyArchitecture>true</SpecifyArchitecture>
+      <Architecture>arm64</Architecture>
+    </Inf>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="miniport.c" />
+    <ClCompile Include="hw.c" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="rkdwmmc.h" />
+    <ClInclude Include="rkdwmmc_regs.h" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Inf Include="rkdwmmc.inf" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

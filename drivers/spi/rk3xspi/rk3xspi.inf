@@ -1,0 +1,67 @@
+;
+; rk3xspi.inf - Rockchip SPI controller (SpbCx controller driver)
+;
+; Target: Windows on ARM64. Binds ACPI\RKCP3003.
+;
+; PREREQUISITE (EDK2 firmware port, also part of this project; WIP): the SPI
+; controllers in Spi.asl are currently published with _HID "PRP0001" (a
+; Linux-only enumerator Windows ignores). For Windows to bind this driver, they
+; are being given a distinct _HID, e.g.
+;     Name (_HID, "RKCP3003")
+; (matching the GPIO=RKCP3002 / I2C=RKCP3001 convention).
+;
+; Copyright (c) 2026, woa-rk3576 project. SPDX-License-Identifier: MIT
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = rk3xspi.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+rk3xspi.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64
+
+[Standard.NTARM64]
+%RKSPI.DeviceDesc% = RKSPI_Inst,ACPI\RKCP3003
+
+[RKSPI_Inst.NT]
+CopyFiles = RKSPI_CopyFiles
+
+[RKSPI_CopyFiles]
+rk3xspi.sys
+
+[RKSPI_Inst.NT.Services]
+AddService = rk3xspi,0x00000002,RKSPI_Service
+
+[RKSPI_Service]
+DisplayName   = %RKSPI.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\rk3xspi.sys
+; SpbCx is bound via spbcx.lib + SpbDeviceInitialize.
+
+[RKSPI_Inst.NT.Wdf]
+KmdfService = rk3xspi, RKSPI_wdfsect
+
+[RKSPI_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName     = "woa-rk3576"
+DiskName         = "RK3576 SPI Installation Disk"
+RKSPI.DeviceDesc = "Rockchip RK3576 SPI Controller"
+RKSPI.SvcDesc    = "Rockchip RK3576 SPI Controller Driver"

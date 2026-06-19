@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Structure & docs checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Driver package structure
+        run: bash .github/scripts/check-structure.sh
+      - name: Markdown relative links
+        run: bash .github/scripts/check-links.sh
+
+  build:
+    name: WDK build (${{ matrix.name }})
+    runs-on: windows-2022
+    # Informational while the class-extension glue (sdport / NetAdapterCx) is
+    # still VERIFY-ON-BUILD: a build failure here does not fail the workflow.
+    # Flip to `false` per driver as each is validated against the WDK + hardware.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: gpio, proj: drivers/gpio/rk3576gpio/rk3576gpio.vcxproj }
+          - { name: i2c,  proj: drivers/i2c/rk3xi2c/rk3xi2c.vcxproj }
+          - { name: spi,  proj: drivers/spi/rk3xspi/rk3xspi.vcxproj }
+          - { name: sd,   proj: drivers/storage/rkdwmmc/rkdwmmc.vcxproj }
+          - { name: gmac, proj: drivers/net/dwmac/dwmac.vcxproj }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install WDK + matching SDK (10.0.22000, with retry)
+        shell: pwsh
+        run: |
+          # The hosted runner's VS targets a newer SDK whose km headers lack the
+          # class extensions (SpbCx/GpioClx/sdport/NetAdapterCx). Install the WDK
+          # and its matching SDK, then build against that version so the headers,
+          # build targets and InfVerif all line up. The chocolatey community feed
+          # is intermittently rate-limited (HTTP 503), so retry.
+          function Install-Choco($pkg) {
+            for ($i = 1; $i -le 3; $i++) {
+              choco install $pkg --no-progress -y
+              if ($LASTEXITCODE -eq 0) { return }
+              Write-Host "::warning::choco '$pkg' attempt $i failed; retrying in 15s"
+              Start-Sleep -Seconds 15
+            }
+            Write-Host "::warning::choco '$pkg' did not install after retries"
+          }
+          Install-Choco 'windows-sdk-10-version-2104-all'
+          Install-Choco 'windowsdriverkit11'
+
+      - name: Build ${{ matrix.name }} (ARM64)
+        shell: pwsh
+        run: |
+          # Build against the WDK/SDK that was installed above. If the
+          # chocolatey feed was unavailable (it is intermittently rate-limited),
+          # the toolchain is absent — skip cleanly rather than report a red that
+          # is purely an infrastructure outage. The authoritative build is local
+          # on an ARM64 Windows box with the WDK (see docs/BUILDING.md).
+          $sdk = "C:\Program Files (x86)\Windows Kits\10\Include\10.0.22000.0"
+          if (-not (Test-Path $sdk)) {
+            Write-Host "::warning::WDK/SDK 10.0.22000 not installed (chocolatey feed unavailable) - skipping build of ${{ matrix.name }}"
+            exit 0
+          }
+          msbuild ${{ matrix.proj }} `
+            /p:Configuration=Release `
+            /p:Platform=ARM64 `
+            /p:WindowsTargetPlatformVersion=10.0.22000.0 `
+            /p:SignMode=Off `
+            /m /nologo

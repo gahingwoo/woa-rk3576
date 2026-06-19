@@ -1,0 +1,72 @@
+;
+; rk3576gpio.inf - Rockchip RK3576 GPIO controller (GpioClx miniport)
+;
+; Binds to the five GPIO banks published as ACPI\RKCP3002 in the EDK2 RK3576
+; DSDT (Silicon/Rockchip/RK3576/AcpiTables/Gpio.asl). Target: Windows on ARM64.
+;
+; Copyright (c) 2026, woa-rk3576 project. SPDX-License-Identifier: MIT
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = rk3576gpio.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13 ; driver store (run-from-driver-store)
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+rk3576gpio.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64
+
+[Standard.NTARM64]
+%RKGPIO.DeviceDesc% = RKGPIO_Inst,ACPI\RKCP3002
+
+;-----------------------------------------------------------------------------
+; Install
+;-----------------------------------------------------------------------------
+
+[RKGPIO_Inst.NT]
+CopyFiles = RKGPIO_CopyFiles
+
+[RKGPIO_CopyFiles]
+rk3576gpio.sys
+
+[RKGPIO_Inst.NT.Services]
+AddService = rk3576gpio,0x00000002,RKGPIO_Service
+
+[RKGPIO_Service]
+DisplayName   = %RKGPIO.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\rk3576gpio.sys
+; No service Dependencies needed: the GpioClx class extension (msgpioclx.sys) is
+; bound via gpioclx.lib + GPIO_CLX_RegisterClient, and PnP resource dependencies
+; (GpioInt/GpioIo) order consumers after this controller automatically.
+
+; KMDF runtime registration
+[RKGPIO_Inst.NT.Wdf]
+KmdfService = rk3576gpio, RKGPIO_wdfsect
+
+[RKGPIO_wdfsect]
+KmdfLibraryVersion = 1.33
+
+;-----------------------------------------------------------------------------
+; Strings
+;-----------------------------------------------------------------------------
+
+[Strings]
+ProviderName      = "woa-rk3576"
+DiskName          = "RK3576 GPIO Installation Disk"
+RKGPIO.DeviceDesc = "Rockchip RK3576 GPIO Controller"
+RKGPIO.SvcDesc    = "Rockchip RK3576 GPIO Controller Driver"
