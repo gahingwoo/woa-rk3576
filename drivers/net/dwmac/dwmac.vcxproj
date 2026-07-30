@@ -41,6 +41,14 @@
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>KMDF</DriverType>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
+    <!--
+      NetAdapterDriver is what makes the WDK targets add the NetAdapterCx
+      include path and import library; netadaptercx.h is not in km, it ships in
+      the versioned class-extension tree keyed off NETADAPTER_VERSION_*.
+    -->
+    <NetAdapterDriver>true</NetAdapterDriver>
+    <NETADAPTER_VERSION_MAJOR>2</NETADAPTER_VERSION_MAJOR>
+    <NETADAPTER_VERSION_MINOR>1</NETADAPTER_VERSION_MINOR>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -57,8 +65,8 @@
       <PreprocessorDefinitions>_KERNEL_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <!-- netadaptercx.lib provides the NetAdapterCx class-extension imports. -->
-      <AdditionalDependencies>$(DDK_LIB_PATH)netadaptercx.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- NetAdapterDriver=true pulls in the NetCx import library itself. -->
+      <AdditionalDependencies>$(DDK_LIB_PATH)Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>

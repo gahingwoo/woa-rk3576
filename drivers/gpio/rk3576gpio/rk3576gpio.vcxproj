@@ -59,8 +59,11 @@
       <PreprocessorDefinitions>_KERNEL_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <!-- gpioclx.lib provides GPIO_CLX_*; the rest are standard KMDF imports. -->
-      <AdditionalDependencies>$(DDK_LIB_PATH)gpioclx.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!--
+        msgpioclxstub.lib is the GpioClx import stub (there is no gpioclx.lib);
+        ksguid.lib supplies the class-extension GUIDs.
+      -->
+      <AdditionalDependencies>$(DDK_LIB_PATH)\msgpioclxstub.lib;$(DDK_LIB_PATH)\ksguid.lib;$(DDK_LIB_PATH)\ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>

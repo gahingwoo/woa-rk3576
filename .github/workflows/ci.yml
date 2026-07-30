@@ -13,7 +13,7 @@ env:
   # drivers are validated against. Both the SDK and the WDK must be this
   # version; the km class extensions (sdport, SpbCx, GpioClx, NetAdapterCx)
   # come from the WDK half.
-  WDK_VERSION: ''
+  WDK_VERSION: '10.0.26100.0'
 
 jobs:
   checks:
@@ -56,12 +56,19 @@ jobs:
           Write-Host "--- Lib ---"
           Get-ChildItem "$kits\Lib" -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty Name
-          Write-Host "--- km headers we depend on ---"
-          foreach ($v in (Get-ChildItem "$kits\Include" -ErrorAction SilentlyContinue)) {
-            foreach ($h in 'km\sdport.h','km\spbcx.h','km\gpioclx.h','km\netadaptercx.h','km\acpiioct.h','km\wdm.h') {
-              $p = Join-Path $v.FullName $h
-              Write-Host ("{0,-16} {1,-22} {2}" -f $v.Name, $h, (Test-Path $p))
-            }
+          Write-Host "--- where the headers we depend on actually live ---"
+          # The class extensions do not all ship in Include\<ver>\km: SpbCx and
+          # NetAdapterCx live in versioned class-extension trees that the WDK
+          # targets add only when the project opts in. Locate them, do not guess.
+          foreach ($h in 'sdport.h','spbcx.h','gpioclx.h','netadaptercx.h','acpiioct.h') {
+            Get-ChildItem $kits -Recurse -Filter $h -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host ("{0,-18} {1}" -f $h, $_.FullName) }
+          }
+          Write-Host "--- class-extension import libs (arm64) ---"
+          foreach ($l in 'SpbCxStubs.lib','msgpioclxstub.lib','netadaptercxstub.lib','sdport.lib') {
+            Get-ChildItem $kits -Recurse -Filter $l -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match 'arm64' } |
+              ForEach-Object { Write-Host ("{0,-22} {1}" -f $l, $_.FullName) }
           }
           Write-Host "--- WDK VS build targets ---"
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
@@ -96,10 +103,11 @@ jobs:
           $need = @(
             "$kits\Include\$ver\km\wdm.h",
             "$kits\Include\$ver\km\sdport.h",
-            "$kits\Include\$ver\km\spbcx.h",
             "$kits\Include\$ver\km\gpioclx.h",
-            "$kits\Include\$ver\km\netadaptercx.h",
-            "$kits\Lib\$ver\km\arm64\ntoskrnl.lib"
+            "$kits\Include\$ver\km\acpiioct.h",
+            "$kits\Lib\$ver\km\arm64\ntoskrnl.lib",
+            "$kits\Lib\$ver\km\arm64\sdport.lib",
+            "$kits\Lib\$ver\km\arm64\msgpioclxstub.lib"
           )
           $missing = $need | Where-Object { -not (Test-Path $_) }
           if ($missing) {
