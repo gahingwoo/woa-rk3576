@@ -37,17 +37,20 @@ interrupt; this miniport implements the dw_mmc register operations it calls.
 ## Status / limitations — read before building
 
 - **The dw_mmc hardware engine (`hw.c`) is verified against the kernel driver.**
-- **The sdport integration (`miniport.c`) is a faithful template, not yet
-  validated.** The `SDPORT_*` struct field names, the bus-operation/response
-  enums, and the generic `SDPORT_EVENT_* / SDPORT_ERROR_*` constants are owned
-  by the WDK `<sdport.h>`; spots that depend on them are marked
-  `VERIFY-ON-BUILD`. Aligning these to the WDK ABI (cross-checking Microsoft's
-  `sdhc` sample) is **in progress** — the control flow is right, identifiers are
-  being settled.
+- **The sdport integration (`miniport.c`) compiles clean against
+  `<sdport.h>`** (WDK 10.0.26100) but has not run on silicon. Building it
+  corrected the `GetSlotCount` and `Cleanup` signatures, `CrashdumpSupported`,
+  and a wrong PIO event mapping: there is no `SDPORT_EVENT_BUFFER_WRITE_READY`;
+  sdport names those events after the FIFO state (`BUFFER_EMPTY` = send more,
+  `BUFFER_FULL` = data waiting), and the read path was reporting no event at
+  all, so a PIO read would have stalled.
 - **PIO only**, single outstanding request, no tuning/HS400, 4-bit max.
-- **R2 response byte-ordering** may need a one-byte shift (SD spec drops the CRC);
-  verify against a known CID/CSD on hardware.
-- **Not yet compiled with a WDK or run on silicon.**
+- **R2 response byte-ordering is still open** and is *not* a build question. A
+  one-byte shift may be needed (the SD spec drops the CRC) and the RK3588
+  reference cannot settle it, because that driver is SDHCI, whose RESPONSE
+  register presents an already-shifted view that dw_mmc's RESP registers do not.
+  Read a known CID/CSD on hardware and compare.
+- **Builds for ARM64 in CI; not yet run on silicon.**
 
 ## Bring-up order
 

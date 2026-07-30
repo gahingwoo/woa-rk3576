@@ -196,10 +196,10 @@ TX-clock `_DSM` whose GUID is `d637828d-556c-4829-966a-237072f00ff1` — our
 `Gmac0.asl` provides all three, with that same GUID. So these drivers are
 **drop-in candidates against our tables**, already proven on silicon.
 
-That reframes the job: instead of settling `VERIFY-ON-BUILD` class-extension ABI
-questions from scratch in `storage/rkdwmmc/miniport.c` and
-`net/dwmac/netadapter.c`, diff those files against the working equivalents and
-keep only what is genuinely RK3576-specific (register windows, GRF bits, clock
+That reframed the job: rather than deriving the class-extension ABI from scratch
+in `storage/rkdwmmc/miniport.c` and `net/dwmac/netadapter.c`, those files were
+diffed against the working equivalents and against the WDK headers themselves,
+keeping only what is genuinely RK3576-specific (register windows, GRF bits, clock
 IDs). SPI stays ours — RK3588 has no SPI driver at all.
 
 Two divergences that diff already found and that are now fixed:

@@ -31,20 +31,21 @@ one really is the Synopsys IP, so the register engine matches stmmac directly.
 ## Status / limitations — read before building
 
 - **The DWMAC engine (`hw.c`) is verified against the kernel stmmac driver.**
-- **The NetAdapterCx layer (`netadapter.c`) is a faithful template, not
-  validated.** NetCx APIs (the `NET_RING` packet/fragment iteration, link/
-  capability structures, queue config) are owned by the WDK `<netadaptercx.h>`
-  and change across versions; spots that touch them are marked
-  `VERIFY-ON-BUILD`. Aligning these to the WDK ABI (cross-checking the
-  NetAdapterCx samples) is **in progress** — the control flow is right,
-  identifiers are being settled.
+- **The NetAdapterCx layer (`netadapter.c`) compiles clean against NetAdapter
+  2.1** (WDK 10.0.26100) but has not run on silicon. Getting it to build
+  corrected four real defects, not just names: there is no
+  `NetTxQueueGetAdapter`/`NetRxQueueGetAdapter` (the adapter and each queue now
+  carry a context pointing back at the device context, which is where the
+  adapter state actually lives); fragment data is reached through the
+  `ms_fragment_virtualaddress` extension, not a `NetFragmentGetVirtualAddress`
+  call; datapath capabilities were never published, so `NetAdapterStart` could
+  not have succeeded; and that start call had to move out of `EvtDeviceAdd`.
 - **Interrupt-driven datapath**: a WDFINTERRUPT ISR latches the DMA channel
   status and the DPC wakes the TX/RX queues (`NetTxQueueNotifyMoreCompleted...` /
-  `NetRxQueueNotifyMoreReceived...`). The dwmac status read/ack is verified; the
-  WDFINTERRUPT + NetCx notification wiring is `VERIFY-ON-BUILD`.
+  `NetRxQueueNotifyMoreReceived...`).
 - **No checksum/LSO/RSS offloads, no multicast filter** (accepts its unicast +
   broadcast). MTU 1500.
-- **Not yet compiled with a WDK or run on silicon.**
+- **Builds for ARM64 in CI; not yet run on silicon.**
 
 ## Bring-up dependency
 

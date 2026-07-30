@@ -40,7 +40,21 @@
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>WDM</DriverType>
-    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+    <!--
+      Desktop, not Universal: sdport.sys!SdPortInitialize is not part of the
+      Universal DDI surface, so ApiValidator rejects a Universal sdport
+      miniport. The RK3588 dwcsdhc miniport is Desktop for the same reason.
+    -->
+    <DriverTargetPlatform>Desktop</DriverTargetPlatform>
+    <!--
+      Catalog target list. The WDK default for ARM64 is Server10_ARM64, i.e.
+      build 14393, which predates the 16299 these INFs require for DIRID 13 --
+      inf2cat then finds no installable DDInstall section and fails signability.
+      RS3 is 16299, the real floor. 10_GE (Windows 11 24H2) is deliberately
+      absent: RK3576 is ARMv8.0 and 24H2 requires ARMv8.1 LSE atomics, so it
+      cannot boot on this silicon (see docs/BRINGUP-PLAN.md).
+    -->
+    <Inf2CatWindowsVersionList>10_RS3_ARM64,10_RS4_ARM64,10_RS5_ARM64,10_19H1_ARM64,10_VB_ARM64,10_CO_ARM64,10_NI_ARM64</Inf2CatWindowsVersionList>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />

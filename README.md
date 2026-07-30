@@ -29,9 +29,9 @@ no inbox driver for, plus docs for the peripherals that *do* use inbox drivers.
 
 ¹ Paired with a small **EDK2/ACPI** change in the RK3576 firmware port (also
   part of this project) — **WIP**, tracked under [firmware changes](#firmware-acpi-changes-wip).
-² The SoC register engine is verified against the mainline kernel driver;
-  aligning the Windows class-extension glue (sdport / NetAdapterCx) to the WDK
-  ABI is **in progress** (the spots are marked `VERIFY-ON-BUILD` in the source).
+² The SoC register engine is verified against the mainline kernel driver, and
+  the Windows class-extension glue (sdport / NetAdapterCx) now compiles against
+  the WDK. Neither has run on silicon.
 
 With inbox display (GOP) + USB input + storage + the drivers above, the platform
 has every piece needed to boot Windows to the desktop with networking.

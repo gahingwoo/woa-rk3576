@@ -10,13 +10,9 @@ Abstract:
     common-buffer DMA setup, MMIO mapping, and the TX/RX datapath that bridges
     NetCx packet rings to the verified DWMAC engine in hw.c.
 
-    !!! VERIFY-ON-BUILD !!!
-    The DWMAC hardware engine (hw.c) is kernel-verified. This file follows the
-    documented NetAdapterCx model, but the NetCx API names (NET_RING iteration,
-    capability/link structures, queue config) are owned by the WDK
-    <netadaptercx.h> and evolve across versions. Aligning these to the WDK ABI
-    is in progress (WIP); the control flow is correct, identifiers are being
-    settled. Spots that touch the NetCx ABI are marked VERIFY-ON-BUILD.
+    Compiled against NetAdapter 2.1 (WDK 10.0.26100). The DWMAC hardware engine
+    (hw.c) is verified against the kernel stmmac driver; this file is verified to
+    the extent a compiler can verify it -- it has not run on silicon.
 
 Environment:
 

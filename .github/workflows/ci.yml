@@ -131,10 +131,6 @@ jobs:
           Write-Host "Using WDK $ver."
           "version=$ver" >> $env:GITHUB_OUTPUT
 
-      # Catalog generation is off here: it is a signing-time concern, the build
-      # runs with SignMode=Off, and the WDK's default /os list for this
-      # configuration does not include any ARM64 target new enough for our INFs.
-      # Compiling and linking is what this gate is for.
       - name: Build ${{ matrix.name }} (ARM64)
         shell: pwsh
         run: |
@@ -143,7 +139,6 @@ jobs:
             /p:Platform=ARM64 `
             /p:WindowsTargetPlatformVersion=${{ steps.wdk.outputs.version }} `
             /p:SignMode=Off `
-            /p:EnableInf2cat=false `
             /m /nologo /v:normal
           if ($LASTEXITCODE -ne 0) { throw "msbuild failed for ${{ matrix.name }}" }
 

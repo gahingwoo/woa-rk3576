@@ -10,13 +10,10 @@ Abstract:
     the SDPORT_* callback table; each callback maps an sdport operation onto the
     verified dw_mmc engine in hw.c.
 
-    !!! VERIFY-ON-BUILD !!!
-    The dw_mmc register logic (hw.c) is kernel-verified. This file follows the
-    documented sdport miniport model and Microsoft's "sdhc" sample, but the exact
-    SDPORT_* struct field names, the bus-operation/response enums, and the
-    generic event/error constants are owned by the WDK <sdport.h>. Aligning these
-    to the WDK ABI at the flagged spots is in progress (WIP); the control flow is
-    correct, the identifiers are being settled.
+    Compiled against <sdport.h> from WDK 10.0.26100. The dw_mmc register logic
+    (hw.c) is verified against the kernel driver; this file is verified to the
+    extent a compiler can verify it -- it has not run on silicon. The one item a
+    build cannot settle is the R2 response byte order; see RkdwmmcGetResponse.
 
 Environment:
 
@@ -325,10 +322,16 @@ RkdwmmcGetResponse(
 
     if (Command->ResponseType == SdResponseTypeR2) {
         //
-        // 136-bit response. dw_mmc RESP0..3 hold bits [31:0]..[127:96].
-        // sdport's R2 buffer convention may require a one-byte shift (the
-        // SDHCI/SD spec drops the CRC) — verify against a known CID/CSD on
-        // hardware. VERIFY-ON-BUILD.
+        // 136-bit response. dw_mmc RESP0..3 hold bits [31:0]..[127:96], so
+        // copying them in order puts the least significant word first, which is
+        // the direction sdport wants.
+        //
+        // VERIFY-ON-HARDWARE, and deliberately still open: whether a one-byte
+        // shift is also needed is *not* a build question and the RK3588
+        // reference does not answer it. That driver is SDHCI, where the
+        // RESPONSE register already presents the response CRC-stripped and
+        // shifted, and it simply byte-copies 16 bytes out of it. dw_mmc's RESP
+        // registers are not the same view. Read a known CID/CSD and compare.
         //
         resp[0] = DwmmcRead(slot->Regs, DWMMC_RESP0);
         resp[1] = DwmmcRead(slot->Regs, DWMMC_RESP1);
@@ -453,7 +456,9 @@ RkdwmmcToggleEvents(
     //
     // sdport asks us to enable/disable classes of events. v1 keeps a broad,
     // always-on dw_mmc INTMASK (command, data, error, RX/TX, CD) and treats the
-    // sdport mask as advisory. VERIFY-ON-BUILD if finer gating is needed.
+    // sdport mask as advisory. That is a deliberate simplification, not an
+    // unknown: finer gating would mean mapping SDPORT_EVENT_* onto individual
+    // INTMASK bits, which is only worth doing if spurious interrupts show up.
     //
     UNREFERENCED_PARAMETER(EventMask);
 
