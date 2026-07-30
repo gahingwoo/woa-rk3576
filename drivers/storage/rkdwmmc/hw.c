@@ -116,7 +116,7 @@ DwmmcInitController(
     //
     rxWm = (Slot->FifoDepth / 2) - 1;
     DwmmcWrite(Slot->Regs, DWMMC_FIFOTH,
-               DWMMC_FIFOTH(2, rxWm, Slot->FifoDepth / 2));
+               DWMMC_FIFOTH_VALUE(2, rxWm, Slot->FifoDepth / 2));
 
     //
     // Maximum data/response timeout and debounce.

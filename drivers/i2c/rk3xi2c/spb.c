@@ -95,32 +95,6 @@ Rk3xI2cEvtTargetConnect(
 
 _Use_decl_annotations_
 VOID
-Rk3xI2cEvtControllerLock(
-    WDFDEVICE Controller,
-    SPBTARGET SpbTarget
-    )
-{
-    //
-    // Sequential dispatch already serializes requests and every request issues
-    // its own STOP, so bus locking is a no-op in v1.
-    //
-    UNREFERENCED_PARAMETER(Controller);
-    UNREFERENCED_PARAMETER(SpbTarget);
-}
-
-_Use_decl_annotations_
-VOID
-Rk3xI2cEvtControllerUnlock(
-    WDFDEVICE Controller,
-    SPBTARGET SpbTarget
-    )
-{
-    UNREFERENCED_PARAMETER(Controller);
-    UNREFERENCED_PARAMETER(SpbTarget);
-}
-
-_Use_decl_annotations_
-VOID
 Rk3xI2cEvtIoRead(
     WDFDEVICE Controller,
     SPBTARGET SpbTarget,

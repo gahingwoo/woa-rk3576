@@ -50,6 +50,7 @@ jobs:
         shell: pwsh
         run: |
           $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          $ver = '${{ env.WDK_VERSION }}'
           Write-Host "--- Include ---"
           Get-ChildItem "$kits\Include" -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty Name
@@ -79,6 +80,12 @@ jobs:
           Get-ChildItem "$vs\VC\Tools\MSVC" -ErrorAction SilentlyContinue |
             ForEach-Object { Get-ChildItem "$($_.FullName)\bin\Hostx64\arm64\armasm64.exe" -ErrorAction SilentlyContinue } |
             Select-Object -ExpandProperty FullName
+          Write-Host "--- inf2cat supported /os values ---"
+          # The WDK default for a Universal Windows10 ARM64 driver is
+          # Server10_arm64, i.e. build 14393 -- older than the 16299 our INFs
+          # require for DIRID 13, so the DDInstall sections are excluded and the
+          # signability test fails. Print what this inf2cat actually accepts.
+          & "$kits\bin\$ver\x86\inf2cat.exe" /? 2>&1 | Select-String -Pattern 'ARM64|arm64'
           Write-Host "--- masm/marmasm build customizations ---"
           Get-ChildItem "$vs\MSBuild\Microsoft\VC\v170\BuildCustomizations" -Filter '*asm*' -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty Name
@@ -124,6 +131,10 @@ jobs:
           Write-Host "Using WDK $ver."
           "version=$ver" >> $env:GITHUB_OUTPUT
 
+      # Catalog generation is off here: it is a signing-time concern, the build
+      # runs with SignMode=Off, and the WDK's default /os list for this
+      # configuration does not include any ARM64 target new enough for our INFs.
+      # Compiling and linking is what this gate is for.
       - name: Build ${{ matrix.name }} (ARM64)
         shell: pwsh
         run: |
@@ -132,6 +143,7 @@ jobs:
             /p:Platform=ARM64 `
             /p:WindowsTargetPlatformVersion=${{ steps.wdk.outputs.version }} `
             /p:SignMode=Off `
+            /p:EnableInf2cat=false `
             /m /nologo /v:normal
           if ($LASTEXITCODE -ne 0) { throw "msbuild failed for ${{ matrix.name }}" }
 

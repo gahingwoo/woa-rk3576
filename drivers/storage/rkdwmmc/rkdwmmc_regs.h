@@ -175,9 +175,11 @@ Environment:
 #define DWMMC_STATUS_FIFO_COUNT(_x)  (((_x) >> 17) & 0x1FFF)
 
 //
-// FIFOTH: msize[30:28], rx watermark[27:16], tx watermark[11:0].
+// FIFOTH value: msize[30:28], rx watermark[27:16], tx watermark[11:0].
+// Named distinctly from the DWMMC_FIFOTH register offset above -- sharing the
+// name made the function-like macro shadow the offset entirely.
 //
-#define DWMMC_FIFOTH(_m, _rx, _tx) \
+#define DWMMC_FIFOTH_VALUE(_m, _rx, _tx) \
     ((((_m) & 0x7) << 28) | (((_rx) & 0xFFF) << 16) | ((_tx) & 0xFFF))
 
 //

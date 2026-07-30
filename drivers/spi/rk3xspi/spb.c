@@ -114,22 +114,6 @@ Rk3xSpiEvtTargetConnect(
 
 _Use_decl_annotations_
 VOID
-Rk3xSpiEvtControllerLock(WDFDEVICE Controller, SPBTARGET SpbTarget)
-{
-    UNREFERENCED_PARAMETER(Controller);
-    UNREFERENCED_PARAMETER(SpbTarget);
-}
-
-_Use_decl_annotations_
-VOID
-Rk3xSpiEvtControllerUnlock(WDFDEVICE Controller, SPBTARGET SpbTarget)
-{
-    UNREFERENCED_PARAMETER(Controller);
-    UNREFERENCED_PARAMETER(SpbTarget);
-}
-
-_Use_decl_annotations_
-VOID
 Rk3xSpiEvtIoRead(
     WDFDEVICE Controller,
     SPBTARGET SpbTarget,

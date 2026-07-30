@@ -107,8 +107,6 @@ EVT_WDF_DEVICE_RELEASE_HARDWARE Rk3xSpiEvtReleaseHardware;
 // spb.c
 //
 EVT_SPB_TARGET_CONNECT          Rk3xSpiEvtTargetConnect;
-EVT_SPB_CONTROLLER_LOCK         Rk3xSpiEvtControllerLock;
-EVT_SPB_CONTROLLER_UNLOCK       Rk3xSpiEvtControllerUnlock;
 EVT_SPB_CONTROLLER_READ      Rk3xSpiEvtIoRead;
 EVT_SPB_CONTROLLER_WRITE     Rk3xSpiEvtIoWrite;
 EVT_SPB_CONTROLLER_SEQUENCE  Rk3xSpiEvtIoSequence;

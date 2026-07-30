@@ -36,13 +36,16 @@ Environment:
                                 DWMMC_INT_EBE | DWMMC_INT_FRUN | DWMMC_INT_HTO)
 
 _Use_decl_annotations_
-ULONG
+NTSTATUS
 RkdwmmcGetSlotCount(
-    PVOID Argument
+    PSD_MINIPORT Miniport,
+    PUCHAR SlotCount
     )
 {
-    UNREFERENCED_PARAMETER(Argument);
-    return 1;   // one dw_mmc slot per controller instance
+    UNREFERENCED_PARAMETER(Miniport);
+
+    *SlotCount = 1;   // one dw_mmc slot per controller instance
+    return STATUS_SUCCESS;
 }
 
 _Use_decl_annotations_
@@ -362,8 +365,6 @@ RkdwmmcInterrupt(
 
     //
     // ---- dw_mmc RINTSTS  ->  sdport event/error mapping ----
-    // VERIFY-ON-BUILD: the SDPORT_EVENT_* / SDPORT_ERROR_* names below are the
-    // generic sdport set; confirm spelling/values against your <sdport.h>.
     //
     if (status & DWMMC_INT_CD) {
         *NotifyCardChange = TRUE;
@@ -392,6 +393,7 @@ RkdwmmcInterrupt(
             slot->DataTransferred +=
                 DwmmcReadFifo(slot, slot->DataBuffer + slot->DataTransferred, remaining);
         }
+        events |= SDPORT_EVENT_BUFFER_FULL;
     }
     if (status & DWMMC_INT_TXDR) {
         if (slot->DataBuffer != NULL && slot->DataWrite &&
@@ -400,7 +402,7 @@ RkdwmmcInterrupt(
             slot->DataTransferred +=
                 DwmmcWriteFifo(slot, slot->DataBuffer + slot->DataTransferred, remaining);
         }
-        events |= SDPORT_EVENT_BUFFER_WRITE_READY;
+        events |= SDPORT_EVENT_BUFFER_EMPTY;
     }
 
     if (status & DWMMC_INT_DATA_OVER) {
@@ -500,10 +502,10 @@ RkdwmmcRestoreContext(
 _Use_decl_annotations_
 VOID
 RkdwmmcCleanup(
-    PVOID PrivateExtension
+    PSD_MINIPORT Miniport
     )
 {
-    UNREFERENCED_PARAMETER(PrivateExtension);
+    UNREFERENCED_PARAMETER(Miniport);
 }
 
 _Use_decl_annotations_
@@ -537,7 +539,7 @@ DriverEntry(
     init.Cleanup = RkdwmmcCleanup;
 
     init.PrivateExtensionSize = sizeof(RKDWMMC_SLOT);
-    init.CrashDumpSupported = FALSE;
+    init.CrashdumpSupported = FALSE;
 
     return SdPortInitialize(DriverObject, RegistryPath, &init);
 }

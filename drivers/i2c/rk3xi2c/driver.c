@@ -104,8 +104,6 @@ Rk3xI2cEvtDeviceAdd(
     spbConfig.ControllerDispatchType = WdfIoQueueDispatchSequential;
     spbConfig.PowerManaged = WdfTrue;
     spbConfig.EvtSpbTargetConnect = Rk3xI2cEvtTargetConnect;
-    spbConfig.EvtSpbControllerLock = Rk3xI2cEvtControllerLock;
-    spbConfig.EvtSpbControllerUnlock = Rk3xI2cEvtControllerUnlock;
     spbConfig.EvtSpbIoRead = Rk3xI2cEvtIoRead;
     spbConfig.EvtSpbIoWrite = Rk3xI2cEvtIoWrite;
     spbConfig.EvtSpbIoSequence = Rk3xI2cEvtIoSequence;

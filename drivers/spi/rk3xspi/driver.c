@@ -90,8 +90,6 @@ Rk3xSpiEvtDeviceAdd(
     spbConfig.ControllerDispatchType = WdfIoQueueDispatchSequential;
     spbConfig.PowerManaged = WdfTrue;
     spbConfig.EvtSpbTargetConnect = Rk3xSpiEvtTargetConnect;
-    spbConfig.EvtSpbControllerLock = Rk3xSpiEvtControllerLock;
-    spbConfig.EvtSpbControllerUnlock = Rk3xSpiEvtControllerUnlock;
     spbConfig.EvtSpbIoRead = Rk3xSpiEvtIoRead;
     spbConfig.EvtSpbIoWrite = Rk3xSpiEvtIoWrite;
     spbConfig.EvtSpbIoSequence = Rk3xSpiEvtIoSequence;

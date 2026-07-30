@@ -133,8 +133,6 @@ EVT_WDF_DEVICE_RELEASE_HARDWARE Rk3xI2cEvtReleaseHardware;
 // spb.c — SpbCx callbacks.
 //
 EVT_SPB_TARGET_CONNECT      Rk3xI2cEvtTargetConnect;
-EVT_SPB_CONTROLLER_LOCK     Rk3xI2cEvtControllerLock;
-EVT_SPB_CONTROLLER_UNLOCK   Rk3xI2cEvtControllerUnlock;
 EVT_SPB_CONTROLLER_READ      Rk3xI2cEvtIoRead;
 EVT_SPB_CONTROLLER_WRITE     Rk3xI2cEvtIoWrite;
 EVT_SPB_CONTROLLER_SEQUENCE  Rk3xI2cEvtIoSequence;
