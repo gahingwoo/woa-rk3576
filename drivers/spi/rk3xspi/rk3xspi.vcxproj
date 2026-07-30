@@ -88,5 +88,16 @@
     <Inf Include="rk3xspi.inf" />
   </ItemGroup>
 
+
+  <!--
+    Stage the built .sys (and the stamped INF) into the package directory.
+    Without this the package directory holds only the INF, and inf2cat's
+    signability test fails with 22.9.1 "rk3xspi.sys ... is missing".
+  -->
+  <ItemGroup>
+    <FilesToPackage Include="$(TargetPath)" />
+    <FilesToPackage Include="@(Inf->'%(CopyOutput)')" Condition="'@(Inf)'!=''" />
+  </ItemGroup>
+
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
