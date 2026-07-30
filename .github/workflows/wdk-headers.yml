@@ -7,6 +7,11 @@ name: WDK headers
 # round-tripping a build for every identifier. See docs/BUILDING.md.
 
 on:
+  # workflow_dispatch alone is only registered for the default branch, so this
+  # also runs whenever the export definition itself changes -- which is what
+  # makes it usable from a feature branch.
+  push:
+    paths: [ '.github/workflows/wdk-headers.yml' ]
   workflow_dispatch:
 
 permissions:
