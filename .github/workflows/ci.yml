@@ -2,12 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  # Pinned so a runner-image refresh cannot silently change the headers the
+  # drivers are validated against. Both the SDK and the WDK must be this
+  # version; the km class extensions (sdport, SpbCx, GpioClx, NetAdapterCx)
+  # come from the WDK half.
+  WDK_VERSION: ''
 
 jobs:
   checks:
@@ -23,10 +29,6 @@ jobs:
   build:
     name: WDK build (${{ matrix.name }})
     runs-on: windows-2022
-    # Informational while the class-extension glue (sdport / NetAdapterCx) is
-    # still VERIFY-ON-BUILD: a build failure here does not fail the workflow.
-    # Flip to `false` per driver as each is validated against the WDK + hardware.
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -41,43 +43,90 @@ jobs:
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
 
-      - name: Install WDK + matching SDK (10.0.22000, with retry)
+      - name: Toolchain inventory
         shell: pwsh
         run: |
-          # The hosted runner's VS targets a newer SDK whose km headers lack the
-          # class extensions (SpbCx/GpioClx/sdport/NetAdapterCx). Install the WDK
-          # and its matching SDK, then build against that version so the headers,
-          # build targets and InfVerif all line up. The chocolatey community feed
-          # is intermittently rate-limited (HTTP 503), so retry.
-          function Install-Choco($pkg) {
-            for ($i = 1; $i -le 3; $i++) {
-              choco install $pkg --no-progress -y
-              if ($LASTEXITCODE -eq 0) { return }
-              Write-Host "::warning::choco '$pkg' attempt $i failed; retrying in 15s"
-              Start-Sleep -Seconds 15
+          $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          Write-Host "--- Include ---"
+          Get-ChildItem "$kits\Include" -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty Name
+          Write-Host "--- Lib ---"
+          Get-ChildItem "$kits\Lib" -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty Name
+          Write-Host "--- km headers we depend on ---"
+          foreach ($v in (Get-ChildItem "$kits\Include" -ErrorAction SilentlyContinue)) {
+            foreach ($h in 'km\sdport.h','km\spbcx.h','km\gpioclx.h','km\netadaptercx.h','km\acpiioct.h','km\wdm.h') {
+              $p = Join-Path $v.FullName $h
+              Write-Host ("{0,-16} {1,-22} {2}" -f $v.Name, $h, (Test-Path $p))
             }
-            Write-Host "::warning::choco '$pkg' did not install after retries"
           }
-          Install-Choco 'windows-sdk-10-version-2104-all'
-          Install-Choco 'windowsdriverkit11'
+          Write-Host "--- WDK VS build targets ---"
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Write-Host "VS: $vs"
+          Get-ChildItem "$vs\MSBuild\Microsoft\VC\v170\Platforms\ARM64\PlatformToolsets" -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty Name
+          Write-Host "--- armasm64 ---"
+          Get-ChildItem "$vs\VC\Tools\MSVC" -ErrorAction SilentlyContinue |
+            ForEach-Object { Get-ChildItem "$($_.FullName)\bin\Hostx64\arm64\armasm64.exe" -ErrorAction SilentlyContinue } |
+            Select-Object -ExpandProperty FullName
+          Write-Host "--- masm/marmasm build customizations ---"
+          Get-ChildItem "$vs\MSBuild\Microsoft\VC\v170\BuildCustomizations" -Filter '*asm*' -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty Name
+
+      - name: Resolve the WDK version
+        id: wdk
+        shell: pwsh
+        run: |
+          # A missing toolchain is a build failure, not something to skip past.
+          # If the pin is absent, the runner image changed and WDK_VERSION
+          # needs a deliberate bump - do not paper over it.
+          $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          $ver = '${{ env.WDK_VERSION }}'
+          if ($ver -eq '') {
+            $ver = (Get-ChildItem "$kits\Include" |
+                    Where-Object { Test-Path (Join-Path $_.FullName 'km\sdport.h') } |
+                    Sort-Object Name -Descending |
+                    Select-Object -First 1).Name
+            Write-Host "::warning::WDK_VERSION unpinned; auto-selected $ver"
+          }
+          if (-not $ver) { throw "no WDK with km headers found on this runner" }
+          $need = @(
+            "$kits\Include\$ver\km\wdm.h",
+            "$kits\Include\$ver\km\sdport.h",
+            "$kits\Include\$ver\km\spbcx.h",
+            "$kits\Include\$ver\km\gpioclx.h",
+            "$kits\Include\$ver\km\netadaptercx.h",
+            "$kits\Lib\$ver\km\arm64\ntoskrnl.lib"
+          )
+          $missing = $need | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            $missing | ForEach-Object { Write-Host "::error::missing $_" }
+            throw "WDK $ver is not fully present on this runner"
+          }
+          Write-Host "Using WDK $ver."
+          "version=$ver" >> $env:GITHUB_OUTPUT
 
       - name: Build ${{ matrix.name }} (ARM64)
         shell: pwsh
         run: |
-          # Build against the WDK/SDK that was installed above. If the
-          # chocolatey feed was unavailable (it is intermittently rate-limited),
-          # the toolchain is absent — skip cleanly rather than report a red that
-          # is purely an infrastructure outage. The authoritative build is local
-          # on an ARM64 Windows box with the WDK (see docs/BUILDING.md).
-          $sdk = "C:\Program Files (x86)\Windows Kits\10\Include\10.0.22000.0"
-          if (-not (Test-Path $sdk)) {
-            Write-Host "::warning::WDK/SDK 10.0.22000 not installed (chocolatey feed unavailable) - skipping build of ${{ matrix.name }}"
-            exit 0
-          }
           msbuild ${{ matrix.proj }} `
             /p:Configuration=Release `
             /p:Platform=ARM64 `
-            /p:WindowsTargetPlatformVersion=10.0.22000.0 `
+            /p:WindowsTargetPlatformVersion=${{ steps.wdk.outputs.version }} `
             /p:SignMode=Off `
-            /m /nologo
+            /m /nologo /v:normal
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed for ${{ matrix.name }}" }
+
+      - name: Upload driver package
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rk3576-woa-${{ matrix.name }}-arm64
+          path: |
+            **/ARM64/Release/**/*.sys
+            **/ARM64/Release/**/*.inf
+            **/ARM64/Release/**/*.pdb
+          if-no-files-found: warn
