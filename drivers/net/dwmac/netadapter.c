@@ -487,6 +487,14 @@ DwmacEvtPrepareHardware(
         return status;
     }
 
+    //
+    // DMA tuning has to be resolved before anything programs the DMA. It only
+    // reads ACPI and one capability register, so it is safe here and cannot
+    // fail in a way that matters -- the defaults it starts from are the values
+    // the driver used to hardcode.
+    //
+    DwmacReadDmaCfgFromFirmware(A, &A->DmaCfg);
+
     DwmacLoadMacAddress(A);
     DwmacInitMacDma(A);
     DwmacSetMacAddress(A);

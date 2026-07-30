@@ -99,15 +99,19 @@ typedef struct _DWMAC_DSM_INPUT {
                                         sizeof(ULONG))];
 } DWMAC_DSM_INPUT;
 
-static
+//
+// Shared with acpi_dsd.c: the same synchronous "send one ACPI IOCTL to the PDO
+// and wait" that every consumer here needs.
+//
+_Use_decl_annotations_
 NTSTATUS
 DwmacSendAcpiIoctl(
-    _In_ PDEVICE_OBJECT Pdo,
-    _In_reads_bytes_(InputSize) PVOID Input,
-    _In_ ULONG InputSize,
-    _Out_writes_bytes_(OutputSize) PVOID Output,
-    _In_ ULONG OutputSize,
-    _Out_ PULONG BytesReturned
+    PDEVICE_OBJECT Pdo,
+    PVOID Input,
+    ULONG InputSize,
+    PVOID Output,
+    ULONG OutputSize,
+    PULONG BytesReturned
     )
 {
     KEVENT event;

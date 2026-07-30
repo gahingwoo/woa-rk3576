@@ -286,13 +286,64 @@ DwmacInitMacDma(
     _In_ PDWMAC_ADAPTER A
     )
 {
+    PDWMAC_DMA_CFG cfg = &A->DmaCfg;
+    ULONG bus;
+
     //
-    // DMA system bus: mixed burst, address-aligned beats, a spread of burst
-    // lengths.
+    // DMA system bus. Everything here comes from what firmware published in
+    // _DSD / AXIC (see acpi_dsd.c); the values that arrive for RK3576 are the
+    // same ones mainline's device tree carries.
     //
-    DwmacWrite(A->Mac, DMA_SYS_BUS_MODE,
-               DMA_SYS_BUS_MB | DMA_SYS_BUS_AAL |
-               DMA_SYS_BUS_BLEN16 | DMA_SYS_BUS_BLEN8 | DMA_SYS_BUS_BLEN4);
+    // Read-modify-write rather than a blind store, so that fields firmware did
+    // not mention keep their reset values. stmmac only ORs bits in; we clear
+    // the ones we own first, which is the same result on a core coming out of
+    // reset and is deterministic if it is not.
+    //
+    bus = DwmacRead(A->Mac, DMA_SYS_BUS_MODE);
+    bus &= ~(DMA_SYS_BUS_FB | DMA_SYS_BUS_MB | DMA_SYS_BUS_AAL |
+             DMA_SYS_BUS_EAME);
+
+    if (cfg->FixedBurst) {
+        bus |= DMA_SYS_BUS_FB;
+    }
+    //
+    // Mixed burst has no effect while fixed burst is set; mirror stmmac and set
+    // it anyway rather than second-guess the firmware.
+    //
+    if (cfg->MixedBurst) {
+        bus |= DMA_SYS_BUS_MB;
+    }
+    if (cfg->Aal) {
+        bus |= DMA_SYS_BUS_AAL;
+    }
+    if (cfg->Eame) {
+        bus |= DMA_SYS_BUS_EAME;
+    }
+
+    //
+    // The AXI fields only move when firmware named an axi-config package, which
+    // is what stmmac does with an absent snps,axi-config phandle.
+    //
+    if (cfg->AxiConfigFound) {
+        bus &= ~(DMA_SYS_BUS_LPI_XIT_FRM | DMA_SYS_BUS_EN_LPI |
+                 DMA_SYS_BUS_WR_OSR_MASK | DMA_SYS_BUS_RD_OSR_MASK |
+                 DMA_SYS_BUS_BLEN_MASK);
+
+        if (cfg->AxiLpiEn) {
+            bus |= DMA_SYS_BUS_EN_LPI;
+        }
+        if (cfg->AxiXitFrm) {
+            bus |= DMA_SYS_BUS_LPI_XIT_FRM;
+        }
+
+        bus |= (cfg->AxiWrOsrLmt << DMA_SYS_BUS_WR_OSR_SHIFT) &
+               DMA_SYS_BUS_WR_OSR_MASK;
+        bus |= (cfg->AxiRdOsrLmt << DMA_SYS_BUS_RD_OSR_SHIFT) &
+               DMA_SYS_BUS_RD_OSR_MASK;
+        bus |= cfg->AxiBlenMask & DMA_SYS_BUS_BLEN_MASK;
+    }
+
+    DwmacWrite(A->Mac, DMA_SYS_BUS_MODE, bus);
 
     //
     // Base MAC config (speed/duplex filled in by DwmacUpdateLink). Strip CRC/pad
@@ -313,7 +364,41 @@ DwmacInitRings(
     _In_ PDWMAC_ADAPTER A
     )
 {
+    PDWMAC_DMA_CFG cfg = &A->DmaCfg;
     ULONG i;
+    ULONG chan;
+    ULONG txPbl;
+    ULONG rxPbl;
+
+    //
+    // Channel burst configuration, from firmware. A zero txpbl/rxpbl means
+    // "use the common pbl", same as stmmac.
+    //
+    txPbl = cfg->TxPbl != 0 ? cfg->TxPbl : cfg->Pbl;
+    rxPbl = cfg->RxPbl != 0 ? cfg->RxPbl : cfg->Pbl;
+
+    chan = DwmacRead(A->Mac, DMA_CHAN_CONTROL) & ~DMA_CHAN_CTRL_PBLX8;
+    if (cfg->PblX8) {
+        chan |= DMA_CHAN_CTRL_PBLX8;
+    }
+    DwmacWrite(A->Mac, DMA_CHAN_CONTROL, chan);
+
+    //
+    // OSP lets the DMA start fetching the next packet's descriptors before the
+    // current one has drained; stmmac sets it unconditionally.
+    //
+    DwmacWrite(A->Mac, DMA_CHAN_TX_CONTROL,
+               (DwmacRead(A->Mac, DMA_CHAN_TX_CONTROL) &
+                ~DMA_CHAN_TXCTRL_PBL_MASK) |
+               ((txPbl << DMA_CHAN_TXCTRL_PBL_SHIFT) &
+                DMA_CHAN_TXCTRL_PBL_MASK) |
+               DMA_CHAN_TXCTRL_OSP);
+
+    DwmacWrite(A->Mac, DMA_CHAN_RX_CONTROL,
+               (DwmacRead(A->Mac, DMA_CHAN_RX_CONTROL) &
+                ~DMA_CHAN_RXCTRL_PBL_MASK) |
+               ((rxPbl << DMA_CHAN_RXCTRL_PBL_SHIFT) &
+                DMA_CHAN_RXCTRL_PBL_MASK));
 
     //
     // TX descriptors: host-owned, empty.

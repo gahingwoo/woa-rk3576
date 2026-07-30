@@ -51,6 +51,43 @@ Environment:
 #define RkLog(_Level, ...)                                                    \
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, (_Level), "dwmac: " __VA_ARGS__)
 
+//
+// DMA tuning. Every field here has a counterpart in the device tree that
+// mainline's stmmac reads, and the same names are published by our firmware
+// through _DSD and the AXIC package it points at. The defaults below are
+// stmmac's defaults for a property that is absent, so a firmware that publishes
+// nothing still lands on the behaviour Linux would have.
+//
+typedef struct _DWMAC_DMA_CFG {
+    ULONG   Pbl;                 // snps,pbl        (default DWMAC_DEFAULT_PBL)
+    ULONG   TxPbl;               // snps,txpbl      (0 = use Pbl)
+    ULONG   RxPbl;               // snps,rxpbl      (0 = use Pbl)
+    BOOLEAN PblX8;               // !snps,no-pbl-x8 (default TRUE)
+
+    BOOLEAN FixedBurst;          // snps,fixed-burst
+    BOOLEAN MixedBurst;          // snps,mixed-burst
+    BOOLEAN Aal;                 // snps,aal
+    BOOLEAN Eame;                // not from firmware; from the core's own
+                                 // GMAC_HW_FEATURE1 address-width capability
+
+    //
+    // From the package named by snps,axi-config. Only applied when
+    // AxiConfigFound; otherwise the AXI fields keep their reset values, which
+    // is exactly what stmmac does when the phandle is absent.
+    //
+    BOOLEAN AxiConfigFound;
+    BOOLEAN AxiLpiEn;            // snps,lpi_en
+    BOOLEAN AxiXitFrm;           // snps,xit_frm
+    ULONG   AxiWrOsrLmt;         // snps,wr_osr_lmt (default 1)
+    ULONG   AxiRdOsrLmt;         // snps,rd_osr_lmt (default 1)
+    ULONG   AxiBlenMask;         // snps,blen, already positioned in [7:1]
+} DWMAC_DMA_CFG, *PDWMAC_DMA_CFG;
+
+//
+// stmmac's DEFAULT_DMA_PBL.
+//
+#define DWMAC_DEFAULT_PBL       8
+
 typedef struct _DWMAC_ADAPTER {
     WDFDEVICE        Device;
     NETADAPTER       Adapter;
@@ -81,6 +118,8 @@ typedef struct _DWMAC_ADAPTER {
     ULONG            TxHead;          // next desc to fill
     ULONG            TxTail;          // next desc to reclaim
     ULONG            RxIndex;         // next rx desc to inspect
+
+    DWMAC_DMA_CFG    DmaCfg;
 
     ULONG            PhyAddr;         // MDIO PHY address
     UCHAR            MacAddress[6];
@@ -143,6 +182,28 @@ VOID     DwmacUpdateLink(_In_ PDWMAC_ADAPTER A);      // read PHY, set TX clock 
 // acpi_dsm.c — firmware-owned TX clock selection.
 //
 NTSTATUS DwmacSetTxClockDsm(_In_ PDWMAC_ADAPTER A, _In_ ULONG SpeedMbps);
+
+//
+// Synchronous IOCTL to the ACPI PDO. Lives in acpi_dsm.c; acpi_dsd.c uses it
+// too.
+//
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DwmacSendAcpiIoctl(
+    _In_ PDEVICE_OBJECT Pdo,
+    _In_reads_bytes_(InputSize) PVOID Input,
+    _In_ ULONG InputSize,
+    _Out_writes_bytes_(OutputSize) PVOID Output,
+    _In_ ULONG OutputSize,
+    _Out_ PULONG BytesReturned
+    );
+
+//
+// acpi_dsd.c — DMA tuning published by firmware. Fills Cfg with the stmmac
+// defaults first, so the caller may ignore the return value and still get a
+// usable configuration if firmware publishes nothing.
+//
+VOID     DwmacReadDmaCfgFromFirmware(_In_ PDWMAC_ADAPTER A, _Out_ PDWMAC_DMA_CFG Cfg);
 VOID     DwmacInitRings(_In_ PDWMAC_ADAPTER A);
 VOID     DwmacStart(_In_ PDWMAC_ADAPTER A);
 VOID     DwmacStop(_In_ PDWMAC_ADAPTER A);

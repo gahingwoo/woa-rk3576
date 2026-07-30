@@ -34,6 +34,7 @@ Environment:
 #define GMAC_INT_STATUS         0x00B0
 #define GMAC_INT_EN             0x00B4
 #define GMAC_HW_FEATURE0        0x011C
+#define GMAC_HW_FEATURE1        0x0120
 #define GMAC_MDIO_ADDR          0x0200
 #define GMAC_MDIO_DATA          0x0204
 #define GMAC_ADDR_HIGH0         0x0300
@@ -73,11 +74,33 @@ Environment:
 #define DMA_STATUS              0x1008
 
 #define DMA_BUS_MODE_SFT_RESET  BIT_(0)
+
+//
+// DMA_SYS_BUS_MODE. Everything below [7:1] and [27:16] is programmed from the
+// values firmware publishes in _DSD / the AXIC package (see acpi_dsd.c); the
+// hardware reset values are deliberately preserved for any field firmware does
+// not mention, which is what stmmac's read-modify-write does.
+//
+#define DMA_SYS_BUS_FB          BIT_(0)    // fixed burst; when set MB is ignored
+#define DMA_SYS_BUS_BLEN4       BIT_(1)
+#define DMA_SYS_BUS_BLEN8       BIT_(2)
+#define DMA_SYS_BUS_BLEN16      BIT_(3)
+#define DMA_SYS_BUS_BLEN32      BIT_(4)
+#define DMA_SYS_BUS_BLEN64      BIT_(5)
+#define DMA_SYS_BUS_BLEN128     BIT_(6)
+#define DMA_SYS_BUS_BLEN256     BIT_(7)
+#define DMA_SYS_BUS_BLEN_MASK   0x000000FEu // [7:1]
+#define DMA_SYS_BUS_EAME        BIT_(11)   // enhanced addressing (>32-bit DMA)
 #define DMA_SYS_BUS_AAL         BIT_(12)   // address-aligned beats
 #define DMA_SYS_BUS_MB          BIT_(14)   // mixed burst
-#define DMA_SYS_BUS_BLEN16      BIT_(3)
-#define DMA_SYS_BUS_BLEN8       BIT_(2)
-#define DMA_SYS_BUS_BLEN4       BIT_(1)
+
+#define DMA_SYS_BUS_RD_OSR_SHIFT    16     // [19:16] outstanding reads - 1
+#define DMA_SYS_BUS_RD_OSR_MASK     0x000F0000u
+#define DMA_SYS_BUS_WR_OSR_SHIFT    24     // [27:24] outstanding writes - 1
+#define DMA_SYS_BUS_WR_OSR_MASK     0x0F000000u
+
+#define DMA_SYS_BUS_LPI_XIT_FRM BIT_(30)
+#define DMA_SYS_BUS_EN_LPI      BIT_(31)
 
 //
 // Per-channel DMA registers (channel 0). base + 0x1100.
@@ -99,9 +122,23 @@ Environment:
 #define DMA_CHAN_CUR_RX_DESC    (DMA_CHAN_BASE + 0x4C)
 #define DMA_CHAN_STATUS         (DMA_CHAN_BASE + 0x60)
 
+#define DMA_CHAN_CTRL_PBLX8     BIT_(16)   // multiply the PBL below by 8
+
 #define DMA_CHAN_TXCTRL_ST      BIT_(0)    // start transmit
+#define DMA_CHAN_TXCTRL_OSP     BIT_(4)    // operate on second packet
+#define DMA_CHAN_TXCTRL_PBL_SHIFT   16     // [21:16]
+#define DMA_CHAN_TXCTRL_PBL_MASK    0x003F0000u
 #define DMA_CHAN_RXCTRL_SR      BIT_(0)    // start receive
 #define DMA_CHAN_RXCTRL_RBSZ_SHIFT  1      // receive buffer size [14:1]
+#define DMA_CHAN_RXCTRL_PBL_SHIFT   16     // [21:16]
+#define DMA_CHAN_RXCTRL_PBL_MASK    0x003F0000u
+
+//
+// GMAC_HW_FEATURE1[15:14]: widest DMA address the core can emit.
+// 0 = 32-bit, 1 = 40-bit, 2 = 48-bit.
+//
+#define GMAC_HW_FEATURE1_ADDR64_SHIFT  14
+#define GMAC_HW_FEATURE1_ADDR64_MASK   0x0000C000u
 
 #define DMA_CHAN_INTR_NIE       BIT_(15)   // normal interrupt summary enable
 #define DMA_CHAN_INTR_AIE       BIT_(14)   // abnormal interrupt summary enable

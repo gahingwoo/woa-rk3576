@@ -86,6 +86,7 @@
   <ItemGroup>
     <ClCompile Include="netadapter.c" />
     <ClCompile Include="hw.c" />
+    <ClCompile Include="acpi_dsd.c" />
     <ClCompile Include="acpi_dsm.c" />
   </ItemGroup>
 
