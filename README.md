@@ -90,11 +90,14 @@ drivers/
   net/dwmac/            GMAC Ethernet (DWMAC)   (NetAdapterCx)
 docs/
   BRINGUP-PLAN.md       staged plan to first boot + Windows build ceiling
+  INSTALL.md            installing Windows: which builds work, NVRAM-less boot
   ARCHITECTURE.md       WOA driver model + bring-up plan
   BUILDING.md           toolchain, signing, install, debug
   STORAGE.md            eMMC (inbox) vs SD (custom)
   DISPLAY.md            inbox GOP vs custom VOP2 WDDM
   AUDIO.md              SAI + ES8388 status; USB Audio stopgap
+tools/
+  make-woa-usb.sh       build a Windows install stick that boots without NVRAM
 .github/workflows/      CI (structure checks + ARM64 WDK build)
 ```
 
