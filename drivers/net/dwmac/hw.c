@@ -8,7 +8,7 @@ Abstract:
 
     Synopsys DWMAC-4.20a hardware engine for the RK3576 GMAC. Verified against
     the kernel stmmac driver (dwmac4_core / dwmac4_dma / dwmac4_descs) and the
-    rockchip dwmac glue (SDGMAC_GRF clock select).
+    rockchip dwmac glue.
 
     Datapath: bounce buffers. One TX and one RX DMA channel, fixed descriptor
     rings, fixed per-descriptor DMA buffers. Frame data is copied to/from those
@@ -183,31 +183,34 @@ DwmacPhyDetect(
 }
 
 //
-// Program the SDGMAC_GRF clock selection for the negotiated speed (HIWORD-
-// UPDATE: high 16 bits are the write mask).
+// Select the RGMII TX clock for the negotiated speed. The register lives in
+// SDGMAC_GRF, which belongs to firmware rather than to this device's _CRS, so
+// it is reached through the TX-clock _DSM — see acpi_dsm.c for why.
 //
 static
 VOID
-DwmacSetGrfClock(
+DwmacSetTxClock(
     _In_ PDWMAC_ADAPTER A,
     _In_ ULONG SpeedMbps
     )
 {
-    ULONG val;
-
-    if (A->Grf == NULL) {
-        return;
-    }
+    ULONG speed;
 
     if (SpeedMbps >= 1000) {
-        val = RK3576_GMAC_CLK_125M;
+        speed = 1000;
     } else if (SpeedMbps >= 100) {
-        val = RK3576_GMAC_CLK_25M;
+        speed = 100;
     } else {
-        val = RK3576_GMAC_CLK_2_5M;
+        speed = 10;
     }
 
-    WRITE_REGISTER_ULONG((volatile ULONG *)(A->Grf + RK3576_GMAC0_CON0_OFFSET), val);
+    //
+    // A failure is logged by the callee. There is nothing useful to do about it
+    // here: firmware selected a clock at boot, so the link may still work at
+    // that one speed, and failing the link-state update outright would be
+    // worse than carrying on.
+    //
+    (VOID)DwmacSetTxClockDsm(A, speed);
 }
 
 VOID
@@ -257,7 +260,7 @@ DwmacUpdateLink(
     A->LinkSpeedMbps = speed;
     A->FullDuplex = full;
 
-    DwmacSetGrfClock(A, speed);
+    DwmacSetTxClock(A, speed);
 
     //
     // MAC speed/duplex: PS=1 selects 10/100 (MII), FES=1 selects 100 within that;

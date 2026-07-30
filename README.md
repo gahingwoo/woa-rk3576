@@ -51,15 +51,24 @@ build.cmd Release
 CI builds every driver for ARM64 on each push — see
 [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
-## Firmware (ACPI) changes (WIP)
+## Firmware (ACPI) changes
 
 The RK3576 EDK2 firmware port is also part of this project, so these ACPI
-changes are being made there alongside the drivers (work in progress):
+changes are made there alongside the drivers.
 
-- **eMMC** — add `Name (_CID, "PNP0D40")` to `Emmc.asl` so the inbox SDHCI driver
-  binds (the device is SDHCI-compatible and already exposes the SD clock `_DSM`).
-- **SPI** — give the SPI controllers a Windows `_HID` (e.g. `RKCP3003`) instead
-  of the Linux-only `PRP0001` in `Spi.asl`.
+Done:
+
+- **ACPI built into the CM5-IO image** — `AcpiTables.inf` +
+  `RK3576AcpiPlatformDxe.inf` are in the platform build, with
+  `PcdConfigTableModeDefault = 0x3` so one image serves both FDT (Linux) and
+  ACPI (Windows). See [docs/BRINGUP-PLAN.md](docs/BRINGUP-PLAN.md).
+- **eMMC** — `Emmc.asl` carries `Name (_CID, "PNP0D40")`, so the inbox SDHCI
+  driver binds (the device is SDHCI-compatible and exposes the SD clock `_DSM`).
+- **SPI** — `Spi.asl` publishes `_HID "RKCP3003"` with `_CID "PRP0001"` kept for
+  Linux.
+
+Still open:
+
 - **Audio (SAI)** — bigger task: enumerate the RK3576 **SAI** block (not the old
   I²S) with correct addresses/clocks/DMA, under a distinct `_HID` (the stale
   `I2s.asl` wrongly reuses `RKCP3003`). Solution being worked out — see
@@ -76,6 +85,7 @@ drivers/
   storage/rkdwmmc/      SD card host (dw_mmc)   (sdport miniport)
   net/dwmac/            GMAC Ethernet (DWMAC)   (NetAdapterCx)
 docs/
+  BRINGUP-PLAN.md       staged plan to first boot + Windows build ceiling
   ARCHITECTURE.md       WOA driver model + bring-up plan
   BUILDING.md           toolchain, signing, install, debug
   STORAGE.md            eMMC (inbox) vs SD (custom)

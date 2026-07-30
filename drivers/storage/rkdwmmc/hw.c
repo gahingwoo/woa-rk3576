@@ -24,6 +24,7 @@ Environment:
 --*/
 
 #include "rkdwmmc.h"
+#include "sip.h"
 
 #define DWMMC_DEFAULT_FIFO_DEPTH    256
 
@@ -123,8 +124,40 @@ DwmmcInitController(
     DwmmcWrite(Slot->Regs, DWMMC_TMOUT, 0xFFFFFFFF);
     DwmmcWrite(Slot->Regs, DWMMC_DEBNCE, 0x00FFFFFF);
 
-    if (Slot->CiuClockHz == 0) {
-        Slot->CiuClockHz = RKDWMMC_CIU_CLOCK_HZ;
+    //
+    // RK3576 gates the internal memory clock automatically; the kernel driver
+    // sets this in dw_mci_rockchip_init and the phase logic below assumes it.
+    //
+    DwmmcWrite(Slot->Regs, DWMMC_MISC_CON,
+               ((ULONG)DWMMC_MISC_MEM_CLK_AUTOGATE << 16) |
+               DWMMC_MISC_MEM_CLK_AUTOGATE);
+
+    //
+    // Probe the SiP clock service once. A GET is harmless and tells us whether
+    // BL31 implements the SD/MMC service at all; if it does not, DwmmcSetClock
+    // falls back to the controller divider.
+    //
+    {
+        ULONG ciuHz = 0;
+        NTSTATUS status;
+
+        status = RkSipSdmmcClockRateGet(
+                     (ULONG_PTR)Slot->RegsPhysical.QuadPart,
+                     RK_SIP_SDMMC_CLOCK_ID_MSHC_CIU,
+                     &ciuHz);
+
+        if (NT_SUCCESS(status) && ciuHz >= RKDWMMC_CLKGEN_DIV) {
+            Slot->SipClockAvailable = TRUE;
+            Slot->CiuClockHz = ciuHz / RKDWMMC_CLKGEN_DIV;
+        } else {
+            Slot->SipClockAvailable = FALSE;
+            Slot->CiuClockHz = RKDWMMC_CIU_CLOCK_FALLBACK_HZ;
+            RkLog(RK_DBG_ERROR,
+                  "SiP SD/MMC clock service unavailable (0x%08X); "
+                  "using the controller divider, high-speed modes will be "
+                  "unreliable\n",
+                  status);
+        }
     }
 }
 
@@ -143,6 +176,18 @@ DwmmcUpdateClockRegs(
     return DwmmcPollClear(Slot, DWMMC_CMD, DWMMC_CMD_START, 100000);
 }
 
+//
+// The card clock rate is set in the CRU, not with the controller's own divider.
+// The RK35xx divider cannot cover the range the card needs on its own, and a
+// Windows miniport has no clock framework, so EL3 is asked to program
+// cclk_src_sdmmc0 (see sip.h). The CRU is set to 2*F because of the fixed
+// divide-by-two in the Rockchip mmc clock path, and the controller's own
+// divider is then left at bypass so the card sees exactly what the CRU emits.
+//
+// If the SiP service is missing (older BL31) we fall back to the divider. That
+// path enumerates a card but cannot be trusted above default speed, which is
+// why it warns.
+//
 NTSTATUS
 DwmmcSetClock(
     _In_ PRKDWMMC_SLOT Slot,
@@ -150,10 +195,12 @@ DwmmcSetClock(
     )
 {
     ULONG div;
+    ULONG actualHz;
     NTSTATUS status;
 
     //
-    // Gate the clock before reprogramming the divider.
+    // Gate the clock before changing the rate, so the card never sees an
+    // intermediate or out-of-spec clock.
     //
     DwmmcWrite(Slot->Regs, DWMMC_CLKENA, 0);
     status = DwmmcUpdateClockRegs(Slot);
@@ -166,15 +213,56 @@ DwmmcSetClock(
         return STATUS_SUCCESS;
     }
 
-    //
-    // card clock = CIU / (2 * div); div == 0 bypasses the divider (clk = CIU).
-    //
-    if (FrequencyHz >= Slot->CiuClockHz) {
-        div = 0;
-    } else {
-        div = (Slot->CiuClockHz + (2 * FrequencyHz) - 1) / (2 * FrequencyHz);
-        if (div > 0xFF) {
-            div = 0xFF;
+    div = 0;
+    actualHz = FrequencyHz;
+
+    if (Slot->SipClockAvailable) {
+        status = RkSipSdmmcClockRateSet(
+                     (ULONG_PTR)Slot->RegsPhysical.QuadPart,
+                     RK_SIP_SDMMC_CLOCK_ID_MSHC_CIU,
+                     FrequencyHz * RKDWMMC_CLKGEN_DIV);
+
+        if (NT_SUCCESS(status)) {
+            ULONG ciuHz = 0;
+
+            //
+            // Read back what EL3 could actually reach; the CRU divider is
+            // integer, so the result is at or below what we asked for.
+            //
+            if (NT_SUCCESS(RkSipSdmmcClockRateGet(
+                               (ULONG_PTR)Slot->RegsPhysical.QuadPart,
+                               RK_SIP_SDMMC_CLOCK_ID_MSHC_CIU,
+                               &ciuHz)) &&
+                ciuHz >= RKDWMMC_CLKGEN_DIV) {
+                actualHz = ciuHz / RKDWMMC_CLKGEN_DIV;
+            }
+
+            Slot->CiuClockHz = actualHz;
+        } else {
+            RkLog(RK_DBG_ERROR,
+                  "SiP clock rate set failed (0x%08X); falling back to CLKDIV\n",
+                  status);
+            Slot->SipClockAvailable = FALSE;
+        }
+    }
+
+    if (!Slot->SipClockAvailable) {
+        //
+        // Fallback: card clock = CIU / (2 * div), div == 0 bypasses.
+        //
+        if (Slot->CiuClockHz == 0) {
+            Slot->CiuClockHz = RKDWMMC_CIU_CLOCK_FALLBACK_HZ;
+        }
+
+        if (FrequencyHz >= Slot->CiuClockHz) {
+            div = 0;
+            actualHz = Slot->CiuClockHz;
+        } else {
+            div = (Slot->CiuClockHz + (2 * FrequencyHz) - 1) / (2 * FrequencyHz);
+            if (div > 0xFF) {
+                div = 0xFF;
+            }
+            actualHz = Slot->CiuClockHz / (2 * div);
         }
     }
 
@@ -191,9 +279,94 @@ DwmmcSetClock(
     DwmmcWrite(Slot->Regs, DWMMC_CLKENA, DWMMC_CLKENA_ENABLE);
     status = DwmmcUpdateClockRegs(Slot);
 
-    Slot->CurrentClockHz = (div == 0) ? Slot->CiuClockHz
-                                      : (Slot->CiuClockHz / (2 * div));
+    Slot->CurrentClockHz = actualHz;
     return status;
+}
+
+//
+// Drive / sample phase. On RK3576 these are controller-internal registers
+// rather than CRU phase clocks, so no world switch is involved — see the layout
+// note in rkdwmmc_regs.h. The degree-to-delay arithmetic mirrors
+// rockchip_mmc_set_internal_phase in the kernel driver so that a phase set here
+// means the same thing it does under Linux.
+//
+NTSTATUS
+DwmmcSetPhase(
+    _In_ PRKDWMMC_SLOT Slot,
+    _In_ BOOLEAN Sample,
+    _In_ ULONG Degrees
+    )
+{
+    ULONG rate = Slot->CurrentClockHz;
+    ULONG nineties;
+    ULONG remainder;
+    ULONG delay;
+    ULONG delayNum;
+    ULONG field;
+
+    //
+    // The fine delay is a fixed number of picoseconds, so converting a phase
+    // angle into delay elements needs the current card clock.
+    //
+    if (rate == 0) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Degrees %= 360;
+    nineties = Degrees / 90;
+    remainder = Degrees % 90;
+
+    //
+    // delay = remainder / (360 * rate * delay_element), arranged to stay inside
+    // 32 bits: 10000000 is PSECS_PER_SEC / 10000 / 10.
+    //
+    delay = 10000000UL * remainder;
+    delay = (delay + (((rate / 1000) * 36 *
+                       (DWMMC_PHASE_DELAY_ELEMENT_PSEC / 10)) / 2)) /
+            ((rate / 1000) * 36 * (DWMMC_PHASE_DELAY_ELEMENT_PSEC / 10));
+
+    delayNum = (delay > 255) ? 255 : delay;
+
+    field = (delayNum != 0) ? DWMMC_PHASE_DELAY_SEL : 0;
+    field |= (delayNum << DWMMC_PHASE_DELAYNUM_SHIFT) &
+             DWMMC_PHASE_DELAYNUM_MASK;
+    field |= nineties & DWMMC_PHASE_DEGREE_MASK;
+
+    DwmmcWrite(Slot->Regs,
+               Sample ? DWMMC_TIMING_CON1 : DWMMC_TIMING_CON0,
+               (DWMMC_PHASE_FIELD_MASK << 16) |
+               ((field << DWMMC_PHASE_FIELD_SHIFT) & DWMMC_PHASE_FIELD_MASK));
+
+    return STATUS_SUCCESS;
+}
+
+ULONG
+DwmmcGetPhase(
+    _In_ PRKDWMMC_SLOT Slot,
+    _In_ BOOLEAN Sample
+    )
+{
+    ULONG rate = Slot->CurrentClockHz;
+    ULONG raw;
+    ULONG degrees;
+    ULONG delayNum;
+
+    raw = DwmmcRead(Slot->Regs,
+                    Sample ? DWMMC_TIMING_CON1 : DWMMC_TIMING_CON0);
+    raw >>= DWMMC_PHASE_FIELD_SHIFT;
+
+    degrees = (raw & DWMMC_PHASE_DEGREE_MASK) * 90;
+
+    if ((raw & DWMMC_PHASE_DELAY_SEL) != 0 && rate != 0) {
+        ULONG factor = (DWMMC_PHASE_DELAY_ELEMENT_PSEC / 10) * 36 *
+                       (rate / 10000);
+
+        delayNum = (raw & DWMMC_PHASE_DELAYNUM_MASK) >>
+                   DWMMC_PHASE_DELAYNUM_SHIFT;
+        degrees += (delayNum * factor + 500000) / 1000000;
+    }
+
+    return degrees % 360;
 }
 
 VOID

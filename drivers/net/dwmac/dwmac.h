@@ -53,7 +53,6 @@ typedef struct _DWMAC_ADAPTER {
     PHYSICAL_ADDRESS MacPhys;
     ULONG            MacLen;
 
-    volatile UCHAR  *Grf;            // SDGMAC_GRF clock-select window (fixed addr)
 
     //
     // DMA: descriptor rings and bounce buffers as physically-contiguous common
@@ -108,7 +107,12 @@ VOID     DwmacSetMacAddress(_In_ PDWMAC_ADAPTER A);
 NTSTATUS DwmacMdioRead(_In_ PDWMAC_ADAPTER A, _In_ ULONG Reg, _Out_ PUSHORT Value);
 NTSTATUS DwmacMdioWrite(_In_ PDWMAC_ADAPTER A, _In_ ULONG Reg, _In_ USHORT Value);
 NTSTATUS DwmacPhyDetect(_In_ PDWMAC_ADAPTER A);
-VOID     DwmacUpdateLink(_In_ PDWMAC_ADAPTER A);      // read PHY, program GRF clock + MAC speed
+VOID     DwmacUpdateLink(_In_ PDWMAC_ADAPTER A);      // read PHY, set TX clock + MAC speed
+
+//
+// acpi_dsm.c — firmware-owned TX clock selection.
+//
+NTSTATUS DwmacSetTxClockDsm(_In_ PDWMAC_ADAPTER A, _In_ ULONG SpeedMbps);
 VOID     DwmacInitRings(_In_ PDWMAC_ADAPTER A);
 VOID     DwmacStart(_In_ PDWMAC_ADAPTER A);
 VOID     DwmacStop(_In_ PDWMAC_ADAPTER A);

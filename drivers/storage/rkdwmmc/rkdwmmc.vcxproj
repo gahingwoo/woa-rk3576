@@ -64,11 +64,18 @@
   <ItemGroup>
     <ClCompile Include="miniport.c" />
     <ClCompile Include="hw.c" />
+    <ClCompile Include="sip.c" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The WDK has no SMC intrinsic, so the SMCCC shim is hand-written. -->
+    <MASM Include="arm64\ArmSmc.asm" />
   </ItemGroup>
 
   <ItemGroup>
     <ClInclude Include="rkdwmmc.h" />
     <ClInclude Include="rkdwmmc_regs.h" />
+    <ClInclude Include="sip.h" />
   </ItemGroup>
 
   <ItemGroup>

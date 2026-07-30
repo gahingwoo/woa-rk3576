@@ -37,13 +37,19 @@ Environment:
 #define RKDWMMC_POOL_TAG        'mMkR'   // "RkMm"
 
 //
-// dw_mmc card (CIU) input clock. As with I2C there is no Windows clock
-// framework; we assume the rate the firmware programs. RK3576 SD CIU is
-// typically 150 MHz. Biased so the computed divider never overclocks the card.
+// The Rockchip mmc clock path has a fixed divide-by-two between the CRU clock
+// (cclk_src_sdmmc0) and the card clock, so to obtain a card clock of F the CRU
+// must be programmed to 2*F. This is RK3288_CLKGEN_DIV in the Linux driver
+// (drivers/mmc/host/dw_mmc-rockchip.c), applied on RK3576 too via
+// dw_mci_rk3288_set_ios.
 //
-// TODO: source from an ACPI _DSD property once the EDK2 port exports it.
+#define RKDWMMC_CLKGEN_DIV      2UL
+
 //
-#define RKDWMMC_CIU_CLOCK_HZ    150000000UL
+// Fallback CIU rate, used only if the SiP clock service is unavailable (an
+// older BL31) and we have to fall back to the controller's own divider.
+//
+#define RKDWMMC_CIU_CLOCK_FALLBACK_HZ   150000000UL
 
 //
 // Per-slot private extension (SDPORT_INITIALIZATION_DATA.PrivateExtensionSize).
@@ -58,6 +64,13 @@ typedef struct _RKDWMMC_SLOT {
 
     ULONG            CiuClockHz;   // input clock to the divider
     ULONG            CurrentClockHz;
+
+    //
+    // Set once probing shows BL31 answers the SiP SD/MMC clock service. When
+    // clear we fall back to the controller's own divider, which cannot reach
+    // the higher speed modes on this SoC but does let a card enumerate.
+    //
+    BOOLEAN          SipClockAvailable;
 
     //
     // PIO state for the in-flight data command (sdport single-block / multi-
@@ -88,6 +101,8 @@ NTSTATUS DwmmcResetAll(_In_ PRKDWMMC_SLOT Slot);
 VOID     DwmmcInitController(_In_ PRKDWMMC_SLOT Slot);
 NTSTATUS DwmmcUpdateClockRegs(_In_ PRKDWMMC_SLOT Slot);
 NTSTATUS DwmmcSetClock(_In_ PRKDWMMC_SLOT Slot, _In_ ULONG FrequencyHz);
+NTSTATUS DwmmcSetPhase(_In_ PRKDWMMC_SLOT Slot, _In_ BOOLEAN Sample, _In_ ULONG Degrees);
+ULONG    DwmmcGetPhase(_In_ PRKDWMMC_SLOT Slot, _In_ BOOLEAN Sample);
 VOID     DwmmcSetBusWidth(_In_ PRKDWMMC_SLOT Slot, _In_ ULONG WidthBits);
 VOID     DwmmcSetBlockConfig(_In_ PRKDWMMC_SLOT Slot, _In_ ULONG BlockSize, _In_ ULONG BlockCount);
 

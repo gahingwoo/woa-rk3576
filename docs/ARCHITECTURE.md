@@ -10,10 +10,14 @@ UEFI) and the ACPI tables live in the separate EDK2 port; this repo is only the
 
 Windows on ARM **does not use Device Tree** — it discovers hardware exclusively
 through **ACPI**. The EDK2 RK3576 port already ships a fairly complete static
-ACPI table set (`Silicon/Rockchip/RK3576/AcpiTables/`): FADT, MADT (GICv3),
-GTDT, DBG2, SPCR, PPTT, plus a DSDT describing eMMC/SDHC, GPIO, I²C, SPI, USB,
-PCIe, GMAC and DMA. Each peripheral is published under a Rockchip-specific ACPI
-`_HID` (e.g. GPIO = `RKCP3002`).
+ACPI table set (`Silicon/Rockchip/RK3576/AcpiTables/`): FADT, MADT (GIC-400,
+i.e. **GICv2** — RK3576 has no GICv3 redistributors), GTDT, DBG2, SPCR, MCFG,
+PPTT, IORT, plus a DSDT describing eMMC/SDHC, GPIO, I²C, SPI, USB, PCIe, GMAC
+and DMA. Each peripheral is published under a Rockchip-specific ACPI `_HID`
+(e.g. GPIO = `RKCP3002`).
+
+Bring-up order and the Windows-build constraint that follows from the RK3576
+being ARMv8.0: [BRINGUP-PLAN.md](BRINGUP-PLAN.md).
 
 For each ACPI device, Windows needs **either**:
 
@@ -48,7 +52,7 @@ Dependency-driven. Each stage unblocks the next.
 | 3b | SD card | `RKCPFE2C` | sdport miniport | dw_mmc (not SDHCI) — custom driver; removable slot |
 | 4 | USB host | `PNP0D10` | **inbox** usbxhci | DWC3 in host mode; ACPI already uses PNP0D10 → no custom driver |
 | 5 | Ethernet | `RKCP6543` (DWMAC-4.20a) | NetAdapterCx | networking; real Synopsys DWMAC |
-| 6 | SPI | `RKCP3003`* | SpbCx | Rockchip rk3066-family IP (not DW); *needs ACPI `_HID` (now PRP0001) |
+| 6 | SPI | `RKCP3003` | SpbCx | Rockchip rk3066-family IP (not DW); firmware publishes `_HID RKCP3003` + `_CID PRP0001` |
 | 7 | Display | — (no ACPI) | **inbox** BasicDisplay | UEFI GOP framebuffer; custom VOP2 WDDM is a later project |
 | 8 | Audio (SAI + ES8388) | — | PortCls/WaveRT | blocked on firmware SAI enablement; USB Audio works inbox ([AUDIO.md](AUDIO.md)) |
 | 9 | Thermal, PWM, … | various | | polish |

@@ -7,7 +7,7 @@ Module Name:
 Abstract:
 
     Register layout for the Synopsys DesignWare MAC v4.20a ("GMAC4" / stmmac)
-    as used by the RK3576 GMAC0/GMAC1, plus the RK3576 SDGMAC_GRF glue.
+    as used by the RK3576 GMAC0/GMAC1.
     Verified against the kernel stmmac driver
     (drivers/net/ethernet/stmicro/stmmac/dwmac4*.{c,h}).
 
@@ -146,15 +146,10 @@ typedef struct _DWMAC_DESC {
 #define RDES3_CTXT              BIT_(30)   // context descriptor
 
 //
-// RK3576 SDGMAC_GRF — GMAC clock-speed select (HIWORD-UPDATE: high 16 = mask).
-// GMAC0 CON0 @ 0x26038020. Values from the EDK2 Gmac0.asl _DSM.
+// SDGMAC_GRF is deliberately absent here. The GMAC clock-speed select register
+// (GMAC0 CON0 @ 0x26038020) is outside this device's ACPI _CRS and is owned by
+// firmware, which exposes it as the TX-clock _DSM — see acpi_dsm.c.
 //
-#define RK3576_SDGMAC_GRF_BASE      0x26038000
-#define RK3576_SDGMAC_GRF_SIZE      0x100
-#define RK3576_GMAC0_CON0_OFFSET    0x20
-#define RK3576_GMAC_CLK_125M        0x00600000   // 1000 Mbps
-#define RK3576_GMAC_CLK_25M         0x00600060   // 100 Mbps
-#define RK3576_GMAC_CLK_2_5M        0x00600040   // 10 Mbps
 
 //
 // MMIO accessors.

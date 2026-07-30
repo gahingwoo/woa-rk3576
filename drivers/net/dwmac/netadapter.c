@@ -394,7 +394,6 @@ DwmacEvtPrepareHardware(
     PDWMAC_ADAPTER A = DwmacGetAdapterContext(Device);
     ULONG count, i;
     BOOLEAN memFound = FALSE;
-    PHYSICAL_ADDRESS grfPa;
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(ResourcesRaw);
@@ -419,12 +418,6 @@ DwmacEvtPrepareHardware(
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
-    //
-    // The SDGMAC_GRF clock-select window is a fixed SoC address (not in _CRS).
-    //
-    grfPa.QuadPart = RK3576_SDGMAC_GRF_BASE;
-    A->Grf = (volatile UCHAR *)MmMapIoSpaceEx(grfPa, RK3576_SDGMAC_GRF_SIZE,
-                                              PAGE_READWRITE | PAGE_NOCACHE);
 
     status = DwmacSwReset(A);
     if (!NT_SUCCESS(status)) {
@@ -460,10 +453,6 @@ DwmacEvtReleaseHardware(
         DwmacStop(A);
         MmUnmapIoSpace((PVOID)A->Mac, A->MacLen);
         A->Mac = NULL;
-    }
-    if (A->Grf != NULL) {
-        MmUnmapIoSpace((PVOID)A->Grf, RK3576_SDGMAC_GRF_SIZE);
-        A->Grf = NULL;
     }
     return STATUS_SUCCESS;
 }

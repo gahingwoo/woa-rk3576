@@ -64,6 +64,40 @@ Environment:
 #define DWMMC_BUFADDR       0x098
 
 //
+// Rockchip-specific extensions to the dw_mmc register window.
+//
+// RK3576 sets dw_mci_rockchip_priv_data.internal_phase, meaning the drive and
+// sample clock phases are not CRU phase clocks (as on RK3568/RK3588) but live
+// here, in the controller's own window. Field layout within bits [11:1], from
+// drivers/mmc/host/dw_mmc-rockchip.c:
+//
+//   [1:0]  degree, in units of 90 degrees
+//   [9:2]  delaynum, fine delay elements of ~60 ps each
+//   [10]   delay_sel, enables the fine delay
+//
+// Writes use the Rockchip hiword write-mask convention: the mask of the bits
+// being written goes in the upper half-word.
+//
+#define DWMMC_TIMING_CON0   0x130   // drive (output) phase
+#define DWMMC_TIMING_CON1   0x134   // sample (input) phase
+#define DWMMC_MISC_CON      0x138
+
+#define DWMMC_MISC_MEM_CLK_AUTOGATE     (1u << 5)
+
+#define DWMMC_PHASE_FIELD_SHIFT         1
+#define DWMMC_PHASE_FIELD_MASK          0xFFEu   // GENMASK(11, 1)
+#define DWMMC_PHASE_DEGREE_MASK         0x3u
+#define DWMMC_PHASE_DELAYNUM_SHIFT      2
+#define DWMMC_PHASE_DELAYNUM_MASK       (0xFFu << DWMMC_PHASE_DELAYNUM_SHIFT)
+#define DWMMC_PHASE_DELAY_SEL           (1u << 10)
+
+//
+// Each fine delay element is 44-77 ps; the kernel assumes 60 ps to keep the
+// arithmetic simple, and so do we, so that both agree on what a phase means.
+//
+#define DWMMC_PHASE_DELAY_ELEMENT_PSEC  60
+
+//
 // FIFO data register. Legacy parts place it at 0x100, dw_mmc >= 0x240A at
 // 0x200. Pick by VERID at init (see Rkdwmmc_FifoOffset).
 //

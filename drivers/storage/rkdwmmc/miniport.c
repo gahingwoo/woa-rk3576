@@ -25,6 +25,7 @@ Environment:
 --*/
 
 #include "rkdwmmc.h"
+#include "sip.h"
 
 //
 // dw_mmc RINTSTS bits that make up a "command complete" and "transfer complete"
@@ -95,8 +96,11 @@ RkdwmmcSlotInitialize(
     slot->Regs = (volatile UCHAR *)VirtualBase;
     slot->RegsPhysical = PhysicalBase;
     slot->RegsLength = Length;
-    slot->CiuClockHz = RKDWMMC_CIU_CLOCK_HZ;
 
+    //
+    // CiuClockHz and SipClockAvailable are established by DwmmcInitController,
+    // which probes the SiP clock service.
+    //
     DwmmcInitController(slot);
 
     RkLog(RK_DBG_INFO, "SlotInitialize @ 0x%llx fifo@0x%x\n",
@@ -125,10 +129,15 @@ RkdwmmcIssueBusOperation(
 
     case SdSetVoltage:
         //
-        // VDD/VCCQ switching is handled by the board PMIC/regulator path, not
-        // the dw_mmc core. Accept and let firmware/PMIC own it.
+        // vmmc (card power) hangs off the board PMIC, which only EL3 can reach.
+        // On the CM5 boards it is a fixed always-on 3.3 V rail, so the service
+        // reports success without switching anything — but ask anyway, so a
+        // board that does gate it works too.
         //
-        return STATUS_SUCCESS;
+        return RkSipSdmmcRegulatorEnableSet(
+                   (ULONG_PTR)slot->RegsPhysical.QuadPart,
+                   RK_SIP_SDMMC_REGULATOR_ID_SUPPLY,
+                   BusOperation->Parameters.Voltage == SdBusVoltage33);
 
     case SdSetBusWidth:
         DwmmcSetBusWidth(slot, BusOperation->Parameters.BusWidth);
@@ -136,13 +145,34 @@ RkdwmmcIssueBusOperation(
 
     case SdSetBusSpeed:
         //
-        // Speed mode (HS/SDR/DDR) tuning beyond the clock divider is not done in
-        // v1; the divider was already set via SdSetClock.
+        // The rate itself was already set by SdSetClock. What is left is the
+        // drive/sample phase, which on RK3576 lives in the controller. The
+        // angles match dw_mci_rk3288_set_ios: 180 degrees of drive phase once
+        // the clock is fast enough to need it, 90 below that, and a sample
+        // phase of 0 until tuning picks something better.
         //
+        {
+            ULONG drivePhase = (slot->CurrentClockHz >= 100000000UL) ? 180 : 90;
+
+            (VOID)DwmmcSetPhase(slot, FALSE, drivePhase);
+
+            if (slot->CurrentClockHz <= 400000UL) {
+                (VOID)DwmmcSetPhase(slot, TRUE, 0);
+            }
+        }
         return STATUS_SUCCESS;
 
     case SdSetSignalingVoltage:
-        return STATUS_SUCCESS;
+        //
+        // vqmmc (I/O level) is a PMIC rail as well. Switching to 1.8 V is what
+        // UHS needs; if EL3 cannot do it the caller stays at 3.3 V signalling
+        // and high-speed modes, which is the correct fallback.
+        //
+        return RkSipSdmmcRegulatorVoltageSet(
+                   (ULONG_PTR)slot->RegsPhysical.QuadPart,
+                   RK_SIP_SDMMC_REGULATOR_ID_SIGNAL,
+                   (BusOperation->Parameters.SignalingVoltage ==
+                    SdSignalingVoltage18) ? 1800000 : 3300000);
 
     default:
         //
