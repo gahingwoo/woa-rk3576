@@ -33,6 +33,26 @@ Environment:
 #include <SPBCx.h>
 #include <reshub.h>
 
+//
+// SpbCx connection descriptors. reshub.h declares only the generic
+// PNP_SERIAL_BUS_DESCRIPTOR; the bus-type-specific extensions below are the
+// ACPI 6.x I2cSerialBus layout and are not in any WDK header, so -- as in
+// every Microsoft SpbCx sample -- they are declared here.
+//
+#include <pshpack1.h>
+
+typedef struct _PNP_I2C_SERIAL_BUS_DESCRIPTOR {
+    PNP_SERIAL_BUS_DESCRIPTOR SerialBusDescriptor;
+    ULONG  ConnectionSpeed;
+    USHORT SlaveAddress;
+    // followed by optional vendor data, then the resource name
+} PNP_I2C_SERIAL_BUS_DESCRIPTOR, *PPNP_I2C_SERIAL_BUS_DESCRIPTOR;
+
+#include <poppack.h>
+
+#define I2C_SERIAL_BUS_TYPE                         0x01
+#define I2C_SERIAL_BUS_SPECIFIC_FLAG_10BIT_ADDRESS  0x0001
+
 #include "rk3xi2c_regs.h"
 
 #define RK3XI2C_POOL_TAG        'I2kR'   // "Rk2I"
@@ -115,9 +135,9 @@ EVT_WDF_DEVICE_RELEASE_HARDWARE Rk3xI2cEvtReleaseHardware;
 EVT_SPB_TARGET_CONNECT      Rk3xI2cEvtTargetConnect;
 EVT_SPB_CONTROLLER_LOCK     Rk3xI2cEvtControllerLock;
 EVT_SPB_CONTROLLER_UNLOCK   Rk3xI2cEvtControllerUnlock;
-EVT_SPB_CONTROLLER_IO_READ      Rk3xI2cEvtIoRead;
-EVT_SPB_CONTROLLER_IO_WRITE     Rk3xI2cEvtIoWrite;
-EVT_SPB_CONTROLLER_IO_SEQUENCE  Rk3xI2cEvtIoSequence;
+EVT_SPB_CONTROLLER_READ      Rk3xI2cEvtIoRead;
+EVT_SPB_CONTROLLER_WRITE     Rk3xI2cEvtIoWrite;
+EVT_SPB_CONTROLLER_SEQUENCE  Rk3xI2cEvtIoSequence;
 
 //
 // hw.c — rk3x transfer engine.

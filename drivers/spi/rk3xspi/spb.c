@@ -154,7 +154,7 @@ Rk3xSpiEvtIoRead(
 
     status = Rk3xSpiTransfer(ctx, target, NULL, (PUCHAR)buffer, len);
 
-    WdfRequestSetInformation(SpbRequest, NT_SUCCESS(status) ? len : 0);
+    WdfRequestSetInformation((WDFREQUEST)SpbRequest, NT_SUCCESS(status) ? len : 0);
     SpbRequestComplete(SpbRequest, status);
 }
 
@@ -184,7 +184,7 @@ Rk3xSpiEvtIoWrite(
 
     status = Rk3xSpiTransfer(ctx, target, (PUCHAR)buffer, NULL, len);
 
-    WdfRequestSetInformation(SpbRequest, NT_SUCCESS(status) ? len : 0);
+    WdfRequestSetInformation((WDFREQUEST)SpbRequest, NT_SUCCESS(status) ? len : 0);
     SpbRequestComplete(SpbRequest, status);
 }
 
@@ -272,7 +272,7 @@ Cleanup:
         ExFreePoolWithTag(rxBuf, RK3XSPI_POOL_TAG);
     }
 
-    WdfRequestSetInformation(SpbRequest, NT_SUCCESS(status) ? total : 0);
+    WdfRequestSetInformation((WDFREQUEST)SpbRequest, NT_SUCCESS(status) ? total : 0);
     SpbRequestComplete(SpbRequest, status);
 }
 
@@ -317,6 +317,6 @@ Rk3xSpiEvtIoOther(
 
     status = Rk3xSpiTransfer(ctx, target, (PUCHAR)txBuf, (PUCHAR)rxBuf, txLen);
 
-    WdfRequestSetInformation(SpbRequest, NT_SUCCESS(status) ? txLen : 0);
+    WdfRequestSetInformation((WDFREQUEST)SpbRequest, NT_SUCCESS(status) ? txLen : 0);
     SpbRequestComplete(SpbRequest, status);
 }

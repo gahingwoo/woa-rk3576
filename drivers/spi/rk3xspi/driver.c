@@ -95,13 +95,19 @@ Rk3xSpiEvtDeviceAdd(
     spbConfig.EvtSpbIoRead = Rk3xSpiEvtIoRead;
     spbConfig.EvtSpbIoWrite = Rk3xSpiEvtIoWrite;
     spbConfig.EvtSpbIoSequence = Rk3xSpiEvtIoSequence;
-    spbConfig.EvtSpbIoOther = Rk3xSpiEvtIoOther;   // SPI full-duplex IOCTL
 
     status = SpbDeviceInitialize(device, &spbConfig);
     if (!NT_SUCCESS(status)) {
         RkLog(RK_DBG_ERROR, "SpbDeviceInitialize failed 0x%08x\n", status);
         return status;
     }
+
+    //
+    // The full-duplex IOCTL path is not part of SPB_CONTROLLER_CONFIG: SpbCx
+    // takes the "other" callback through its own setter, after the controller
+    // has been initialized.
+    //
+    SpbControllerSetIoOtherCallback(device, Rk3xSpiEvtIoOther, NULL);
 
     return STATUS_SUCCESS;
 }

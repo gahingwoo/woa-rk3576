@@ -155,7 +155,7 @@ Rk3xI2cEvtIoRead(
 
     status = Rk3xI2cTransfer(ctx, target->ClkDiv, &msg, 1, &bytes);
 
-    WdfRequestSetInformation(SpbRequest, bytes);
+    WdfRequestSetInformation((WDFREQUEST)SpbRequest, bytes);
     SpbRequestComplete(SpbRequest, status);
 }
 
@@ -195,7 +195,7 @@ Rk3xI2cEvtIoWrite(
 
     status = Rk3xI2cTransfer(ctx, target->ClkDiv, &msg, 1, &bytes);
 
-    WdfRequestSetInformation(SpbRequest, bytes);
+    WdfRequestSetInformation((WDFREQUEST)SpbRequest, bytes);
     SpbRequestComplete(SpbRequest, status);
 }
 
@@ -246,6 +246,6 @@ Rk3xI2cEvtIoSequence(
     //
     status = Rk3xI2cTransfer(ctx, target->ClkDiv, msgs, TransferCount, &bytes);
 
-    WdfRequestSetInformation(SpbRequest, bytes);
+    WdfRequestSetInformation((WDFREQUEST)SpbRequest, bytes);
     SpbRequestComplete(SpbRequest, status);
 }

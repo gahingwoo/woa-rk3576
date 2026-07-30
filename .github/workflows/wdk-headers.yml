@@ -28,14 +28,12 @@ jobs:
           $ver = '10.0.26100.0'
           $inc = "C:\Program Files (x86)\Windows Kits\10\Include\$ver"
           $out = "$env:RUNNER_TEMP\wdk-headers"
+          # Whole km and shared trees: the class extensions scatter headers
+          # through versioned subdirectories (spb\1.1, netcx\kmdf\adapter\2.1,
+          # netcx\shared\net, ...) and picking them by hand just moves the
+          # guessing from identifiers to paths.
           foreach ($sub in 'km', 'shared') {
-            New-Item -ItemType Directory -Force -Path "$out\$sub" | Out-Null
-            Copy-Item "$inc\$sub\*.h" "$out\$sub" -ErrorAction SilentlyContinue
-          }
-          # The versioned class-extension trees.
-          foreach ($sub in 'km\spb\1.1', 'km\netcx\kmdf\adapter\2.1') {
-            New-Item -ItemType Directory -Force -Path "$out\$sub" | Out-Null
-            Copy-Item "$inc\$sub\*" "$out\$sub" -Recurse -ErrorAction SilentlyContinue
+            Copy-Item "$inc\$sub" "$out\$sub" -Recurse -ErrorAction SilentlyContinue
           }
           "WDK $ver headers from runner image $env:ImageVersion" |
             Set-Content "$out\PROVENANCE.txt"

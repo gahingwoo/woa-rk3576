@@ -184,7 +184,7 @@ RkGpioQueryControllerBasicInformation(
     // need not emulate either.
     //
     ControllerInformation->Flags.EmulateActiveBoth = FALSE;
-    ControllerInformation->Flags.EmulateDebounce = FALSE;
+    ControllerInformation->Flags.EmulateDebouncing = FALSE;
 
     ControllerInformation->Flags.DeviceIdlePowerMgmtSupported = FALSE;
     ControllerInformation->Flags.BankIdlePowerMgmtSupported = FALSE;
@@ -206,7 +206,7 @@ RkGpioConnectIoPins(
     )
 {
     PRK3576GPIO_CONTEXT ctx = (PRK3576GPIO_CONTEXT)Context;
-    PGPIO_PIN_NUMBER pins = ConnectParameters->PinNumberTable;
+    PPIN_NUMBER pins = ConnectParameters->PinNumberTable;
     ULONG pinCount = ConnectParameters->PinCount;
     BOOLEAN output = (ConnectParameters->ConnectMode == ConnectModeOutput);
 
@@ -235,7 +235,7 @@ RkGpioDisconnectIoPins(
     )
 {
     PRK3576GPIO_CONTEXT ctx = (PRK3576GPIO_CONTEXT)Context;
-    PGPIO_PIN_NUMBER pins = DisconnectParameters->PinNumberTable;
+    PPIN_NUMBER pins = DisconnectParameters->PinNumberTable;
     ULONG pinCount = DisconnectParameters->PinCount;
 
     if (DisconnectParameters->DisconnectFlags.PreserveConfiguration) {
@@ -267,10 +267,10 @@ RkGpioReadPinsUsingMask(
     ULONG value;
 
     //
-    // When reading the configured-output value GpioClx sets WriteConfiguration;
-    // otherwise we sample the live pin level from EXT_PORT.
+    // When reading back the value configured on output pins GpioClx sets
+    // WriteConfiguredPins; otherwise we sample the live level from EXT_PORT.
     //
-    if (ReadParameters->Flags.WriteConfiguration) {
+    if (ReadParameters->Flags.WriteConfiguredPins) {
         value = RkGpioRead32(ctx->Regs, RK_GPIO_SWPORT_DR);
     } else {
         value = RkGpioRead32(ctx->Regs, RK_GPIO_EXT_PORT);

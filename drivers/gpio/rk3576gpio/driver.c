@@ -66,8 +66,7 @@ DriverEntry(
     RtlZeroMemory(&registrationPacket, sizeof(registrationPacket));
     registrationPacket.Version = GPIO_CLIENT_VERSION;
     registrationPacket.Size = sizeof(registrationPacket);
-    registrationPacket.GpioDeviceContextSize = sizeof(RK3576GPIO_CONTEXT);
-    registrationPacket.GpioPinContextSize = 0;
+    registrationPacket.ControllerContextSize = sizeof(RK3576GPIO_CONTEXT);
 
     registrationPacket.CLIENT_PrepareController = RkGpioPrepareController;
     registrationPacket.CLIENT_ReleaseController = RkGpioReleaseController;
@@ -90,7 +89,7 @@ DriverEntry(
     registrationPacket.CLIENT_ReconfigureInterrupt = RkGpioReconfigureInterrupt;
     registrationPacket.CLIENT_QueryEnabledInterrupts = RkGpioQueryEnabledInterrupts;
 
-    status = GPIO_CLX_RegisterClient(DriverObject,
+    status = GPIO_CLX_RegisterClient(driver,
                                      &registrationPacket,
                                      RegistryPath);
     if (!NT_SUCCESS(status)) {
@@ -153,14 +152,11 @@ RkGpioEvtDriverUnload(
     WDFDRIVER Driver
     )
 {
-    PDRIVER_OBJECT driverObject;
     NTSTATUS status;
 
     PAGED_CODE();
 
-    driverObject = WdfDriverWdmGetDriverObject(Driver);
-
-    status = GPIO_CLX_UnregisterClient(driverObject);
+    status = GPIO_CLX_UnregisterClient(Driver);
     if (!NT_SUCCESS(status)) {
         RkLog(RK_DBG_ERROR, "GPIO_CLX_UnregisterClient failed 0x%08x\n", status);
     }

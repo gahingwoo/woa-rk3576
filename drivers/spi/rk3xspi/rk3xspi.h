@@ -27,6 +27,30 @@ Environment:
 #include <SPBCx.h>
 #include <reshub.h>
 
+//
+// SpbCx connection descriptors. reshub.h declares only the generic
+// PNP_SERIAL_BUS_DESCRIPTOR; the bus-type-specific extensions below are the
+// ACPI 6.x SpiSerialBus layout and are not in any WDK header, so -- as in
+// every Microsoft SpbCx sample -- they are declared here.
+//
+#include <pshpack1.h>
+
+typedef struct _PNP_SPI_SERIAL_BUS_DESCRIPTOR {
+    PNP_SERIAL_BUS_DESCRIPTOR SerialBusDescriptor;
+    ULONG  ConnectionSpeed;
+    UCHAR  DataBitLength;
+    UCHAR  Phase;
+    UCHAR  Polarity;
+    USHORT DeviceSelection;
+    // followed by optional vendor data, then the resource name
+} PNP_SPI_SERIAL_BUS_DESCRIPTOR, *PPNP_SPI_SERIAL_BUS_DESCRIPTOR;
+
+#include <poppack.h>
+
+#define SPI_SERIAL_BUS_TYPE                     0x02
+#define SPI_SERIAL_BUS_SPECIFIC_FLAG_3WIRE      0x0001
+#define SPI_SERIAL_BUS_SPECIFIC_FLAG_DEVICE_POLARITY 0x0002
+
 #include "rk3xspi_regs.h"
 
 #define RK3XSPI_POOL_TAG        'SPkR'   // "RkPS"
@@ -85,10 +109,10 @@ EVT_WDF_DEVICE_RELEASE_HARDWARE Rk3xSpiEvtReleaseHardware;
 EVT_SPB_TARGET_CONNECT          Rk3xSpiEvtTargetConnect;
 EVT_SPB_CONTROLLER_LOCK         Rk3xSpiEvtControllerLock;
 EVT_SPB_CONTROLLER_UNLOCK       Rk3xSpiEvtControllerUnlock;
-EVT_SPB_CONTROLLER_IO_READ      Rk3xSpiEvtIoRead;
-EVT_SPB_CONTROLLER_IO_WRITE     Rk3xSpiEvtIoWrite;
-EVT_SPB_CONTROLLER_IO_SEQUENCE  Rk3xSpiEvtIoSequence;
-EVT_SPB_CONTROLLER_IO_OTHER     Rk3xSpiEvtIoOther;
+EVT_SPB_CONTROLLER_READ      Rk3xSpiEvtIoRead;
+EVT_SPB_CONTROLLER_WRITE     Rk3xSpiEvtIoWrite;
+EVT_SPB_CONTROLLER_SEQUENCE  Rk3xSpiEvtIoSequence;
+EVT_SPB_CONTROLLER_OTHER     Rk3xSpiEvtIoOther;
 
 //
 // hw.c — rockchip SPI engine.
