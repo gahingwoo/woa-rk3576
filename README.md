@@ -17,11 +17,11 @@ no inbox driver for, plus docs for the peripherals that *do* use inbox drivers.
 
 | Peripheral | Bind (`_HID`) | Approach | State |
 |---|---|---|---|
-| [GPIO](drivers/gpio/rk3576gpio) | `RKCP3002` | GpioClx miniport | source complete · verified HW layer |
-| [I²C](drivers/i2c/rk3xi2c) | `RKCP3001` | SpbCx (rk3x) | source complete · verified HW layer |
-| [SPI](drivers/spi/rk3xspi) | `RKCP3003`¹ | SpbCx (rk3066) | source complete · verified HW layer |
-| [SD card](drivers/storage/rkdwmmc) | `RKCPFE2C` | sdport (dw_mmc) | HW layer verified · framework glue is a template² |
-| [Ethernet GMAC0](drivers/net/dwmac) | `RKCP6543` | NetAdapterCx (DWMAC-4.20a) | HW layer verified · framework glue is a template² |
+| [GPIO](drivers/gpio/rk3576gpio) | `RKCP3002` | GpioClx miniport | builds for ARM64² · not run on silicon |
+| [I²C](drivers/i2c/rk3xi2c) | `RKCP3001` | SpbCx (rk3x) | builds for ARM64² · not run on silicon |
+| [SPI](drivers/spi/rk3xspi) | `RKCP3003`¹ | SpbCx (rk3066) | builds for ARM64² · not run on silicon |
+| [SD card](drivers/storage/rkdwmmc) | `RKCPFE2C` | sdport (dw_mmc) | builds for ARM64² · not run on silicon |
+| [Ethernet GMAC0](drivers/net/dwmac) | `RKCP6543` | NetAdapterCx (DWMAC-4.20a) | builds for ARM64² · not run on silicon |
 | eMMC | `RKCP0D40` | **inbox** SDHCI | no driver — add `_CID PNP0D40`¹ ([storage](docs/STORAGE.md)) |
 | USB (xHCI) | `PNP0D10` | **inbox** usbxhci | no driver — already enumerated |
 | Display | — (no ACPI) | **inbox** BasicDisplay | UEFI GOP framebuffer ([display](docs/DISPLAY.md)) |
@@ -29,9 +29,9 @@ no inbox driver for, plus docs for the peripherals that *do* use inbox drivers.
 
 ¹ Paired with a small **EDK2/ACPI** change in the RK3576 firmware port (also
   part of this project) — **WIP**, tracked under [firmware changes](#firmware-acpi-changes-wip).
-² The SoC register engine is verified against the mainline kernel driver, and
-  the Windows class-extension glue (sdport / NetAdapterCx) now compiles against
-  the WDK. Neither has run on silicon.
+² Zero warnings at `/W4 /WX` against WDK 10.0.26100, checked by CI on every
+  push, and the SoC register engines are verified against the mainline kernel
+  drivers. Neither has run on hardware — a clean build is not a working driver.
 
 With inbox display (GOP) + USB input + storage + the drivers above, the platform
 has every piece needed to boot Windows to the desktop with networking.
@@ -39,17 +39,21 @@ has every piece needed to boot Windows to the desktop with networking.
 ## Build
 
 These are **ARM64 kernel drivers**. An ARM64 Windows machine builds them
-**natively** (Visual Studio 2022 ARM64 + WDK 26100); an x64 EWDK also works under
-emulation. You only need a board to *run* them. Full instructions, test-signing
-and install: [docs/BUILDING.md](docs/BUILDING.md).
+**natively** (Visual Studio 2022 ARM64 + WDK 10.0.26100); an x64 EWDK also works
+under emulation. You only need a board to *run* them.
 
 ```cmd
-cd drivers\gpio\rk3576gpio
-build.cmd Release
+msbuild drivers\gpio\rk3576gpio\rk3576gpio.vcxproj ^
+    /p:Configuration=Release /p:Platform=ARM64 ^
+    /p:WindowsTargetPlatformVersion=10.0.26100.0
 ```
 
-CI builds every driver for ARM64 on each push — see
-[.github/workflows/ci.yml](.github/workflows/ci.yml).
+CI builds all five for ARM64 on every push and **fails on any error** — no
+graceful skip. Each job uploads the `.sys`/`.inf`/`.cat`/`.pdb` as an artifact.
+See [.github/workflows/ci.yml](.github/workflows/ci.yml).
+
+Full instructions, the project settings that are easy to get wrong,
+test-signing and install: [docs/BUILDING.md](docs/BUILDING.md).
 
 ## Firmware (ACPI) changes
 
@@ -93,6 +97,18 @@ docs/
   AUDIO.md              SAI + ES8388 status; USB Audio stopgap
 .github/workflows/      CI (structure checks + ARM64 WDK build)
 ```
+
+## Acknowledgements
+
+Thanks to **[ArmSoM](https://www.armsom.org/)** for sponsoring the **CM5** module
+and the **CM5-IO** carrier board that this project is developed on. The RK3576
+bring-up work here — firmware, ACPI tables and these drivers — is done against
+that hardware.
+
+Thanks also to the [worproject Rockchip-Windows-Drivers](https://github.com/worproject/Rockchip-Windows-Drivers)
+project (Mario Bălănică, MIT). Its RK3588 drivers run on real silicon and were
+the authority for every framework and ABI question here, from the SiP SD/MMC SMC
+interface to the GMAC TX-clock `_DSM` contract.
 
 ## License
 

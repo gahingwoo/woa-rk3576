@@ -150,5 +150,6 @@ jobs:
           path: |
             **/ARM64/Release/**/*.sys
             **/ARM64/Release/**/*.inf
+            **/ARM64/Release/**/*.cat
             **/ARM64/Release/**/*.pdb
           if-no-files-found: warn

@@ -4,7 +4,8 @@
 ; Binds to the I2C controllers published as ACPI\RKCP3001 in the EDK2 RK3576
 ; DSDT (Silicon/Rockchip/RK3576/AcpiTables/I2c.asl). Target: Windows on ARM64.
 ;
-; Copyright (c) 2026, woa-rk3576 project. SPDX-License-Identifier: MIT
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: MIT
 ;
 
 [Version]

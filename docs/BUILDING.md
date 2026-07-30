@@ -2,86 +2,85 @@
 
 These are **Windows ARM64 kernel-mode drivers**. They cannot be compiled on
 Linux — you need Microsoft's WDK toolchain. The source in this repo is authored
-on a Linux dev box; building and signing happens on Windows.
+on a Linux dev box; building happens on Windows or in CI.
 
-## You can build on ARM64 Windows — no x64 host required
+All five drivers build clean (zero warnings, `/W4 /WX`) against
+**WDK 10.0.26100** for **ARM64/Release**. That is verified by CI on every push —
+see [.github/workflows/ci.yml](../.github/workflows/ci.yml). Nothing here has run
+on silicon yet.
 
-An **ARM64 Windows machine builds ARM64 drivers natively**. The WDK is just the
-target SDK; the build host doesn't have to be x64. Two ways, both fine on
-ARM64-only:
+## The fastest route: let CI build it
 
-1. **Native ARM64 toolchain (recommended).** Recent Visual Studio 2022 ships a
-   native ARM64 build of the IDE + MSVC, and the Windows 11 24H2 **WDK
-   (10.0.26100)** supports ARM64 as a *host*. Install VS 2022 (ARM64) + that WDK
-   and build — host and target are both ARM64, no cross-compile, no emulation.
-2. **x64 EWDK/WDK under emulation.** If you only have an *x64* EWDK ISO or an
-   older x64-only WDK, Windows 11 on ARM runs x64 binaries via built-in
-   emulation, so `msbuild` / `cl.exe` / `LaunchBuildEnv.cmd` run fine. They
-   still emit **ARM64** `.sys` output (you're cross-compiling x64-host → ARM64).
-   Slower to build, identical result.
+The GitHub Actions `WDK build` matrix builds all five projects on the
+`windows-2022` runner image, which already ships WDK 10.0.26100 — no toolchain
+install step, no chocolatey. Each job uploads a
+`rk3576-woa-<name>-arm64` artifact containing the `.sys`, the stamped `.inf`,
+the `.cat` and the `.pdb`.
 
-| Option | Best for | Notes |
-|--------|----------|-------|
-| **VS 2022 (ARM64) + WDK 26100** | your case (ARM64-only) | native, fastest; get the "ARM64 + ARM64EC" and Spectre-mitigated ARM64 lib components |
-| **EWDK ISO** | CI / headless / no install | native ARM64 EWDK if available, else the x64 ISO runs under emulation |
+The job fails on any compile, link, `ApiValidator` or `inf2cat` error, and it
+fails if the pinned WDK is not present. It does not skip.
 
-So: do everything on your ARM64 Windows box. The RK3576 board is only needed to
-*run/test* the driver. If your ARM64 Windows is a Parallels VM (Apple Silicon),
-that works too — it's a normal ARM64 Windows install.
+## Building locally
 
-## Build with the EWDK
+An **ARM64 Windows machine builds ARM64 drivers natively** — the WDK is just the
+target SDK, the host does not have to be x64. Install Visual Studio 2022 with the
+"ARM64/ARM64EC build tools" and Spectre-mitigated ARM64 libraries, plus WDK
+10.0.26100. Then, per driver:
 
-1. Download the **EWDK for Windows 11** ISO from Microsoft and mount/extract it.
-2. From the EWDK root, start a build environment:
-   ```
-   LaunchBuildEnv.cmd
-   ```
-3. Build the GPIO driver:
-   ```
-   cd drivers\gpio\rk3576gpio
-   build.cmd Release
-   ```
-   Output: `ARM64\Release\rk3576gpio\rk3576gpio.sys` + `.inf` + `.cat`.
+```
+msbuild drivers\gpio\rk3576gpio\rk3576gpio.vcxproj ^
+    /p:Configuration=Release ^
+    /p:Platform=ARM64 ^
+    /p:WindowsTargetPlatformVersion=10.0.26100.0
+```
 
-## Build with Visual Studio + WDK
+Output lands in `<projdir>\ARM64\Release\<name>\` — `.sys`, `.inf`, `.cat`.
 
-If `msbuild` cannot locate the WDK targets from the bare `.vcxproj`, create the
-project from the IDE template (this guarantees the right import props for your
-WDK version):
+If you only have an *x64* EWDK ISO, Windows 11 on ARM runs it under emulation and
+still emits ARM64 output; mount the ISO, run `LaunchBuildEnv.cmd`, then the same
+`msbuild` line. Slower, identical result.
 
-1. Install Visual Studio 2022 + the matching **WDK** (and "Spectre-mitigated
-   ARM64 libs" component).
-2. New Project → **Kernel Mode Driver, Empty (KMDF)**.
-3. Add the existing files: `driver.c`, `controller.c`, `rk3576gpio.h`,
-   `rk3576gpio_regs.h`, `..\..\inc\rk3576_soc.h`, `rk3576gpio.inf`.
-4. Project properties → set **Configuration = Release**, **Platform = ARM64**.
-5. Linker → Input → Additional Dependencies: add `gpioclx.lib`.
-6. Build.
+## Authoring on Linux without a WDK
 
-> The committed `rk3576gpio.vcxproj` mirrors this template; use it directly if
-> your `msbuild` already resolves `WindowsKernelModeDriver10.0`.
+The class-extension ABI (sdport, SpbCx, GpioClx, NetAdapterCx) cannot be checked
+from Linux, and guessing an identifier per CI round-trip is not a workflow. Run
+the [WDK headers](../.github/workflows/wdk-headers.yml) workflow and download its
+artifact: it exports the whole `Include\10.0.26100.0\{km,shared}` tree from the
+runner, which is the same header set CI compiles against. Grep that instead of
+guessing.
 
-## A note on the GpioClx ABI
+## Project settings that are not obvious
 
-The driver `#include <gpioclx.h>` and links `gpioclx.lib` — it does **not**
-redefine any GpioClx type. The `CLIENT_*` callback signatures, the
-`GPIO_*_PARAMETERS` struct field names, and the `GPIO_CLX_*` helper prototypes
-all come from the WDK header. They are stable across recent WDKs; any name that
-differs surfaces as a compile error at the exact line, and these are being
-settled as the drivers are built up (WIP).
+Every one of these was a build failure first. Do not "simplify" them away.
+
+| Setting | Why |
+|---|---|
+| `MARMASM` + explicit `marmasm.props`/`.targets` imports | The ARM64 toolset ships **no** masm build customization. `<MASM>` items are silently ignored; the SMC stub is a `<MARMASM>` item. |
+| `$(SPB_INC_PATH)\$(SPB_VERSION_MAJOR).$(SPB_VERSION_MINOR)` + `SpbCxStubs.lib` | `spbcx.h` is not in `km`, and there is no `spbcx.lib`. |
+| `msgpioclxstub.lib` + `ksguid.lib` | There is no `gpioclx.lib`. |
+| `NetAdapterDriver=true` + `NETADAPTER_VERSION_*` | This is what makes the WDK targets add the NetCx include path and import library. Naming `netadaptercx.lib` does nothing. |
+| `KMDF_VERSION_*` in the `Label="Configuration"` group | Declared after `Microsoft.Cpp.props` it is read too late: the build silently used KMDF 1.15 while stampinf wrote 1.33 into the INF. |
+| `DriverTargetPlatform=Desktop` for `rkdwmmc` | `sdport.sys!SdPortInitialize` is not a Universal DDI; `ApiValidator` rejects a Universal sdport miniport. |
+| `Inf2CatWindowsVersionList` starting at `10_RS3_ARM64` | The WDK's ARM64 default is `Server10_ARM64` (build 14393), older than the 16299 these INFs need for DIRID 13, so inf2cat finds no installable section. `10_GE_ARM64` (24H2) is deliberately excluded — see the ARMv8.0 ceiling in [BRINGUP-PLAN.md](BRINGUP-PLAN.md). |
+| `FilesToPackage` | Without it the package directory holds only the INF and inf2cat fails with `22.9.1 ... .sys is missing`. |
+| INF models sections decorated `NTARM64.10.0...16299` | DIRID 13 (run-from-driver-store) requires it; undecorated, InfVerif errors 1199. |
+
+Note also that `_KERNEL_MODE` is predefined by the WDK toolset — defining it
+yourself is C4117, which with `/WX` fails every translation unit.
 
 ## Test-signing & installing on the board
 
-WOA in dev needs test-signing enabled or an unlocked/insecure boot policy.
+WOA in dev needs test-signing enabled or an unlocked/insecure boot policy. CI
+builds with `SignMode=Off`, so sign locally:
 
-1. Generate a test certificate (once) and test-sign the catalog **on the build
-   host**:
+1. On the build host, create a test certificate once and sign the catalog:
    ```
    makecert -r -pe -ss PrivateCertStore -n "CN=WOA-RK3576-Test" testcert.cer
-   inf2cat /driver:. /os:10_VB_ARM64
    signtool sign /v /s PrivateCertStore /n "WOA-RK3576-Test" ^
        /fd sha256 /t http://timestamp.digicert.com rk3576gpio.cat
    ```
+   The `.cat` itself is produced by the build; you do not need to run `inf2cat`
+   by hand.
 2. On the **target (WOA on the RK3576 board)**, from an elevated prompt:
    ```
    bcdedit /set testsigning on        :: then reboot
@@ -96,7 +95,7 @@ WOA in dev needs test-signing enabled or an unlocked/insecure boot policy.
 
 - Kernel debug over serial (RK3576 UART2 @ **1,500,000 8N1**) or KDNET if the
   GMAC/USB path is up.
-- The driver logs via `DbgPrintEx(DPFLTR_IHVDRIVER_ID, ...)`. Enable it in the
+- The drivers log via `DbgPrintEx(DPFLTR_IHVDRIVER_ID, ...)`. Enable it in the
   debugger:
   ```
   ed nt!Kd_IHVDRIVER_Mask 0xF
