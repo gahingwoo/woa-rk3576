@@ -8,9 +8,9 @@ Abstract:
 
     Internal definitions for the RK3576 GMAC (Synopsys DWMAC-4.20a) NetAdapterCx
     driver. The DWMAC hardware engine (hw.c) is verified against the kernel
-    stmmac driver. The NetAdapterCx framework integration (netadapter.c) follows
-    the documented NetCx model; NetCx struct/field names are owned by the WDK
-    <netadaptercx.h> and are marked VERIFY-ON-BUILD where used.
+    stmmac driver; the NetAdapterCx integration (netadapter.c) is compiled
+    against NetAdapter 2.1 and follows the same shape as the RK3588 dwc_eqos
+    driver.
 
     Datapath model (v1): bounce buffers. The TX/RX descriptor rings and a pool
     of fixed DMA buffers live in WDF common buffers; the framework's packet data
@@ -28,6 +28,12 @@ Environment:
 #include <ntddk.h>
 #include <wdf.h>
 #include <netadaptercx.h>
+
+//
+// The fragment virtual-address extension. A bounce-buffer driver reaches
+// packet data through this, not through NET_FRAGMENT itself.
+//
+#include <net/virtualaddress.h>
 
 #include "dwmac_regs.h"
 
@@ -97,6 +103,30 @@ typedef struct _DWMAC_ADAPTER {
 } DWMAC_ADAPTER, *PDWMAC_ADAPTER;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DWMAC_ADAPTER, DwmacGetAdapterContext)
+
+//
+// DWMAC_ADAPTER hangs off the WDFDEVICE. NetCx offers no way to get from a
+// NETADAPTER or a NETPACKETQUEUE back to it, so both of those objects carry a
+// small context of their own that points at it -- the same arrangement the
+// RK3588 dwc_eqos driver uses.
+//
+typedef struct _DWMAC_ADAPTER_REF {
+    PDWMAC_ADAPTER   Adapter;
+} DWMAC_ADAPTER_REF, *PDWMAC_ADAPTER_REF;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DWMAC_ADAPTER_REF, DwmacGetAdapterRef)
+
+typedef struct _DWMAC_QUEUE {
+    PDWMAC_ADAPTER   Adapter;
+
+    //
+    // Queried once at queue creation; NetExtensionGetFragmentVirtualAddress*
+    // needs it to resolve a fragment index to a mapped buffer.
+    //
+    NET_EXTENSION    FragmentVa;
+} DWMAC_QUEUE, *PDWMAC_QUEUE;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DWMAC_QUEUE, DwmacGetQueueContext)
 
 //
 // hw.c — DWMAC engine (verified).

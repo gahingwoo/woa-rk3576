@@ -138,7 +138,7 @@ DwmacLoadMacAddress(
 
 //
 // ---------------------------------------------------------------------------
-// Datapath  (VERIFY-ON-BUILD: NetCx ring/packet/fragment API)
+// Datapath
 // ---------------------------------------------------------------------------
 //
 
@@ -148,7 +148,8 @@ DwmacEvtTxQueueAdvance(
     _In_ NETPACKETQUEUE Queue
     )
 {
-    PDWMAC_ADAPTER A = DwmacGetAdapterContext(NetTxQueueGetAdapter(Queue));
+    PDWMAC_QUEUE q = DwmacGetQueueContext(Queue);
+    PDWMAC_ADAPTER A = q->Adapter;
     NET_RING_COLLECTION const *rings = NetTxQueueGetRingCollection(Queue);
     NET_RING *pr = NetRingCollectionGetPacketRing(rings);
     NET_RING *fr = NetRingCollectionGetFragmentRing(rings);
@@ -173,7 +174,8 @@ DwmacEvtTxQueueAdvance(
         }
 
         frag = NetRingGetFragmentAtIndex(fr, packet->FragmentIndex);
-        data = (PUCHAR)NetFragmentGetVirtualAddress(frag, /*...*/ 0) + frag->Offset;
+        data = (PUCHAR)NetExtensionGetFragmentVirtualAddressOffset(
+                   frag, &q->FragmentVa, packet->FragmentIndex);
 
         if (!DwmacTransmitFrame(A, data, (ULONG)frag->ValidLength)) {
             break;     // ring full; resume on next advance
@@ -194,7 +196,8 @@ DwmacEvtRxQueueAdvance(
     _In_ NETPACKETQUEUE Queue
     )
 {
-    PDWMAC_ADAPTER A = DwmacGetAdapterContext(NetRxQueueGetAdapter(Queue));
+    PDWMAC_QUEUE q = DwmacGetQueueContext(Queue);
+    PDWMAC_ADAPTER A = q->Adapter;
     NET_RING_COLLECTION const *rings = NetRxQueueGetRingCollection(Queue);
     NET_RING *pr = NetRingCollectionGetPacketRing(rings);
     NET_RING *fr = NetRingCollectionGetFragmentRing(rings);
@@ -207,7 +210,8 @@ DwmacEvtRxQueueAdvance(
     //
     while (pi != pr->EndIndex && fi != fr->EndIndex) {
         NET_FRAGMENT *frag = NetRingGetFragmentAtIndex(fr, fi);
-        PUCHAR dst = (PUCHAR)NetFragmentGetVirtualAddress(frag, 0) + frag->Offset;
+        PUCHAR dst = (PUCHAR)NetExtensionGetFragmentVirtualAddressOffset(
+                         frag, &q->FragmentVa, fi);
         ULONG len = 0;
 
         if (!DwmacReceiveFrame(A, dst, (ULONG)frag->Capacity, &len)) {
@@ -241,7 +245,7 @@ DwmacEvtTxSetNotification(
     _In_ BOOLEAN Enabled
     )
 {
-    DwmacGetAdapterContext(NetTxQueueGetAdapter(Queue))->TxNotify = Enabled;
+    DwmacGetQueueContext(Queue)->Adapter->TxNotify = Enabled;
 }
 
 static
@@ -251,12 +255,11 @@ DwmacEvtRxSetNotification(
     _In_ BOOLEAN Enabled
     )
 {
-    DwmacGetAdapterContext(NetRxQueueGetAdapter(Queue))->RxNotify = Enabled;
+    DwmacGetQueueContext(Queue)->Adapter->RxNotify = Enabled;
 }
 
 //
-// ISR (DIRQL): latch the DMA channel status and schedule the DPC. The dwmac
-// register access is verified; the WDFINTERRUPT/NetCx wiring is VERIFY-ON-BUILD.
+// ISR (DIRQL): latch the DMA channel status and schedule the DPC.
 //
 static
 BOOLEAN
@@ -309,12 +312,32 @@ DwmacEvtCreateTxQueue(
     _Inout_ NETTXQUEUE_INIT *QueueInit
     )
 {
-    PDWMAC_ADAPTER A = DwmacGetAdapterContext(Adapter);
+    PDWMAC_ADAPTER A = DwmacGetAdapterRef(Adapter)->Adapter;
     NET_PACKET_QUEUE_CONFIG cfg;
+    WDF_OBJECT_ATTRIBUTES attribs;
+    NET_EXTENSION_QUERY query;
+    NTSTATUS status;
 
     NET_PACKET_QUEUE_CONFIG_INIT(&cfg, DwmacEvtTxQueueAdvance,
                                  DwmacEvtTxSetNotification, NULL);
-    return NetTxQueueCreate(QueueInit, WDF_NO_OBJECT_ATTRIBUTES, &cfg, &A->TxQueue);
+
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attribs, DWMAC_QUEUE);
+    status = NetTxQueueCreate(QueueInit, &attribs, &cfg, &A->TxQueue);
+    if (!NT_SUCCESS(status)) {
+        RkLog(RK_DBG_ERROR, "NetTxQueueCreate failed 0x%08x\n", status);
+        return status;
+    }
+
+    DwmacGetQueueContext(A->TxQueue)->Adapter = A;
+
+    NET_EXTENSION_QUERY_INIT(&query,
+                             NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
+                             NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
+                             NetExtensionTypeFragment);
+    NetTxQueueGetExtension(A->TxQueue, &query,
+                           &DwmacGetQueueContext(A->TxQueue)->FragmentVa);
+
+    return STATUS_SUCCESS;
 }
 
 static
@@ -324,12 +347,32 @@ DwmacEvtCreateRxQueue(
     _Inout_ NETRXQUEUE_INIT *QueueInit
     )
 {
-    PDWMAC_ADAPTER A = DwmacGetAdapterContext(Adapter);
+    PDWMAC_ADAPTER A = DwmacGetAdapterRef(Adapter)->Adapter;
     NET_PACKET_QUEUE_CONFIG cfg;
+    WDF_OBJECT_ATTRIBUTES attribs;
+    NET_EXTENSION_QUERY query;
+    NTSTATUS status;
 
     NET_PACKET_QUEUE_CONFIG_INIT(&cfg, DwmacEvtRxQueueAdvance,
                                  DwmacEvtRxSetNotification, NULL);
-    return NetRxQueueCreate(QueueInit, WDF_NO_OBJECT_ATTRIBUTES, &cfg, &A->RxQueue);
+
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attribs, DWMAC_QUEUE);
+    status = NetRxQueueCreate(QueueInit, &attribs, &cfg, &A->RxQueue);
+    if (!NT_SUCCESS(status)) {
+        RkLog(RK_DBG_ERROR, "NetRxQueueCreate failed 0x%08x\n", status);
+        return status;
+    }
+
+    DwmacGetQueueContext(A->RxQueue)->Adapter = A;
+
+    NET_EXTENSION_QUERY_INIT(&query,
+                             NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
+                             NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
+                             NetExtensionTypeFragment);
+    NetRxQueueGetExtension(A->RxQueue, &query,
+                           &DwmacGetQueueContext(A->RxQueue)->FragmentVa);
+
+    return STATUS_SUCCESS;
 }
 
 //
@@ -358,6 +401,29 @@ DwmacSetCapabilities(
         NET_ADAPTER_LINK_LAYER_CAPABILITIES_INIT(&caps, maxBps, maxBps);
         NetAdapterSetLinkLayerCapabilities(A->Adapter, &caps);
         NetAdapterSetLinkLayerMtuSize(A->Adapter, 1500);
+    }
+
+    //
+    // Datapath capabilities. NetAdapterStart fails without them.
+    //
+    // This driver does not DMA out of the framework's buffers -- it bounces
+    // through its own common buffers -- so TX takes the plain (non-DMA) init and
+    // RX asks for system-managed buffers with no mapping requirement. That is
+    // exactly what makes the fragment virtual-address extension available, which
+    // is how the advance callbacks reach the data.
+    //
+    {
+        NET_ADAPTER_TX_CAPABILITIES txCaps;
+        NET_ADAPTER_RX_CAPABILITIES rxCaps;
+
+        NET_ADAPTER_TX_CAPABILITIES_INIT(&txCaps, 1);
+        txCaps.MaximumNumberOfFragments = 1;    // linear frames only in v1
+
+        NET_ADAPTER_RX_CAPABILITIES_INIT_SYSTEM_MANAGED(&rxCaps,
+                                                        DWMAC_BUF_SIZE,
+                                                        1);
+
+        NetAdapterSetDataPathCapabilities(A->Adapter, &txCaps, &rxCaps);
     }
 
     //
@@ -435,6 +501,18 @@ DwmacEvtPrepareHardware(
     DwmacStart(A);
 
     DwmacSetCapabilities(A);
+
+    //
+    // NetAdapterStart belongs here, not in EvtDeviceAdd: it may only be called
+    // once the mandatory capabilities are published, and those depend on the
+    // MAC address and PHY read above.
+    //
+    status = NetAdapterStart(A->Adapter);
+    if (!NT_SUCCESS(status)) {
+        RkLog(RK_DBG_ERROR, "NetAdapterStart failed 0x%08x\n", status);
+        return status;
+    }
+
     return STATUS_SUCCESS;
 }
 
@@ -533,22 +611,26 @@ DwmacEvtDeviceAdd(
                                         DwmacEvtCreateRxQueue);
     NetAdapterInitSetDatapathCallbacks(adapterInit, &datapath);
 
-    status = NetAdapterCreate(adapterInit, WDF_NO_OBJECT_ATTRIBUTES, &A->Adapter);
+    {
+        WDF_OBJECT_ATTRIBUTES adapterAttribs;
+
+        WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&adapterAttribs,
+                                                DWMAC_ADAPTER_REF);
+        status = NetAdapterCreate(adapterInit, &adapterAttribs, &A->Adapter);
+    }
     NetAdapterInitFree(adapterInit);
     if (!NT_SUCCESS(status)) {
         RkLog(RK_DBG_ERROR, "NetAdapterCreate failed 0x%08x\n", status);
         return status;
     }
 
+    DwmacGetAdapterRef(A->Adapter)->Adapter = A;
+
     //
-    // The adapter is started once hardware is prepared and capabilities set
-    // (NetCx starts it as part of the PnP flow after PrepareHardware).
+    // The adapter is started at the end of PrepareHardware, once the MAC
+    // address is known and the datapath capabilities have been published.
     //
-    status = NetAdapterStart(A->Adapter);
-    if (!NT_SUCCESS(status)) {
-        RkLog(RK_DBG_ERROR, "NetAdapterStart failed 0x%08x\n", status);
-    }
-    return status;
+    return STATUS_SUCCESS;
 }
 
 _Use_decl_annotations_
