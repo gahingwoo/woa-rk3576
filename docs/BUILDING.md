@@ -93,8 +93,13 @@ builds with `SignMode=Off`, so sign locally:
 
 ## Debugging
 
-- Kernel debug over serial (RK3576 UART2 @ **1,500,000 8N1**) or KDNET if the
-  GMAC/USB path is up.
+- Kernel debug over serial. On both ROCK 4D and CM5-IO the debug port is
+  **UART0 @ `0x2AD40000`, 1,500,000 8N1** — that is what the platform `.dsc` sets
+  `PcdSerialRegisterBase` to, and DBG2/SPCR derive their base address from the
+  same PCD, so Windows agrees with the firmware console. (DBG2's
+  `NameSpaceString` says `\_SB.UAR2`, which is a cosmetic mislabel: Windows uses
+  the address register, not the name.) KDNET is an option once the GMAC or USB
+  path is up.
 - The drivers log via `DbgPrintEx(DPFLTR_IHVDRIVER_ID, ...)`. Enable it in the
   debugger:
   ```
