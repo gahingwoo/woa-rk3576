@@ -49,7 +49,8 @@
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <PreprocessorDefinitions>_KERNEL_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- _KERNEL_MODE is predefined by the WDK toolset; redefining it is C4117. -->
+      <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <!-- spbcx.h ships in the versioned SpbCx class-extension tree, not km. -->
       <AdditionalIncludeDirectories>$(SPB_INC_PATH)\$(SPB_VERSION_MAJOR).$(SPB_VERSION_MINOR);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>

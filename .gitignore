@@ -24,3 +24,8 @@ Build/
 *.cer
 *.pfx
 *.pvk
+
+# ...but arm64/ is also a *source* directory for the hand-written SMC stub, and
+# the output rule above would otherwise silently swallow it.
+!drivers/storage/rkdwmmc/arm64/
+!drivers/storage/rkdwmmc/arm64/*.asm

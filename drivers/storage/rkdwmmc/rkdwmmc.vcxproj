@@ -57,7 +57,8 @@
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <PreprocessorDefinitions>_KERNEL_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- _KERNEL_MODE is predefined by the WDK toolset; redefining it is C4117. -->
+      <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <!-- sdport.lib provides SdPortInitialize and the miniport imports. -->

@@ -1,0 +1,44 @@
+name: WDK headers
+
+# Authoring happens on Linux, where the WDK does not exist, so the class
+# extension headers cannot be consulted locally. Run this workflow once and
+# download the artifact to get the exact headers CI compiles against; that is
+# how the sdport / SpbCx / GpioClx / NetAdapterCx ABI is settled without
+# round-tripping a build for every identifier. See docs/BUILDING.md.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  headers:
+    name: Export WDK headers
+    runs-on: windows-2022
+    steps:
+      - name: Collect
+        shell: pwsh
+        run: |
+          $ver = '10.0.26100.0'
+          $inc = "C:\Program Files (x86)\Windows Kits\10\Include\$ver"
+          $out = "$env:RUNNER_TEMP\wdk-headers"
+          foreach ($sub in 'km', 'shared') {
+            New-Item -ItemType Directory -Force -Path "$out\$sub" | Out-Null
+            Copy-Item "$inc\$sub\*.h" "$out\$sub" -ErrorAction SilentlyContinue
+          }
+          # The versioned class-extension trees.
+          foreach ($sub in 'km\spb\1.1', 'km\netcx\kmdf\adapter\2.1') {
+            New-Item -ItemType Directory -Force -Path "$out\$sub" | Out-Null
+            Copy-Item "$inc\$sub\*" "$out\$sub" -Recurse -ErrorAction SilentlyContinue
+          }
+          "WDK $ver headers from runner image $env:ImageVersion" |
+            Set-Content "$out\PROVENANCE.txt"
+          Get-ChildItem $out -Recurse -File | Measure-Object -Property Length -Sum |
+            ForEach-Object { "$($_.Count) files, $([math]::Round($_.Sum/1MB,1)) MB" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wdk-headers-10.0.26100.0
+          path: ${{ runner.temp }}/wdk-headers
+          retention-days: 7
