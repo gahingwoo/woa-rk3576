@@ -102,6 +102,12 @@ else
   wimsplit "$SRC/sources/install.wim" "$MNT/sources/install.swm" "$SPLIT_MIB"
 fi
 
+# The ISO is a read-only filesystem, and rsync -t carries that through: on FAT32
+# it lands as the DOS read-only attribute, so every later attempt to touch a file
+# on the stick fails with EPERM. Clear it now rather than at 2am.
+info "clearing read-only attributes"
+find "$MNT" -type f ! -writable -print0 2>/dev/null | xargs -0 -r chmod u+w
+
 sync
 echo
 info "done — install image on the stick:"
