@@ -100,14 +100,21 @@ jobs:
             Write-Host "::warning::WDK_VERSION unpinned; auto-selected $ver"
           }
           if (-not $ver) { throw "no WDK with km headers found on this runner" }
+          # Paths settled by the inventory step, not assumed: the class
+          # extensions live in versioned subtrees and acpiioct.h is in shared,
+          # not km.
           $need = @(
             "$kits\Include\$ver\km\wdm.h",
             "$kits\Include\$ver\km\sdport.h",
             "$kits\Include\$ver\km\gpioclx.h",
-            "$kits\Include\$ver\km\acpiioct.h",
+            "$kits\Include\$ver\shared\acpiioct.h",
+            "$kits\Include\$ver\km\spb\1.1\spbcx.h",
+            "$kits\Include\$ver\km\netcx\kmdf\adapter\2.1\netadaptercx.h",
             "$kits\Lib\$ver\km\arm64\ntoskrnl.lib",
             "$kits\Lib\$ver\km\arm64\sdport.lib",
-            "$kits\Lib\$ver\km\arm64\msgpioclxstub.lib"
+            "$kits\Lib\$ver\km\arm64\msgpioclxstub.lib",
+            "$kits\Lib\$ver\km\arm64\spb\1.1\spbcxstubs.lib",
+            "$kits\Lib\$ver\km\arm64\netcx\kmdf\adapter\2.1\netadaptercxstub.lib"
           )
           $missing = $need | Where-Object { -not (Test-Path $_) }
           if ($missing) {

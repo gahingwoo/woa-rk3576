@@ -23,9 +23,26 @@ Abstract:
     and this is the same contract the RK3588 GMAC driver already uses, so one
     firmware serves both.
 
+    The marshalling below follows the WDK acpiutil sample's
+    AcpiFormatDsmFunctionInputBuffer / AcpiEvaluateMethod, which is what the
+    RK3588 driver uses and is therefore known to work against a real ACPI
+    driver. Two details are load-bearing and were both wrong in the first cut of
+    this file:
+
+    - Arg3 must be a *package* (ACPI_METHOD_ARGUMENT_PACKAGE_EX whose Data holds
+      the packed sub-arguments), not an integer. The ASL indexes it as Arg3[0];
+      an integer cannot be indexed.
+    - IOCTL_ACPI_EVAL_METHOD with ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE and
+      MethodNameAsUlong is the plain "evaluate a method on this device" form.
+      The _EX variants exist for naming an object by path and are not what is
+      wanted here.
+
+    The helper is not shared as a library because this driver evaluates exactly
+    one _DSM; the sample's full acpiutil is C++ and this driver is C.
+
 Environment:
 
-    Kernel mode.
+    Kernel mode. Called at PASSIVE_LEVEL from the link-state path.
 
 --*/
 
@@ -43,19 +60,88 @@ static const GUID DwmacTxClockDsmGuid = {
 };
 
 #define DWMAC_DSM_REVISION          0
-#define DWMAC_DSM_FUNC_QUERY        0
 #define DWMAC_DSM_FUNC_SET_TX_CLK   1
 
 //
-// _DSM takes four arguments: GUID buffer, revision, function index, and a
-// package of function-specific arguments.
+// _DSM always takes four arguments: GUID buffer, revision, function index,
+// and a package of function-specific arguments.
+//
+#define DWMAC_DSM_ARGUMENT_COUNT    4
+
+//
+// MethodNameAsUlong wants the four characters of "_DSM" in memory order.
+// acpiioct.h does not provide this constant; the acpiutil sample spells it as
+// the multi-character literal 'MSD_', which is the same value written out.
+//
+#define DWMAC_ACPI_METHOD_DSM \
+    ((ULONG)'_' | ((ULONG)'D' << 8) | ((ULONG)'S' << 16) | ((ULONG)'M' << 24))
+
+//
+// One integer inside the Arg3 package.
+//
+typedef struct _DWMAC_DSM_ARG3 {
+    ACPI_METHOD_ARGUMENT Speed;
+} DWMAC_DSM_ARG3;
+
+//
+// The complete input buffer. ACPI_EVAL_INPUT_BUFFER_COMPLEX ends in a
+// single-element Argument[] array, so the trailing arguments are laid out by
+// hand: the GUID buffer argument grows past sizeof(ACPI_METHOD_ARGUMENT) by
+// (sizeof(GUID) - sizeof(ULONG)), and Arg3 likewise by its package contents.
 //
 typedef struct _DWMAC_DSM_INPUT {
-    ACPI_EVAL_INPUT_BUFFER_COMPLEX_EX Header;
-    UCHAR                             ArgumentSpace[
-                                          sizeof(ACPI_METHOD_ARGUMENT_V1) * 3 +
-                                          sizeof(GUID) + 32];
+    ACPI_EVAL_INPUT_BUFFER_COMPLEX Header;
+    UCHAR                          Trailing[
+                                       (sizeof(GUID) - sizeof(ULONG)) +
+                                       sizeof(ACPI_METHOD_ARGUMENT) * 2 +
+                                       sizeof(ACPI_METHOD_ARGUMENT) +
+                                       (sizeof(DWMAC_DSM_ARG3) -
+                                        sizeof(ULONG))];
 } DWMAC_DSM_INPUT;
+
+static
+NTSTATUS
+DwmacSendAcpiIoctl(
+    _In_ PDEVICE_OBJECT Pdo,
+    _In_reads_bytes_(InputSize) PVOID Input,
+    _In_ ULONG InputSize,
+    _Out_writes_bytes_(OutputSize) PVOID Output,
+    _In_ ULONG OutputSize,
+    _Out_ PULONG BytesReturned
+    )
+{
+    KEVENT event;
+    IO_STATUS_BLOCK iosb;
+    PIRP irp;
+    NTSTATUS status;
+
+    *BytesReturned = 0;
+
+    KeInitializeEvent(&event, NotificationEvent, FALSE);
+    RtlZeroMemory(&iosb, sizeof(iosb));
+
+    irp = IoBuildDeviceIoControlRequest(IOCTL_ACPI_EVAL_METHOD,
+                                        Pdo,
+                                        Input,
+                                        InputSize,
+                                        Output,
+                                        OutputSize,
+                                        FALSE,
+                                        &event,
+                                        &iosb);
+    if (irp == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    status = IoCallDriver(Pdo, irp);
+    if (status == STATUS_PENDING) {
+        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+        status = iosb.Status;
+    }
+
+    *BytesReturned = (ULONG)iosb.Information;
+    return status;
+}
 
 NTSTATUS
 DwmacSetTxClockDsm(
@@ -64,14 +150,12 @@ DwmacSetTxClockDsm(
     )
 {
     DWMAC_DSM_INPUT input;
+    DWMAC_DSM_ARG3 arg3;
     ACPI_EVAL_OUTPUT_BUFFER output;
     PACPI_METHOD_ARGUMENT arg;
     PDEVICE_OBJECT pdo;
-    IO_STATUS_BLOCK iosb;
-    KEVENT event;
-    PIRP irp;
     NTSTATUS status;
-    ULONG inputSize;
+    ULONG returned;
 
     pdo = WdfDeviceWdmGetPhysicalDevice(A->Device);
     if (pdo == NULL) {
@@ -79,59 +163,53 @@ DwmacSetTxClockDsm(
     }
 
     RtlZeroMemory(&input, sizeof(input));
+    RtlZeroMemory(&arg3, sizeof(arg3));
     RtlZeroMemory(&output, sizeof(output));
 
-    input.Header.Signature = ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE_EX;
-    RtlCopyMemory(input.Header.MethodName, "_DSM", 4);
-    input.Header.ArgumentCount = 4;
-
-    arg = input.Header.Argument;
+    input.Header.Signature = ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE;
+    input.Header.MethodNameAsUlong = DWMAC_ACPI_METHOD_DSM;
+    input.Header.Size = sizeof(input);
+    input.Header.ArgumentCount = DWMAC_DSM_ARGUMENT_COUNT;
 
     //
     // Arg0: the GUID, as a raw buffer.
     //
+    arg = input.Header.Argument;
     ACPI_METHOD_SET_ARGUMENT_BUFFER(arg, &DwmacTxClockDsmGuid, sizeof(GUID));
-    arg = ACPI_METHOD_NEXT_ARGUMENT(arg);
 
     //
     // Arg1: revision. Arg2: function index.
     //
+    arg = ACPI_METHOD_NEXT_ARGUMENT(arg);
     ACPI_METHOD_SET_ARGUMENT_INTEGER(arg, DWMAC_DSM_REVISION);
-    arg = ACPI_METHOD_NEXT_ARGUMENT(arg);
 
+    arg = ACPI_METHOD_NEXT_ARGUMENT(arg);
     ACPI_METHOD_SET_ARGUMENT_INTEGER(arg, DWMAC_DSM_FUNC_SET_TX_CLK);
-    arg = ACPI_METHOD_NEXT_ARGUMENT(arg);
 
     //
-    // Arg3: the speed. Firmware reads it as Arg3[0], so a bare integer here is
-    // dereferenced as the first element of the package.
+    // Arg3: a package holding the speed, which the ASL reads as Arg3[0].
     //
-    ACPI_METHOD_SET_ARGUMENT_INTEGER(arg, SpeedMbps);
+    ACPI_METHOD_SET_ARGUMENT_INTEGER((&arg3.Speed), SpeedMbps);
+
     arg = ACPI_METHOD_NEXT_ARGUMENT(arg);
+    arg->Type = ACPI_METHOD_ARGUMENT_PACKAGE_EX;
+    arg->DataLength = (USHORT)sizeof(arg3);
+    RtlCopyMemory(arg->Data, &arg3, sizeof(arg3));
 
-    inputSize = (ULONG)((PUCHAR)arg - (PUCHAR)&input);
-    input.Header.Size = inputSize;
+    NT_ASSERT((PUCHAR)ACPI_METHOD_NEXT_ARGUMENT(arg) ==
+              (PUCHAR)&input + sizeof(input));
 
-    KeInitializeEvent(&event, NotificationEvent, FALSE);
-
-    irp = IoBuildDeviceIoControlRequest(IOCTL_ACPI_EVAL_METHOD_EX,
-                                        pdo,
-                                        &input,
-                                        inputSize,
-                                        &output,
-                                        sizeof(output),
-                                        FALSE,
-                                        &event,
-                                        &iosb);
-    if (irp == NULL) {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    status = IoCallDriver(pdo, irp);
-    if (status == STATUS_PENDING) {
-        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
-        status = iosb.Status;
-    }
+    //
+    // This _DSM returns nothing, so a bare output header is enough; a device
+    // that did return data would answer STATUS_BUFFER_OVERFLOW and we would
+    // have to allocate. Nothing here needs the value, so do not.
+    //
+    status = DwmacSendAcpiIoctl(pdo,
+                                &input,
+                                sizeof(input),
+                                &output,
+                                sizeof(output),
+                                &returned);
 
     if (!NT_SUCCESS(status)) {
         RkLog(RK_DBG_ERROR,
