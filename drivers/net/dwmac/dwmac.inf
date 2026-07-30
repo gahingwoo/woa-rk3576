@@ -26,9 +26,9 @@ DefaultDestDir = 13
 dwmac.sys = 1
 
 [Manufacturer]
-%ProviderName% = Standard,NTARM64
+%ProviderName% = Standard,NTARM64.10.0...16299
 
-[Standard.NTARM64]
+[Standard.NTARM64.10.0...16299]
 %DWMAC.DeviceDesc% = DWMAC_Inst,ACPI\RKCP6543
 
 [DWMAC_Inst.NT]

@@ -41,6 +41,9 @@
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>KMDF</DriverType>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
+    <!-- Must be declared here: the WDK targets read it at Cpp.props time. -->
+    <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
+    <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
     <!--
       NetAdapterDriver is what makes the WDK targets add the NetAdapterCx
       include path and import library; netadaptercx.h is not in km, it ships in
@@ -53,10 +56,6 @@
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
 
-  <PropertyGroup>
-    <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
-  </PropertyGroup>
 
   <ItemDefinitionGroup>
     <ClCompile>

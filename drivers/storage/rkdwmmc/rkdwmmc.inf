@@ -9,7 +9,7 @@
 
 [Version]
 Signature   = "$WINDOWS NT$"
-Class       = SDHC
+Class       = SDHost
 ClassGuid   = {a0a588a4-c46f-4b37-b7ea-c82fe89870c6}
 Provider    = %ProviderName%
 DriverVer   = ; set by stampinf during build
@@ -26,9 +26,9 @@ DefaultDestDir = 13
 rkdwmmc.sys = 1
 
 [Manufacturer]
-%ProviderName% = Standard,NTARM64
+%ProviderName% = Standard,NTARM64.10.0...16299
 
-[Standard.NTARM64]
+[Standard.NTARM64.10.0...16299]
 %RKMMC.DeviceDesc% = RKMMC_Inst,ACPI\RKCPFE2C
 
 [RKMMC_Inst.NT]
