@@ -102,6 +102,16 @@ static const GUID DwmacDsdPropertiesGuid = {
 #define DWMAC_AXI_BLEN_COUNT        7
 
 //
+// FIELD_OFFSET is a signed LONG, and every length it gets compared against here
+// is unsigned. Name the two offsets once, already unsigned.
+//
+#define DWMAC_ACPI_OUTPUT_HEADER                                              \
+    ((ULONG)FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument))
+
+#define DWMAC_ACPI_ARG_HEADER                                                 \
+    ((ULONG_PTR)FIELD_OFFSET(ACPI_METHOD_ARGUMENT, Data))
+
+//
 // ---------------------------------------------------------------------------
 // Bounds-checked walking of an ACPI evaluation result
 // ---------------------------------------------------------------------------
@@ -136,7 +146,7 @@ DwmacArgFits(
     }
 
     avail = (ULONG_PTR)(End - Cur);
-    if (avail < FIELD_OFFSET(ACPI_METHOD_ARGUMENT, Data)) {
+    if (avail < DWMAC_ACPI_ARG_HEADER) {
         return FALSE;
     }
 
@@ -282,9 +292,9 @@ DwmacEvalAcpiName(
                                     &returned);
 
         if (NT_SUCCESS(status) &&
-            returned >= FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) &&
+            returned >= DWMAC_ACPI_OUTPUT_HEADER &&
             output->Signature == ACPI_EVAL_OUTPUT_BUFFER_SIGNATURE &&
-            output->Length >= FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) &&
+            output->Length >= DWMAC_ACPI_OUTPUT_HEADER &&
             output->Length <= returned) {
             return output;
         }
@@ -299,7 +309,7 @@ DwmacEvalAcpiName(
             return NULL;
         }
 
-        if (returned < FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) ||
+        if (returned < DWMAC_ACPI_OUTPUT_HEADER ||
             output->Length <= size ||
             output->Length > DWMAC_ACPI_OUTPUT_MAX) {
             ExFreePoolWithTag(output, DWMAC_POOL_TAG);
@@ -334,7 +344,7 @@ DwmacResultAsPackage(
 
     Pkg->Begin = (PUCHAR)Out->Argument;
     Pkg->End = (PUCHAR)Out->Argument +
-               (Out->Length - FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument));
+               (Out->Length - DWMAC_ACPI_OUTPUT_HEADER);
 
     first = DwmacPkgFirst(Pkg);
     if (first == NULL) {
