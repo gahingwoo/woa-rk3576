@@ -38,6 +38,8 @@ has every piece needed to boot Windows to the desktop with networking.
 
 ### 2026-09-18: Windows Setup boots on CM5-IO
 
+![Windows 10 21H2 ARM64 Setup on ArmSoM CM5-IO](docs/imgs/cm5io-windows.png)
+
 Setup had been bugchecking `ACPI_BIOS_ERROR` on every attempt. The cause was
 an ACPI **SCMI** device inherited from RK3588 that drives a doorbell register
 RK3576 does not have; removing it gets Setup to its first screen. The fix is
