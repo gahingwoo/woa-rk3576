@@ -36,6 +36,25 @@ no inbox driver for, plus docs for the peripherals that *do* use inbox drivers.
 With inbox display (GOP) + USB input + storage + the drivers above, the platform
 has every piece needed to boot Windows to the desktop with networking.
 
+### 2026-09-18: Windows Setup boots on CM5-IO
+
+Setup had been bugchecking `ACPI_BIOS_ERROR` on every attempt. The cause was
+an ACPI **SCMI** device inherited from RK3588 that drives a doorbell register
+RK3576 does not have; removing it gets Setup to its first screen. The fix is
+in the firmware port, not here.
+
+This changes what "not run on silicon" means above — it was blocked on nothing
+booting. It is not unblocked for all five drivers, though:
+
+* **Windows sees no storage yet.** `list disk` shows only the USB stick it
+  booted from — no NVMe, no eMMC. Until that is fixed there is nowhere to
+  install to, and four of the five drivers need an **installed** Windows
+  because WinPE ships no GpioClx, SpbCx or NetAdapterCx.
+* **`rkdwmmc` is the exception.** `sdport` is in WinPE, so the SD driver can
+  be loaded there with `drvload` — see [docs/DEBUGGING.md](docs/DEBUGGING.md),
+  which also explains how to get any data at all out of WinPE on a board with
+  no serial console.
+
 ## Build
 
 These are **ARM64 kernel drivers**. An ARM64 Windows machine builds them
@@ -70,9 +89,17 @@ Done:
   driver binds (the device is SDHCI-compatible and exposes the SD clock `_DSM`).
 - **SPI** — `Spi.asl` publishes `_HID "RKCP3003"` with `_CID "PRP0001"` kept for
   Linux.
+- **SCMI removed** — `Scmi.asl` came from RK3588 and rings a doorbell at a
+  hardcoded `0xfec60030`; RK3576's SCMI is `arm,scmi-smc` with no mailbox at
+  all, so the device could only ever fail. It is what made Setup bugcheck.
+  The shared-memory PCD was RK3588's `0x0010f000` too, against `0x4010f000`
+  here.
 
 Still open:
 
+- **Storage for Windows** — the root bridge is enabled and the OS is
+  identified correctly, yet nothing enumerates behind PCIe and the eMMC does
+  not appear either. This is the blocker for everything else.
 - **Audio (SAI)** — bigger task: enumerate the RK3576 **SAI** block (not the old
   I²S) with correct addresses/clocks/DMA, under a distinct `_HID` (the stale
   `I2s.asl` wrongly reuses `RKCP3003`). Solution being worked out — see

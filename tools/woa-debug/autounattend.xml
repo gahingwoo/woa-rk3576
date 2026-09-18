@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  autounattend.xml - run diagnostics inside Windows Setup, then get out of the way.
+
+  Windows Setup looks for this file in the root of removable media and reads it
+  during the windowsPE pass. It is the only way to run commands inside WinPE on
+  this board without a keyboard: WinPE has no serial console. SAC, the thing
+  that would give one, needs sacdrv.sys/sacsvr and is not in WinPE, and SPCR
+  only marks a debug port - it does not create a console. So the serial line
+  goes quiet the moment bootmgfw.efi takes over, and this file is how we get
+  anything back out.
+
+  ####################################################################
+  #  DO NOT ADD <DiskConfiguration> OR <ImageInstall> TO THIS FILE.  #
+  #                                                                  #
+  #  With either of those present Setup installs unattended, which   #
+  #  means it partitions disks on its own. On this board that wipes  #
+  #  the NVMe, and the firmware lives in the first 32 MB of the      #
+  #  eMMC. This file contains RunSynchronous and nothing else, so    #
+  #  Setup runs the commands and then falls through to the normal    #
+  #  interactive UI, touching no disk.                               #
+  ####################################################################
+
+  The command below scans drive letters for woa-debug\collect.cmd rather than
+  hardcoding one: WinPE assigns the stick whatever letter it likes, and it is
+  not the letter it had under Linux.
+
+  Add new probes to collect.cmd, not here. This file is the hook; that one is
+  the part that changes.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-Setup"
+               processorArchitecture="arm64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Description>woa-rk3576 diagnostics</Description>
+          <Path>cmd /c for %i in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %i:\woa-debug\collect.cmd call %i:\woa-debug\collect.cmd %i:</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+</unattend>
