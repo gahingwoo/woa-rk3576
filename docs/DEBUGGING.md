@@ -55,6 +55,11 @@ normally. Shut down, move the stick back to Linux, and read
 | `30-setupact.log`, `31-setuperr.log` | Setup's own logs. `setuperr.log` is short and names what Setup objected to. |
 | `40-drivers.txt` | Driver packages already staged in this WinPE. |
 | `50-drvload.txt`, `51-devices-after-drvload.txt` | Only if `woa-debug\drivers\` exists — see below. |
+| `60-resourcemap.txt` | `HKLM\HARDWARE\RESOURCEMAP` — the arbiter's **output**: every interrupt vector, memory range and port actually granted, by owner. The Enum dumps say what a device asks for; this says what the machine gave out, which is the only way to see why an allocation failed. |
+| `61-hw-description.txt` | What Windows built from the ACPI tables before any driver ran. |
+| `62-acpi-tables.txt` | Which ACPI tables Windows loaded, by signature — confirms from the OS side which firmware is in use. |
+| `63-problem-devices.txt` | Devices with a problem code, on their own. |
+| `64-setupact-pnp.txt` | The PCI/resource/arbiter lines of `setupact.log`, so the whole 24 KB does not have to be read over a serial console. |
 
 ## Loading this project's drivers
 
@@ -78,3 +83,28 @@ Two limits worth knowing before reading a failure as a bug in the driver:
 Append a block to `collect.cmd`. Keep each probe self-contained and redirect
 its own output: a command that does not exist in a given WinPE build should
 not be able to take the rest of the run down with it.
+
+
+## Reading a resource failure
+
+`CM_PROB_NORMAL_CONFLICT` on a device means the arbiter could not satisfy its
+requirements. Three files answer three different questions, and they are easy
+to confuse:
+
+* `11-enum-acpi.txt` / `12-enum-pci.txt` → `LogConf\BasicConfigVector` is
+  **what the device will accept**, as alternative lists of descriptors. A
+  device with an unconstrained alternative for some resource cannot be starved
+  of that resource, whatever the tables say.
+* `LogConf\BootConfig` in the same dumps is **what firmware left it at** —
+  for a PCI device, the BAR addresses UEFI programmed. ARM64 Windows keeps
+  these rather than rebalancing, so the address UEFI picks is the address
+  Windows is stuck with.
+* `60-resourcemap.txt` is **what was actually granted**, to everyone.
+
+Both are `REG_RESOURCE_LIST` / `IO_RESOURCE_REQUIREMENTS_LIST` binaries.
+Decoding notes that cost time to work out: the descriptors in these lists are
+**20 bytes**, not the 16 the struct definition suggests; `reg query` prints
+each value on one line, so grab it by line number rather than by pattern (a
+dump of the whole Enum tree has a `BootConfig` under almost every device); and
+strip to hex *after* removing the value name, since `BootConfig` and
+`REG_RESOURCE_LIST` contain hex letters themselves.

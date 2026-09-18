@@ -50,6 +50,33 @@ if exist X:\Windows\Panther\setuperr.log copy /y X:\Windows\Panther\setuperr.log
 rem --- PROBE: drivers already staged in this WinPE ---------------------------
 pnputil /enum-drivers > "%OUT%\40-drivers.txt" 2>&1
 
+rem --- PROBE: what the PnP arbiter actually handed out ------------------------
+rem HKLM\HARDWARE\RESOURCEMAP is the arbiter's output, not a device's wish
+rem list: every allocated interrupt vector, memory range and port, by owner.
+rem The Enum dumps above say what each device *asks* for; this says what the
+rem machine actually granted, which is the only way to see why an allocation
+rem could not be made. Added after a session where every requirement looked
+rem satisfiable in isolation and the device still got CM_PROB_NORMAL_CONFLICT.
+reg query HKLM\HARDWARE\RESOURCEMAP /s > "%OUT%\60-resourcemap.txt" 2>&1
+
+rem --- PROBE: the firmware-described hardware tree ----------------------------
+rem What Windows built from the ACPI tables before any driver ran.
+reg query "HKLM\HARDWARE\DESCRIPTION\System" /s > "%OUT%\61-hw-description.txt" 2>&1
+
+rem --- PROBE: which ACPI tables Windows loaded, by signature ------------------
+rem Confirms from the OS side that the tables the firmware installed are the
+rem ones in use -- cheaper than inferring it from a build stamp.
+reg query HKLM\HARDWARE\ACPI > "%OUT%\62-acpi-tables.txt" 2>&1
+
+rem --- PROBE: devices with a problem, listed on their own ---------------------
+pnputil /enum-devices /problem > "%OUT%\63-problem-devices.txt" 2>&1
+
+rem --- PROBE: Setup's own PnP complaints --------------------------------------
+rem setupact.log is copied whole above; this pulls the lines worth reading
+rem first, so a 24 KB log does not have to be moved over a serial console.
+findstr /i /c:"pci" /c:"resource" /c:"arbit" /c:"conflict" /c:"nvme" ^
+    X:\Windows\Panther\setupact.log > "%OUT%\64-setupact-pnp.txt" 2>&1
+
 rem --- OPTIONAL: load our own drivers ----------------------------------------
 rem Only runs if the packages are on the stick. Unsigned kernel drivers need
 rem test signing enabled in the stick's BCD (bcdedit /store ... /set testsigning
