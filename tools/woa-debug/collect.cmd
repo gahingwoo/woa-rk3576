@@ -90,10 +90,11 @@ rem test signing enabled in the stick's BCD (bcdedit /store ... /set testsigning
 rem on) and Secure Boot off, or drvload fails with a signature error - that
 rem failure is itself a useful result, so it is recorded either way.
 rem
-rem Note what WinPE does NOT have: GpioClx, SpbCx and NetAdapterCx are absent,
-rem so gpio, i2c, spi and gmac cannot load here no matter how they are signed.
-rem sdport IS present (WinPE boots from storage), so rkdwmmc is the one with a
-rem real chance, and the SD card is the reason to care.
+rem What WinPE actually has, checked against the ADK 22621 boot.wim with
+rem `wimlib-imagex dir` rather than assumed: msgpioclx.sys, SpbCx.sys,
+rem sdport.sys, sdbus.sys and sdstor.sys are all present. An earlier note
+rem here said GpioClx and SpbCx were absent and that gpio/i2c/spi therefore
+rem could not load; that was wrong.
 if exist "%STICK%\woa-debug\drivers" (
   echo drvload results > "%OUT%\50-drvload.txt"
   for /d %%D in ("%STICK%\woa-debug\drivers\*") do (
@@ -105,6 +106,35 @@ if exist "%STICK%\woa-debug\drivers" (
   rem re-run the device list so the before/after is visible in one place
   pnputil /enum-devices > "%OUT%\51-devices-after-drvload.txt" 2>&1
 )
+
+rem --- PROBE: how many CPUs the kernel actually started ---------------------
+rem One subkey per running processor. This read 1 for a long time; it should
+rem now be 0..7 (MADT GICC CPU interface numbers).
+reg query "HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor" > "%OUT%\70-cpus.txt" 2>&1
+
+rem --- PROBE: the storage controllers, on their own -------------------------
+rem 10-devices.txt has everything, but these are the two the whole storage
+rem story turns on and they are worth having in a file of their own:
+rem   ACPI\RKCP0D40  eMMC  (DWCMSHC, SDHCI-compatible, inbox sdbus binds)
+rem   ACPI\RKCPFE2C  SD    (dw_mmc, needs rkdwmmc from this repo)
+rem Three outcomes to tell apart: no driver bound at all (INF/hardware-id or
+rem signing), bound but failed to start (the error code says why), or started
+rem with no child (the controller is up and the card is not).
+pnputil /enum-devices /class SDHost > "%OUT%\71-sdhost.txt" 2>&1
+pnputil /enum-devices /deviceid "ACPI\RKCPFE2C" >> "%OUT%\71-sdhost.txt" 2>&1
+pnputil /enum-devices /deviceid "ACPI\RKCP0D40" >> "%OUT%\71-sdhost.txt" 2>&1
+
+rem --- PROBE: which third-party drivers are staged and loadable -------------
+rem /enum-drivers lists the driver store; 40-drivers.txt has said "no published
+rem driver packages" on every stock image. If the injected ones are missing
+rem here, the question is the image, not the driver.
+pnputil /enum-drivers > "%OUT%\72-drivers-staged.txt" 2>&1
+
+rem --- PROBE: disks, again, after everything above --------------------------
+echo list disk > "%OUT%\dp2.txt"
+echo list volume >> "%OUT%\dp2.txt"
+diskpart /s "%OUT%\dp2.txt" > "%OUT%\73-diskpart-late.txt" 2>&1
+del "%OUT%\dp2.txt" 2>nul
 
 echo done >> "%OUT%\00-index.txt"
 endlocal
