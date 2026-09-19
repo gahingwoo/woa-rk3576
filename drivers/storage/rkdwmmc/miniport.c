@@ -33,6 +33,7 @@ Environment:
                                 DWMMC_INT_EBE | DWMMC_INT_FRUN | DWMMC_INT_HTO)
 
 RKDWMMC_DIAG g_RkDiag;
+STATIC HANDLE g_RkDiagKey = NULL;
 
 //
 // Publish g_RkDiag under the driver's own service key. See rkdwmmc.h for why
@@ -45,7 +46,6 @@ RkdwmmcDiagFlush(
 {
     UNICODE_STRING     path;
     OBJECT_ATTRIBUTES  attr;
-    HANDLE             key = NULL;
     NTSTATUS           status;
     ULONG              disp;
 
@@ -64,10 +64,19 @@ RkdwmmcDiagFlush(
                                OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
                                NULL, NULL);
 
-    status = ZwCreateKey(&key, KEY_WRITE, &attr, 0, NULL,
-                         REG_OPTION_NON_VOLATILE, &disp);
-    if (!NT_SUCCESS(status)) {
-        return;
+    //
+    // Open once and keep it. The first version created and closed the key on
+    // every call and was flushed from the command path, so card initialisation
+    // paid a create + 16 writes + close per command -- and the boot hung.
+    // Same driver without it booted fine, so that cost was the difference.
+    //
+    if (g_RkDiagKey == NULL) {
+        status = ZwCreateKey(&g_RkDiagKey, KEY_WRITE, &attr, 0, NULL,
+                             REG_OPTION_NON_VOLATILE, &disp);
+        if (!NT_SUCCESS(status)) {
+            g_RkDiagKey = NULL;
+            return;
+        }
     }
 
 #define RK_DIAG_PUT(_name, _field)                                            \
@@ -75,7 +84,7 @@ RkdwmmcDiagFlush(
         UNICODE_STRING _vn;                                                   \
         ULONG _v = (ULONG)(g_RkDiag._field);                                  \
         RtlInitUnicodeString(&_vn, L##_name);                                 \
-        ZwSetValueKey(key, &_vn, 0, REG_DWORD, &_v, sizeof(_v));              \
+        ZwSetValueKey(g_RkDiagKey, &_vn, 0, REG_DWORD, &_v, sizeof(_v));      \
     } while (0)
 
     RK_DIAG_PUT("CardDetectCalls",   CardDetectCalls);
@@ -96,8 +105,6 @@ RkdwmmcDiagFlush(
     RK_DIAG_PUT("FifoOffset",        FifoOffset);
 
 #undef RK_DIAG_PUT
-
-    ZwClose(key);
 }
 
 _Use_decl_annotations_
@@ -296,7 +303,8 @@ RkdwmmcGetCardDetectState(
     g_RkDiag.CardDetectCalls++;
     g_RkDiag.CardDetectRaw = cdetect;
     g_RkDiag.CardDetectPresent = present ? 1u : 0u;
-    RkdwmmcDiagFlush();
+    // No flush here: sdport polls this. The values ride out on the next
+    // IssueBusOperation, which is not in a hot loop.
 
     RkLog(RK_DBG_INFO, "GetCardDetectState: CDETECT=0x%08x -> %s\n",
           cdetect, present ? "present" : "empty");
@@ -419,7 +427,7 @@ RkdwmmcIssueRequest(
         g_RkDiag.LastCmdArg    = command->Argument;
         g_RkDiag.LastCmdReg    = cmd;
         g_RkDiag.LastCmdStatus = (ULONG)status;
-        RkdwmmcDiagFlush();
+        // No flush here either -- this is the command path.
 
         RkLog(RK_DBG_INFO,
               "CMD%u arg=0x%08x resp=%u xfer=%u cmdreg=0x%08x -> 0x%08x\n",
@@ -645,6 +653,14 @@ RkdwmmcCleanup(
     )
 {
     UNREFERENCED_PARAMETER(Miniport);
+
+    //
+    // The diagnostic key handle is opened once and kept; give it back here.
+    //
+    if (g_RkDiagKey != NULL) {
+        ZwClose(g_RkDiagKey);
+        g_RkDiagKey = NULL;
+    }
 }
 
 _Use_decl_annotations_
