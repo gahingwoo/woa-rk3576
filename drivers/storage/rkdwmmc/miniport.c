@@ -33,7 +33,7 @@ Environment:
                                 DWMMC_INT_EBE | DWMMC_INT_FRUN | DWMMC_INT_HTO)
 
 RKDWMMC_DIAG g_RkDiag;
-STATIC HANDLE g_RkDiagKey = NULL;
+static HANDLE g_RkDiagKey = NULL;
 
 //
 // Publish g_RkDiag under the driver's own service key. See rkdwmmc.h for why
