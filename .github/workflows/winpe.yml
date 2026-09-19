@@ -2,6 +2,11 @@ name: WinPE (ARM64)
 
 on:
   workflow_dispatch:
+    inputs:
+      drivers:
+        description: 'Inject the RK3576 ARM64 drivers (needs test signing, enabled with them)'
+        type: boolean
+        default: true
   push:
     paths:
       - 'tools/woa-debug/**'
@@ -37,6 +42,50 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.drivers }}
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Build the ARM64 drivers to inject
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.drivers }}
+        shell: pwsh
+        run: |
+          # Built here rather than pulled from the CI workflow's artifacts:
+          # cross-workflow download needs a run id and a token, and this keeps
+          # the image and the drivers in it from drifting apart.
+          #
+          # rkdwmmc needs rk3576gpio, because Sdhc.asl routes card detect
+          # through GpioInt on \_SB.GPI0 rather than the controller's CDETECT.
+          $projects = @(
+            'drivers/storage/rkdwmmc/rkdwmmc.vcxproj',
+            'drivers/gpio/rk3576gpio/rk3576gpio.vcxproj'
+          )
+          New-Item -ItemType Directory -Force -Path $env:DRIVER_STAGE | Out-Null
+          foreach ($proj in $projects) {
+            Write-Host "== $proj"
+            msbuild $proj /p:Configuration=Release /p:Platform=ARM64 `
+                    /p:WindowsTargetPlatformVersion=$env:WDK_VERSION `
+                    /p:SignMode=Off /m /nologo /v:minimal
+            if ($LASTEXITCODE -ne 0) { throw "msbuild failed for $proj" }
+          }
+          # dism /Add-Driver wants each INF beside its .sys, so flatten per
+          # driver rather than handing it the build tree.
+          foreach ($d in Get-ChildItem 'drivers' -Recurse -Directory |
+                         Where-Object { $_.FullName -match '\\ARM64\\Release$' }) {
+            $name = Split-Path (Split-Path (Split-Path $d.FullName -Parent) -Parent) -Leaf
+            $out  = Join-Path $env:DRIVER_STAGE $name
+            New-Item -ItemType Directory -Force -Path $out | Out-Null
+            Get-ChildItem $d.FullName -Recurse -Include *.sys,*.inf,*.cat |
+              Copy-Item -Destination $out -Force
+          }
+          Get-ChildItem $env:DRIVER_STAGE -Recurse -File |
+            Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
+          if (-not (Get-ChildItem $env:DRIVER_STAGE -Recurse -Filter *.sys)) {
+            throw 'no .sys came out of the driver build'
+          }
 
       - name: Download the WinPE add-on payload
         shell: pwsh
@@ -165,6 +214,17 @@ jobs:
             }
           }
 
+          # The RK3576 drivers, if they were built.  /ForceUnsigned stages an
+          # unsigned driver into the image; the kernel still refuses to load it
+          # at boot unless test signing is on, which the next step handles.
+          if (Test-Path $env:DRIVER_STAGE) {
+            & '${{ steps.dism.outputs.exe }}' /Image:"$env:PE_ROOT\mount" `
+              /Add-Driver /Driver:"$env:DRIVER_STAGE" /Recurse /ForceUnsigned
+            if ($LASTEXITCODE) { throw "Add-Driver failed: $LASTEXITCODE" }
+          } else {
+            Write-Host 'no drivers staged; building a stock image'
+          }
+
           Copy-Item tools\woa-debug\startnet.cmd `
                     "$env:PE_ROOT\mount\Windows\System32\startnet.cmd" -Force
           New-Item -ItemType Directory -Force -Path "$env:PE_ROOT\media\woa-debug" | Out-Null
@@ -172,6 +232,23 @@ jobs:
 
           & '${{ steps.dism.outputs.exe }}' /Unmount-Image /MountDir:"$env:PE_ROOT\mount" /Commit
           if ($LASTEXITCODE) { throw "unmount failed: $LASTEXITCODE" }
+
+      - name: Let the media load unsigned drivers
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.drivers }}
+        shell: pwsh
+        run: |
+          # Staging an unsigned driver is not the same as being allowed to load
+          # it.  Both switches live on the media's own BCD, so they apply to
+          # this stick and nothing else -- no change to the board, and nothing
+          # to undo afterwards.
+          $bcd = "$env:PE_ROOT\media\EFI\Microsoft\Boot\BCD"
+          if (-not (Test-Path $bcd)) { throw "no BCD at $bcd" }
+          foreach ($opt in 'testsigning on', 'nointegritychecks on') {
+            $args = @('/store', $bcd, '/set', '{default}') + $opt.Split(' ')
+            & bcdedit.exe @args
+            if ($LASTEXITCODE) { throw "bcdedit $opt failed: $LASTEXITCODE" }
+          }
+          & bcdedit.exe /store $bcd /enum '{default}' | Write-Host
 
       - name: Show what came out
         shell: pwsh
