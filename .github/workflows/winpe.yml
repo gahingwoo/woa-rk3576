@@ -84,11 +84,56 @@ jobs:
             Get-ChildItem $d.FullName -Recurse -Include *.sys,*.inf,*.cat |
               Copy-Item -Destination $out -Force
           }
-          Get-ChildItem $env:DRIVER_STAGE -Recurse -File |
-            Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
           if (-not (Get-ChildItem $env:DRIVER_STAGE -Recurse -Filter *.sys)) {
             throw 'no .sys came out of the driver build'
           }
+
+          # Test-sign them.
+          #
+          # testsigning on the target does NOT mean "load unsigned drivers" --
+          # it means "accept a signature that does not chain to a trusted
+          # root". A driver with no signature at all is still refused, and the
+          # first attempt at this shipped SignMode=Off binaries and got exactly
+          # that on hardware:
+          #
+          #   ACPI\RKCP3002\0  Rockchip RK3576 GPIO Controller
+          #   Problem 52 (0x34) CM_PROB_UNSIGNED_DRIVER
+          #   Problem Status 0xC0000428  (STATUS_INVALID_IMAGE_HASH)
+          #
+          # which then held up the SD controller behind it with
+          # CM_PROB_WAITING_ON_DEPENDENCY, because card detect is a GpioInt.
+          $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
+          $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
+          foreach ($t in $st, $i2c) { if (-not (Test-Path $t)) { throw "missing $t" } }
+
+          $pfxPw = 'rk3576-test'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+                    -Subject 'CN=woa-rk3576 test signing' `
+                    -CertStoreLocation Cert:\CurrentUser\My `
+                    -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(5)
+          $pfx = 'C:\rk-test.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx `
+            -Password (ConvertTo-SecureString $pfxPw -Force -AsPlainText) | Out-Null
+
+          foreach ($d in Get-ChildItem $env:DRIVER_STAGE -Directory) {
+            Write-Host "== catalog + signature: $($d.Name)"
+            # 10_RS3_ARM64 is build 16299. The other value this inf2cat takes,
+            # Server10_ARM64, is 14393 -- older than the 16299 these INFs need
+            # for DIRID 13, so it drops the DDInstall sections and the
+            # signability test fails.
+            & $i2c /driver:"$($d.FullName)" /os:10_RS3_ARM64 /verbose
+            if ($LASTEXITCODE) { throw "inf2cat failed for $($d.Name): $LASTEXITCODE" }
+            $files = Get-ChildItem $d.FullName -Include *.cat,*.sys -Recurse |
+                     Select-Object -ExpandProperty FullName
+            & $st sign /fd sha256 /f $pfx /p $pfxPw $files
+            if ($LASTEXITCODE) { throw "signtool failed for $($d.Name): $LASTEXITCODE" }
+            & $st verify /pa /v $files 2>&1 | Select-String -Pattern 'Successfully|Issued to' |
+              ForEach-Object { Write-Host "   $_" }
+          }
+
+          Get-ChildItem $env:DRIVER_STAGE -Recurse -File |
+            Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
 
       - name: Download the WinPE add-on payload
         shell: pwsh
@@ -216,9 +261,11 @@ jobs:
             }
           }
 
-          # The RK3576 drivers, if they were built.  /ForceUnsigned stages an
-          # unsigned driver into the image; the kernel still refuses to load it
-          # at boot unless test signing is on, which the next step handles.
+          # The RK3576 drivers, if they were built.  They carry a test
+          # signature; /ForceUnsigned is kept because the certificate does not
+          # chain to a trusted root, which is what DISM objects to. Loading
+          # them at boot additionally needs testsigning on the media's BCD --
+          # the next step.
           if (Test-Path $env:DRIVER_STAGE) {
             & '${{ steps.dism.outputs.exe }}' /Image:"$env:PE_ROOT\mount" `
               /Add-Driver /Driver:"$env:DRIVER_STAGE" /Recurse /ForceUnsigned
