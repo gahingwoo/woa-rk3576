@@ -94,25 +94,57 @@ jobs:
           Copy-Item "${{ steps.find.outputs.wim }}" "$env:PE_ROOT\media\sources\boot.wim" -Force
           Get-ChildItem "$env:PE_ROOT\media"
 
+      - name: Pick a DISM new enough to service the image
+        id: dism
+        shell: pwsh
+        run: |
+          # The in-box dism.exe on windows-2022 is 10.0.20348, older than the
+          # 22621 image we are about to service, and DISM only services
+          # downlevel. The runner's ADK 26100 DISM is the right way round.
+          $cand = @(
+            'C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\DISM\dism.exe'
+          ) + (Get-ChildItem 'C:\Program Files (x86)\Windows Kits' -Recurse -Filter dism.exe `
+                 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+          $best = $null; $bestVer = [version]'0.0'
+          foreach ($c in ($cand | Select-Object -Unique)) {
+            if (-not (Test-Path $c)) { continue }
+            $v = [version](Get-Item $c).VersionInfo.ProductVersion.Split('-')[0]
+            Write-Host ("{0}  {1}" -f $v, $c)
+            if ($v -gt $bestVer) { $bestVer = $v; $best = $c }
+          }
+          if (-not $best) { throw 'no ADK dism.exe on the runner' }
+          if ($bestVer -lt [version]"10.0.$env:ADK_BUILD.0") {
+            throw "best DISM is $bestVer, older than the $env:ADK_BUILD image it must service"
+          }
+          Write-Host "using $best ($bestVer)"
+          "exe=$best" | Out-File -Append $env:GITHUB_OUTPUT
+
       - name: Assert the image is 10.0.${{ env.ADK_BUILD }} and ARM64
         shell: pwsh
         run: |
-          $info = & dism.exe /English /Get-WimInfo /WimFile:"$env:PE_ROOT\media\sources\boot.wim" /Index:1
+          $info = & '${{ steps.dism.outputs.exe }}' /English /Get-WimInfo /WimFile:"$env:PE_ROOT\media\sources\boot.wim" /Index:1
           $info | Write-Host
-          $text = $info -join "`n"
-          $ver  = ([regex]'Version\s*:\s*([\d\.]+)').Match($text).Groups[1].Value
-          $arch = ([regex]'Architecture\s*:\s*(\S+)').Match($text).Groups[1].Value
-          if ($ver -notmatch "^10\.0\.$env:ADK_BUILD\.") {
-            throw "WinPE build is '$ver', expected 10.0.$env:ADK_BUILD.* - refusing to ship an image that cannot boot on ARMv8.0"
+          # DISM prints its own version in the banner as 'Version: x'; the
+          # image's own line is 'Version : x', with a space before the colon,
+          # and it comes after 'Index :'. Match on both so the tool's version
+          # can never be mistaken for the image's -- it was, once, and the
+          # build failed on a perfectly good image.
+          $text = ($info -join "`n")
+          $i    = $text.IndexOf('Index :')
+          if ($i -ge 0) { $text = $text.Substring($i) }
+          $ver  = ([regex]'(?m)^Version\s+:\s*([\d\.]+)').Match($text).Groups[1].Value
+          $arch = ([regex]'(?m)^Architecture\s+:\s*(\S+)').Match($text).Groups[1].Value
+          if ($ver -notmatch "^10\.0\.$env:ADK_BUILD") {
+            throw "WinPE build is '$ver', expected 10.0.$env:ADK_BUILD* - refusing to ship an image that cannot boot on ARMv8.0"
           }
-          if ($arch -ne 'ARM64') { throw "Architecture is '$arch', expected ARM64" }
+          if ($arch -ne 'arm64') { throw "Architecture is '$arch', expected arm64" }
           Write-Host "OK: WinPE $ver $arch"
 
       - name: Mount, add components, inject the collector, commit
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & dism.exe /Mount-Image /ImageFile:"$env:PE_ROOT\media\sources\boot.wim" /Index:1 /MountDir:"$env:PE_ROOT\mount"
+          & '${{ steps.dism.outputs.exe }}' /Mount-Image /ImageFile:"$env:PE_ROOT\media\sources\boot.wim" /Index:1 /MountDir:"$env:PE_ROOT\mount"
           if ($LASTEXITCODE) { throw "mount failed: $LASTEXITCODE" }
 
           # Dependency order: WMI, then Scripting, then StorageWMI.
@@ -124,11 +156,11 @@ jobs:
                          'WinPE-FMAPI','WinPE-EnhancedStorage',
                          'WinPE-SecureStartup','WinPE-PlatformId') {
             Write-Host "== $p"
-            & dism.exe /Image:"$env:PE_ROOT\mount" /Add-Package /PackagePath:"$ocs\$p.cab"
+            & '${{ steps.dism.outputs.exe }}' /Image:"$env:PE_ROOT\mount" /Add-Package /PackagePath:"$ocs\$p.cab"
             if ($LASTEXITCODE) { throw "$p failed: $LASTEXITCODE" }
             $lang = "$ocs\en-us\${p}_en-us.cab"
             if (Test-Path $lang) {
-              & dism.exe /Image:"$env:PE_ROOT\mount" /Add-Package /PackagePath:"$lang"
+              & '${{ steps.dism.outputs.exe }}' /Image:"$env:PE_ROOT\mount" /Add-Package /PackagePath:"$lang"
               if ($LASTEXITCODE) { throw "${p}_en-us failed: $LASTEXITCODE" }
             }
           }
@@ -138,7 +170,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$env:PE_ROOT\media\woa-debug" | Out-Null
           Copy-Item tools\woa-debug\collect.cmd "$env:PE_ROOT\media\woa-debug\" -Force
 
-          & dism.exe /Unmount-Image /MountDir:"$env:PE_ROOT\mount" /Commit
+          & '${{ steps.dism.outputs.exe }}' /Unmount-Image /MountDir:"$env:PE_ROOT\mount" /Commit
           if ($LASTEXITCODE) { throw "unmount failed: $LASTEXITCODE" }
 
       - name: Show what came out
