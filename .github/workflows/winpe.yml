@@ -350,3 +350,70 @@ jobs:
           path: C:\WinPE_arm64\media\**
           retention-days: 14
           if-no-files-found: error
+
+  image:
+    name: Flashable disk image
+    needs: winpe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: winpe-arm64-${{ env.ADK_BUILD }}
+          path: media
+
+      - name: Build a GPT + FAT32 image
+        run: |
+          set -euo pipefail
+          #
+          # Copying the media tree onto a stick by hand is a step that can go
+          # wrong quietly, and on this project it looks like it has: the same
+          # build boots sometimes and not others, including the one with no
+          # third-party drivers in it. 346 MB of boot.wim written file by file,
+          # sometimes from macOS (it left ._ resource forks on the SD card), is
+          # not a reproducible medium.
+          #
+          # This writes the filesystem once, in CI, and ships the bytes. Etcher
+          # then copies them verbatim and the medium stops being a variable.
+          #
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dosfstools mtools gdisk >/dev/null
+
+          MB=$(( $(du -sm media | cut -f1) + 160 ))
+          echo "media $(du -sm media | cut -f1) MB -> image ${MB} MB"
+          truncate -s "${MB}M" winpe.img
+
+          # One ESP. The board's UEFI boots EFI/Boot/bootaa64.efi from it.
+          sgdisk -o -n 1:2048:0 -t 1:ef00 -c 1:WINPE winpe.img
+
+          LOOP=$(sudo losetup --find --show -P winpe.img)
+          trap 'sudo losetup -d "$LOOP" || true' EXIT
+          sudo mkfs.vfat -F 32 -n WINPE "${LOOP}p1"
+          mkdir -p mnt
+          sudo mount "${LOOP}p1" mnt
+          sudo cp -r media/. mnt/
+          sudo sync
+          echo "--- on the image ---"
+          sudo ls mnt
+          sudo test -f mnt/EFI/Boot/bootaa64.efi || \
+            { echo 'EFI/Boot/bootaa64.efi missing'; exit 1; }
+          sudo test -f mnt/sources/boot.wim || \
+            { echo 'sources/boot.wim missing'; exit 1; }
+          # Compare sizes rather than trusting cp's exit code.
+          for f in EFI/Boot/bootaa64.efi sources/boot.wim; do
+            a=$(stat -c%s "media/$f"); b=$(sudo stat -c%s "mnt/$f")
+            echo "  $f  src=$a  img=$b"
+            [ "$a" = "$b" ] || { echo "size mismatch for $f"; exit 1; }
+          done
+          sudo umount mnt
+
+          sha256sum winpe.img | tee winpe.img.sha256
+          ls -la winpe.img
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winpe-arm64-${{ env.ADK_BUILD }}-img
+          path: |
+            winpe.img
+            winpe.img.sha256
+          retention-days: 14
+          if-no-files-found: error
