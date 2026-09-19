@@ -10,42 +10,76 @@ matters: one needs *no* driver from us, the other needs a custom one.
 | SD card (SDHC) | 0x2A310000 | `RKCPFE2C` | **dw_mmc** (DesignWare MMC, *not* SDHCI) | `rockchip,rk3576-dw-mshc` |
 | SDIO | 0x2A320000 | — | dw_mmc | `rockchip,rk3576-dw-mshc` |
 
-## eMMC — use the Windows inbox SDHCI driver (no custom driver)
+## eMMC — the inbox driver binds and cannot work (measured 2026-09-19)
 
-The eMMC controller is a **DWCMSHC**, which is register-compatible with the
-**SD Host Controller Standard (SDHCI 3.0/4.0)**. Windows ships an inbox standard
-SD host controller driver (`sdport.sys` + the standard host miniport) that binds
-to **`ACPI\PNP0D40`** ("SDA Standard Compliant SD Host Controller").
+The eMMC controller is a **DWCMSHC**, register-compatible with the SD Host
+Controller Standard. Windows does bind its inbox driver to it, and it starts:
 
-The EDK2 ACPI for this device is already built for that path — note the
-`_DSM` with GUID `434addb0-8ff3-49d5-a724-95844b79ad1f` in `Emmc.asl`. That is
-the **Microsoft-defined SD/eMMC clock-control `_DSM`**: the inbox driver invokes
-it to change the card clock, and the firmware reprograms the RK3576 CRU
-(`CCLK_SRC_EMMC`) behind it. This is exactly how a vendor SoC reuses the inbox
-SDHCI stack without a custom driver.
+    ACPI\RKCP0D40\3   SDA Standard Compliant SD Host Controller
+                       Status: Started    Driver: sdbus.inf
+                       Resources: mem 0x2A330000 len 0x10000, interrupt 285
 
-**The one gap:** the device is published as `_HID "RKCP0D40"`, which Windows
-does *not* recognize. The inbox driver matches `PNP0D40`. So the eMMC needs a
-compatible id added in the EDK2 DSDT:
+`_CID "PNP0D40"` is present in `Emmc.asl` and doing its job. **This section
+used to say adding it was the one remaining gap and was WIP. It is done, and it
+was not enough.**
 
-```asl
-Device (SDC3) {
-    Name (_HID, "RKCP0D40")
-    Name (_CID, "PNP0D40")        // <-- add this so the inbox driver binds
-    ...
-}
-```
+**No card ever appears under it.** There is no `SD\`, `MMC\` or `SFFDISK\`
+device node, and `ACPI\RKCP0D40\3` has no child at all. Confirmed on a clean
+WinPE 22621 built from the ADK with no third-party drivers, whose image
+contains the whole stack — `sdbus.sys`, `sdport.sys`, `sdstor.sys`,
+`sdstor.inf` are all in `boot.wim`. `sdstor` is absent from the running
+registry only because nothing exists for it to bind to.
 
-That is a one-line change in the EDK2 firmware port (also part of this project)
-and is **WIP** there. With that `_CID`
-present, Windows binds its inbox SDHCI driver and the eMMC works at the speeds
-the `_DSM` clock table supports (24 MHz → 200 MHz). HS400/enhanced-strobe tuning
-may need additional `_DSM` work, but legacy/HS/HS200 should come up.
+### Why
 
-> If, on hardware, the inbox driver cannot drive the DWCMSHC (vendor DLL/PHY
-> quirks at higher speeds), the fallback is a custom DWCMSHC `sdport` miniport
-> that reuses most of the standard SDHCI logic plus the Rockchip DLL block at
-> offset 0x500. We do not write that pre-emptively.
+Three Rockchip vendor bits hold the controller usable, and **an SDHCI
+`SW_RST_ALL` clears all three**:
+
+| Register | Bit | Meaning if cleared |
+|---|---|---|
+| `EMMC_CTRL` @ 0x52C | 0 `CARD_IS_EMMC` | controller not in eMMC mode |
+| `EMMC_CTRL` @ 0x52C | 2 `EMMC_RST_N` | **the card is held in hardware reset** |
+| `EMMC_MISC_CON` @ 0x81C | 1 `MISC_INTCLK_EN` | **internal clock off — every command times out** |
+
+(The vendor area base is the u16 at 0xE8 masked with 0xFFF; it is 0x500 here.)
+
+Two independent records of that, neither of them a guess: mainline's
+`rk35xx_sdhci_reset()` in `sdhci-of-dwcmshc.c` writes `MISC_INTCLK_EN` back
+after every `sdhci_reset()`, and this project's own `DwcSdhciDxe.c` does the
+same in `EdkiiSdMmcResetPost`, written from a measured failure on this board.
+
+A standard SDHCI driver resets the controller when it starts. Microsoft's
+cannot know about three Rockchip vendor bits, so nothing restores them.
+
+**No ACPI change can fix this** — the reset happens after ExitBootServices,
+where firmware has no say. `_DSD`, `_DSM`, `_RMV` and the `_CID` binding are
+all irrelevant to it.
+
+### Ruled out by measurement, do not revisit
+
+- *Base clock broken.* `CAPS0 = 0x3A6DC881`, bits[15:8] = `0xC8` = 200 MHz.
+  (mainline sets `SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN` on every dwcmshc variant,
+  which is what suggested this; it is conservative here.)
+- *No card detect.* `PRESENT_STATE = 0x03F700F0` — CardInserted=1, from the
+  real pin (`HOST_CONTROL1 = 0x34`, CD_SigSel=0).
+- Also read: `HOST_VERSION 0x0005` (SDHCI 4.20), `POWER_CONTROL 0x0D` (on,
+  3.0V), `HOST_CONTROL2 0x380F` (1.8V signalling, HS400).
+
+Those first two were read from a running Linux, which had already fixed
+everything up. **Windows sees the post-reset state, which is a different
+machine** — a register read from a working OS tells you what that OS made of
+the hardware, not what another OS finds.
+
+Still not measured: that Windows actually issues `SRST_ALL`. It is what a
+standard SDHCI driver does at start, but it was not observed. Reading
+`0x2A330000 + 0x52C` and `+ 0x81C` from inside Windows would settle it.
+
+### So: a DWCMSHC miniport
+
+The fallback this document said it would not write pre-emptively is now the
+plan. It needs the standard SDHCI logic plus the Rockchip vendor fixups
+re-applied after every reset — the three bits above, and the DLL block at
+0x800 for the higher speeds.
 
 ## SD card — custom dw_mmc driver (this repo)
 
@@ -63,8 +97,14 @@ Notable wiring from `Sdhc.asl`:
 
 ## Boot implications
 
-For installing/booting Windows, **eMMC is the primary target** (non-removable,
-on the CM5 module) and is best served by the inbox path above — so the highest
--leverage storage action is the eMMC `_CID` ACPI change, not a driver. The
-custom **dw_mmc** driver here enables the **removable SD card**, which is useful
-for installation media and as a secondary volume.
+For installing/booting Windows, **eMMC is still the primary target** — 29 GiB,
+non-removable, on the CM5 module, and it leaves the NVMe to Fedora, which makes
+dual boot and rescue straightforward. But it needs a **driver**, not an ACPI
+change; see above. That is the highest-leverage storage action.
+
+The custom **dw_mmc** driver here enables the **removable SD card**: useful for
+installation media, as a secondary volume, and as a rescue path.
+
+Both drivers have to load in **WinPE** as well as in the installed system, or
+Setup cannot see the disk it is installing to. That means injecting them into
+`boot.wim` and enabling test signing on the media's BCD until they are signed.

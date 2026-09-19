@@ -5,9 +5,12 @@ Synopsys **dw_mmc** (DesignWare Mobile Storage Host) — device-tree
 `rockchip,rk3576-dw-mshc` — published as `ACPI\RKCPFE2C`.
 
 > **This is for the SD card slot, not the eMMC.** The eMMC is a separate,
-> SDHCI-compatible **DWCMSHC** controller that should use the Windows *inbox*
-> SD host driver. See [../../../docs/STORAGE.md](../../../docs/STORAGE.md) for the
-> full storage strategy and the one-line ACPI `_CID` change the eMMC needs.
+> SDHCI-compatible **DWCMSHC** controller. It was expected to work on the
+> Windows inbox driver with one ACPI `_CID`; measured on 2026-09-19, that `_CID`
+> is present, the inbox driver binds and starts — and no card ever enumerates,
+> because an SDHCI `SW_RST_ALL` clears three Rockchip vendor bits that no inbox
+> driver knows to restore. It needs its own miniport too. See
+> [../../../docs/STORAGE.md](../../../docs/STORAGE.md).
 
 ## Why a custom driver
 
@@ -54,5 +57,14 @@ interrupt; this miniport implements the dw_mmc register operations it calls.
 
 ## Bring-up order
 
-Needs the GPIO driver (card detect). The eMMC inbox path (storage doc) is the
-higher-priority boot enabler; this driver brings up the removable SD slot.
+Needs the GPIO driver (card detect).
+
+The eMMC is the higher-priority boot enabler -- it is where Windows should be
+installed, leaving the NVMe to Linux -- but it now needs a miniport of its own
+rather than the inbox driver, so it is no longer the cheaper of the two. This
+driver is the one that already exists and compiles; the SD slot it brings up is
+useful for install media and as a rescue path.
+
+Both have to load in **WinPE** as well as in the installed system, which means
+injecting them into `boot.wim` and enabling test signing on the media's BCD
+until they are signed.
