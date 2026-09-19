@@ -90,8 +90,21 @@ typedef struct _RKDWMMC_SLOT {
 #define RK_DBG_INFO             DPFLTR_INFO_LEVEL
 #define RK_DBG_TRACE            DPFLTR_TRACE_LEVEL
 
+//
+// Bring-up logging goes through plain DbgPrint on purpose.
+//
+// DbgPrintEx on DPFLTR_IHVDRIVER_ID is filtered to ERROR level unless the
+// target's Debug Print Filter mask is raised, which is a registry change we
+// cannot make inside a WinPE image we build offline -- so the two INFO-level
+// messages this driver already had could never have appeared. DbgPrint goes
+// out unconditionally and reaches the kernel debugger, which is how this
+// driver is read at all: WinPE has no serial console, but scripts/kd-listen.py
+// in the EDK2 tree decodes the DEBUG_IO packets these produce.
+//
+// Narrow this once the card enumerates.
+//
 #define RkLog(_Level, ...)                                                    \
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, (_Level), "rkdwmmc: " __VA_ARGS__)
+    ((void)(_Level), DbgPrint("rkdwmmc: " __VA_ARGS__))
 
 //
 // hw.c — dw_mmc register engine (verified).

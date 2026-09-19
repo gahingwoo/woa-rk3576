@@ -76,6 +76,17 @@ RkdwmmcGetSlotCapabilities(
     //
     Capabilities->Supported.Voltage33V = TRUE;
     Capabilities->Supported.Voltage18V = TRUE;
+
+    //
+    // sdport decides what to attempt from this, so it is worth having in the
+    // log next to what the hardware then does. BaseClockFrequencyKhz in
+    // particular is derived from a CIU rate this driver has to assume until
+    // the firmware exports the real one.
+    //
+    RkLog(RK_DBG_INFO, "Capabilities: base=%u kHz maxblk=%u slots=%u\n",
+          Capabilities->BaseClockFrequencyKhz,
+          Capabilities->MaximumBlockSize,
+          Capabilities->MaximumOutstandingRequests);
 }
 
 _Use_decl_annotations_
@@ -116,6 +127,8 @@ RkdwmmcIssueBusOperation(
     )
 {
     PRKDWMMC_SLOT slot = (PRKDWMMC_SLOT)PrivateExtension;
+
+    RkLog(RK_DBG_INFO, "BusOperation type=%u\n", BusOperation->Type);
 
     switch (BusOperation->Type) {
     case SdResetHost:
@@ -196,7 +209,15 @@ RkdwmmcGetCardDetectState(
     // so sdport may track presence itself. As a fallback we read the dw_mmc
     // CDETECT register: bit0 == 0 means a card is present.
     //
-    return (DwmmcRead(slot->Regs, DWMMC_CDETECT) & 1u) == 0;
+    // Logged because this answer decides whether sdport tries to initialise a
+    // card at all. The controller starts and no card appears, and a CDETECT
+    // line that is not wired on this board would produce exactly that: report
+    // "empty" forever and never be asked for anything else.
+    //
+    ULONG cdetect = DwmmcRead(slot->Regs, DWMMC_CDETECT);
+    RkLog(RK_DBG_INFO, "GetCardDetectState: CDETECT=0x%08x -> %s\n",
+          cdetect, ((cdetect & 1u) == 0) ? "present" : "empty");
+    return (cdetect & 1u) == 0;
 }
 
 _Use_decl_annotations_
@@ -306,7 +327,15 @@ RkdwmmcIssueRequest(
     }
 
     cmd = RkdwmmcBuildCmd(command);
-    return DwmmcSendCommand(slot, cmd, command->Argument);
+
+    {
+        NTSTATUS status = DwmmcSendCommand(slot, cmd, command->Argument);
+        RkLog(RK_DBG_INFO,
+              "CMD%u arg=0x%08x resp=%u xfer=%u cmdreg=0x%08x -> 0x%08x\n",
+              command->Index, command->Argument, command->ResponseType,
+              command->TransferType, cmd, status);
+        return status;
+    }
 }
 
 _Use_decl_annotations_
@@ -365,6 +394,13 @@ RkdwmmcInterrupt(
     if (status == 0) {
         return FALSE;   // not ours
     }
+
+    //
+    // Raw MINTSTS before it is mapped. If a command never completes, the
+    // question is whether the interrupt arrived at all and with which bits --
+    // the mapping below can only be judged against what the hardware raised.
+    //
+    RkLog(RK_DBG_INFO, "IRQ MINTSTS=0x%08x\n", status);
 
     //
     // ---- dw_mmc RINTSTS  ->  sdport event/error mapping ----
