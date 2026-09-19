@@ -1,0 +1,141 @@
+name: WinPE (ARM64)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/woa-debug/**'
+      - '.github/workflows/winpe.yml'
+
+permissions:
+  contents: read
+
+env:
+  #
+  # WinPE 22621 is the Windows 11 22H2 baseline, and it is the build measured
+  # booting to a desktop on CM5-IO. Pin it. Do NOT move to the 24H2 ADK
+  # (WinPE 26100): 24H2 needs ARMv8.1 atomics and RK3576 is a Cortex-A72/A53
+  # part at ARMv8.0, so a 26100 image cannot boot on this board at all. The
+  # assertion step below exists to make that failure loud rather than silent.
+  #
+  ADK_BUILD: '22621'
+  ADK_URL:   'https://go.microsoft.com/fwlink/?linkid=2196127'
+  WINPE_URL: 'https://go.microsoft.com/fwlink/?linkid=2196224'
+  ADK_ROOT:  'C:\ADK'
+  PE_ROOT:   'C:\WinPE_arm64'
+  DANDI:     'C:\ADK\Assessment and Deployment Kit\Deployment Tools\DandISetEnv.bat'
+
+jobs:
+  winpe:
+    name: Build ARM64 WinPE
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the ADK and the WinPE add-on
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\adk-dl | Out-Null
+          Invoke-WebRequest -Uri $env:ADK_URL   -OutFile C:\adk-dl\adksetup.exe
+          Invoke-WebRequest -Uri $env:WINPE_URL -OutFile C:\adk-dl\adkwinpesetup.exe
+          Get-ChildItem C:\adk-dl | Format-Table Name,Length
+
+      - name: Install Deployment Tools and WinPE
+        shell: pwsh
+        run: |
+          foreach ($s in @(
+            @{ exe = 'C:\adk-dl\adksetup.exe';      feat = 'OptionId.DeploymentTools' },
+            @{ exe = 'C:\adk-dl\adkwinpesetup.exe'; feat = 'OptionId.WindowsPreinstallationEnvironment' }
+          )) {
+            $p = Start-Process $s.exe -Wait -PassThru -ArgumentList `
+                   '/quiet','/norestart','/installpath',$env:ADK_ROOT,'/features',$s.feat
+            if ($p.ExitCode -ne 0) { throw "$($s.exe) failed with $($p.ExitCode)" }
+          }
+
+      - name: Create the ARM64 WinPE working tree
+        shell: cmd
+        run: |
+          call "%DANDI%"
+          if exist "%PE_ROOT%" rmdir /s /q "%PE_ROOT%"
+          call copype arm64 "%PE_ROOT%" || exit /b 1
+
+      - name: Assert the image is 10.0.${{ env.ADK_BUILD }} and ARM64
+        shell: pwsh
+        run: |
+          $dism = Join-Path $env:ADK_ROOT 'Assessment and Deployment Kit\Deployment Tools\amd64\DISM\dism.exe'
+          $info = & $dism /English /Get-WimInfo /WimFile:"$env:PE_ROOT\media\sources\boot.wim" /Index:1
+          $info | Write-Host
+          $ver  = ([regex]'Version\s*:\s*([\d\.]+)').Match(($info -join "`n")).Groups[1].Value
+          $arch = ([regex]'Architecture\s*:\s*(\S+)').Match(($info -join "`n")).Groups[1].Value
+          if ($ver  -notmatch "^10\.0\.$env:ADK_BUILD\.") {
+            throw "WinPE build is '$ver', expected 10.0.$env:ADK_BUILD.* - refusing to ship an image that cannot boot on ARMv8.0"
+          }
+          if ($arch -ne 'ARM64') { throw "Architecture is '$arch', expected ARM64" }
+          Write-Host "OK: WinPE $ver $arch"
+
+      - name: Mount boot.wim
+        shell: cmd
+        run: |
+          call "%DANDI%"
+          mkdir "%PE_ROOT%\mount"
+          Dism /Mount-Image /ImageFile:"%PE_ROOT%\media\sources\boot.wim" /Index:1 /MountDir:"%PE_ROOT%\mount" || exit /b 1
+
+      - name: Add the optional components
+        shell: cmd
+        run: |
+          call "%DANDI%"
+          set OC=%WinPERoot%\arm64\WinPE_OCs
+          rem Dependency order: WMI, then Scripting, then StorageWMI.
+          rem No third-party drivers go in on purpose -- the point of this image
+          rem is to see what Microsoft's own inbox stack does with this board.
+          rem sdport/sdhc/sdstor and stornvme are inbox and already present.
+          for %%p in (
+            WinPE-WMI
+            WinPE-Scripting
+            WinPE-StorageWMI
+            WinPE-FMAPI
+            WinPE-EnhancedStorage
+            WinPE-SecureStartup
+            WinPE-PlatformId
+          ) do (
+            echo == %%p
+            Dism /Image:"%PE_ROOT%\mount" /Add-Package /PackagePath:"%OC%\%%p.cab" || exit /b 1
+            if exist "%OC%\en-us\%%p_en-us.cab" (
+              Dism /Image:"%PE_ROOT%\mount" /Add-Package /PackagePath:"%OC%\en-us\%%p_en-us.cab" || exit /b 1
+            )
+          )
+
+      - name: Bake in startnet.cmd and put the collector on the media
+        shell: pwsh
+        run: |
+          Copy-Item tools\woa-debug\startnet.cmd `
+                    "$env:PE_ROOT\mount\Windows\System32\startnet.cmd" -Force
+          New-Item -ItemType Directory -Force -Path "$env:PE_ROOT\media\woa-debug" | Out-Null
+          Copy-Item tools\woa-debug\collect.cmd "$env:PE_ROOT\media\woa-debug\" -Force
+          Write-Host '--- startnet.cmd ---'
+          Get-Content "$env:PE_ROOT\mount\Windows\System32\startnet.cmd" | Write-Host
+
+      - name: Unmount and commit
+        shell: cmd
+        run: |
+          call "%DANDI%"
+          Dism /Unmount-Image /MountDir:"%PE_ROOT%\mount" /Commit || exit /b 1
+
+      - name: Show what came out
+        shell: pwsh
+        run: |
+          Get-ChildItem "$env:PE_ROOT\media" -Recurse -File |
+            Measure-Object -Property Length -Sum |
+            ForEach-Object { "{0} files, {1:N0} MB" -f $_.Count, ($_.Sum/1MB) } | Write-Host
+          Get-ChildItem "$env:PE_ROOT\media"
+
+      - name: Upload the FAT32 media tree
+        uses: actions/upload-artifact@v4
+        with:
+          # Extract this onto a FAT32 stick; the board's UEFI boots
+          # EFI\BOOT\BOOTAA64.EFI from it directly. No ISO step needed.
+          name: winpe-arm64-${{ env.ADK_BUILD }}
+          path: C:\WinPE_arm64\media\**
+          retention-days: 14
+          if-no-files-found: error
