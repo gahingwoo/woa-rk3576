@@ -41,16 +41,42 @@ jobs:
           Invoke-WebRequest -Uri $env:WINPE_URL -OutFile C:\adk-dl\adkwinpesetup.exe
           Get-ChildItem C:\adk-dl | Format-Table Name,Length
 
+      - name: What is already installed
+        shell: pwsh
+        run: |
+          # adksetup returns 1001 and gives up in a few seconds if it does not
+          # like the state it finds, and a pre-installed ADK on the runner image
+          # is the usual reason. Print it before guessing.
+          $keys = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')
+          Get-ItemProperty $keys -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -match 'Assessment|Deployment|Preinstallation|Windows PE|ADK' } |
+            Select-Object DisplayName, DisplayVersion, InstallLocation | Format-Table -AutoSize | Out-String | Write-Host
+          foreach ($d in 'C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit', $env:ADK_ROOT) {
+            Write-Host "exists? $d -> $(Test-Path $d)"
+          }
+
       - name: Install Deployment Tools and WinPE
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue'
           foreach ($s in @(
             @{ exe = 'C:\adk-dl\adksetup.exe';      feat = 'OptionId.DeploymentTools' },
             @{ exe = 'C:\adk-dl\adkwinpesetup.exe'; feat = 'OptionId.WindowsPreinstallationEnvironment' }
           )) {
+            Write-Host "== $($s.exe) $($s.feat)"
             $p = Start-Process $s.exe -Wait -PassThru -ArgumentList `
-                   '/quiet','/norestart','/installpath',$env:ADK_ROOT,'/features',$s.feat
-            if ($p.ExitCode -ne 0) { throw "$($s.exe) failed with $($p.ExitCode)" }
+                   '/quiet','/norestart','/ceip','off','/installpath',$env:ADK_ROOT,'/features',$s.feat
+            Write-Host "   exit $($p.ExitCode)"
+            if ($p.ExitCode -ne 0) {
+              Write-Host '--- adk logs ---'
+              Get-ChildItem "$env:TEMP\adk" -Recurse -Filter *.log -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime | ForEach-Object {
+                  Write-Host "===== $($_.FullName)"
+                  Get-Content $_.FullName -Tail 120 | Write-Host
+                }
+              throw "$($s.exe) failed with $($p.ExitCode)"
+            }
           }
 
       - name: Create the ARM64 WinPE working tree
