@@ -34,6 +34,9 @@ env:
   ADK_BUILD: '22621'
   WINPE_URL: 'https://go.microsoft.com/fwlink/?linkid=2196224'
   PE_ROOT:   'C:\WinPE_arm64'
+  # Same pin as ci.yml: the class extensions come from the WDK half.
+  WDK_VERSION:  '10.0.26100.0'
+  DRIVER_STAGE: 'C:\rk-drivers'
 
 jobs:
   winpe:
@@ -197,9 +200,8 @@ jobs:
           if ($LASTEXITCODE) { throw "mount failed: $LASTEXITCODE" }
 
           # Dependency order: WMI, then Scripting, then StorageWMI.
-          # No third-party drivers go in on purpose -- the point of this image
-          # is to see what Microsoft's own inbox stack makes of this board.
-          # sdport/sdhc/sdstor and stornvme are inbox and already present.
+          # sdport/sdhc/sdstor and stornvme are inbox and already present; the
+          # RK3576 drivers go in below, on top of them.
           $ocs = '${{ steps.find.outputs.ocs }}'
           foreach ($p in 'WinPE-WMI','WinPE-Scripting','WinPE-StorageWMI',
                          'WinPE-FMAPI','WinPE-EnhancedStorage',
