@@ -7,6 +7,10 @@ on:
         description: 'Inject the RK3576 ARM64 drivers (needs test signing, enabled with them)'
         type: boolean
         default: true
+      kd:
+        description: 'Enable the kernel debugger on the media (reads DbgPrint over serial)'
+        type: boolean
+        default: false
   push:
     paths:
       - 'tools/woa-debug/**'
@@ -306,6 +310,24 @@ jobs:
             & bcdedit.exe @args
             if ($LASTEXITCODE) { throw "bcdedit $opt failed: $LASTEXITCODE" }
           }
+          & bcdedit.exe /store $bcd /enum '{default}' | Write-Host
+
+      - name: Enable the kernel debugger on the media
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.kd }}
+        shell: pwsh
+        run: |
+          # WinPE has no serial console, so a driver's DbgPrint only leaves the
+          # board through the kernel debugger. scripts/kd-listen.py in the EDK2
+          # tree decodes the DEBUG_IO packets.
+          #
+          # No baud rate is set on purpose. The firmware's SPCR carries
+          # BaudRate 0, which means "use the rate already configured" -- 1.5
+          # Mbaud here -- and bcdedit would only offer the legacy list up to
+          # 115200, which is not what this line runs at.
+          $bcd = "$env:PE_ROOT\media\EFI\Microsoft\Boot\BCD"
+          & bcdedit.exe /store $bcd /set '{default}' debug on
+          if ($LASTEXITCODE) { throw "bcdedit debug on failed: $LASTEXITCODE" }
+          & bcdedit.exe /store $bcd /dbgsettings SERIAL
           & bcdedit.exe /store $bcd /enum '{default}' | Write-Host
 
       - name: Show what came out
