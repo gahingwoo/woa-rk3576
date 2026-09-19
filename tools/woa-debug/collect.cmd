@@ -17,6 +17,14 @@ if "%STICK%"=="" set STICK=%~d0
 set OUT=%STICK%\woa-debug\out
 if not exist "%OUT%" mkdir "%OUT%" 2>nul
 
+rem Every probe stamps the index with the time it finished.
+rem
+rem "the spinner turns very slowly" was the observation that finally
+rem explained a whole day of intermittent failures -- the system was not
+rem hung, it was starved, and it ended in a DRIVER_PNP_WATCHDOG bugcheck.
+rem Slowness has to be measured, not felt: a probe that normally takes a
+rem second and takes forty says where the time goes, and which one it is
+rem narrows the cause. pnputil enumerating devices is the one to watch.
 echo woa-rk3576 WinPE collection > "%OUT%\00-index.txt"
 echo date: %DATE% %TIME% >> "%OUT%\00-index.txt"
 
@@ -24,22 +32,26 @@ rem --- PROBE: every device Windows enumerated, and whether a driver bound ----
 rem This is the one that matters most right now. A device present with no
 rem driver is a different problem from a device that never appeared at all.
 pnputil /enum-devices > "%OUT%\10-devices.txt" 2>&1
+echo   %TIME%  10-devices.txt >> "%OUT%\00-index.txt"
 
 rem --- PROBE: the ACPI branch of the device tree ------------------------------
 rem Shows what came out of the DSDT by _HID, including devices pnputil may
 rem summarise away. RKCP0D40 is the eMMC, RKCPFE2C the SD slot, RKCP6543 the
 rem GMAC, RKCP300x the GPIO/I2C/SPI blocks.
 reg query HKLM\SYSTEM\CurrentControlSet\Enum\ACPI /s > "%OUT%\11-enum-acpi.txt" 2>&1
+echo   %TIME%  11-enum-acpi.txt >> "%OUT%\00-index.txt"
 
 rem --- PROBE: the PCI branch -------------------------------------------------
 rem Empty here means the root bridge enumerated nothing behind it, which is a
 rem firmware/ECAM question, not a driver one.
 reg query HKLM\SYSTEM\CurrentControlSet\Enum\PCI /s > "%OUT%\12-enum-pci.txt" 2>&1
+echo   %TIME%  12-enum-pci.txt >> "%OUT%\00-index.txt"
 
 rem --- PROBE: storage as Setup sees it ---------------------------------------
 echo list disk > "%OUT%\dp.txt"
 echo list volume >> "%OUT%\dp.txt"
 diskpart /s "%OUT%\dp.txt" > "%OUT%\20-diskpart.txt" 2>&1
+echo   %TIME%  20-diskpart.txt >> "%OUT%\00-index.txt"
 del "%OUT%\dp.txt" 2>nul
 
 rem --- PROBE: Setup's own logs -----------------------------------------------
@@ -49,6 +61,7 @@ if exist X:\Windows\Panther\setuperr.log copy /y X:\Windows\Panther\setuperr.log
 
 rem --- PROBE: drivers already staged in this WinPE ---------------------------
 pnputil /enum-drivers > "%OUT%\40-drivers.txt" 2>&1
+echo   %TIME%  40-drivers.txt >> "%OUT%\00-index.txt"
 
 rem --- PROBE: what the PnP arbiter actually handed out ------------------------
 rem HKLM\HARDWARE\RESOURCEMAP is the arbiter's output, not a device's wish
@@ -58,10 +71,12 @@ rem machine actually granted, which is the only way to see why an allocation
 rem could not be made. Added after a session where every requirement looked
 rem satisfiable in isolation and the device still got CM_PROB_NORMAL_CONFLICT.
 reg query HKLM\HARDWARE\RESOURCEMAP /s > "%OUT%\60-resourcemap.txt" 2>&1
+echo   %TIME%  60-resourcemap.txt >> "%OUT%\00-index.txt"
 
 rem --- PROBE: the firmware-described hardware tree ----------------------------
 rem What Windows built from the ACPI tables before any driver ran.
 reg query "HKLM\HARDWARE\DESCRIPTION\System" /s > "%OUT%\61-hw-description.txt" 2>&1
+echo   %TIME%  61-hw-description.txt >> "%OUT%\00-index.txt"
 
 rem --- PROBE: which ACPI tables Windows loaded, by signature ------------------
 rem Confirms from the OS side that the tables the firmware installed are the
@@ -70,6 +85,7 @@ reg query HKLM\HARDWARE\ACPI > "%OUT%\62-acpi-tables.txt" 2>&1
 
 rem --- PROBE: devices with a problem, listed on their own ---------------------
 pnputil /enum-devices /problem > "%OUT%\63-problem-devices.txt" 2>&1
+echo   %TIME%  63-problem-devices.txt >> "%OUT%\00-index.txt"
 
 rem --- PROBE: Setup's own PnP complaints --------------------------------------
 rem setupact.log is copied whole above; this pulls the lines worth reading
@@ -111,6 +127,7 @@ rem --- PROBE: how many CPUs the kernel actually started ---------------------
 rem One subkey per running processor. This read 1 for a long time; it should
 rem now be 0..7 (MADT GICC CPU interface numbers).
 reg query "HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor" > "%OUT%\70-cpus.txt" 2>&1
+echo   %TIME%  70-cpus.txt >> "%OUT%\00-index.txt"
 
 rem --- PROBE: the storage controllers, on their own -------------------------
 rem 10-devices.txt has everything, but these are the two the whole storage
@@ -121,6 +138,7 @@ rem Three outcomes to tell apart: no driver bound at all (INF/hardware-id or
 rem signing), bound but failed to start (the error code says why), or started
 rem with no child (the controller is up and the card is not).
 pnputil /enum-devices /class SDHost > "%OUT%\71-sdhost.txt" 2>&1
+echo   %TIME%  71-sdhost.txt >> "%OUT%\00-index.txt"
 pnputil /enum-devices /deviceid "ACPI\RKCPFE2C" >> "%OUT%\71-sdhost.txt" 2>&1
 pnputil /enum-devices /deviceid "ACPI\RKCP0D40" >> "%OUT%\71-sdhost.txt" 2>&1
 
@@ -134,6 +152,7 @@ rem --- PROBE: disks, again, after everything above --------------------------
 echo list disk > "%OUT%\dp2.txt"
 echo list volume >> "%OUT%\dp2.txt"
 diskpart /s "%OUT%\dp2.txt" > "%OUT%\73-diskpart-late.txt" 2>&1
+echo   %TIME%  73-diskpart-late.txt >> "%OUT%\00-index.txt"
 del "%OUT%\dp2.txt" 2>nul
 
 rem --- PROBE: what rkdwmmc recorded about itself -------------------------
@@ -146,6 +165,43 @@ rem CardDetectRaw is the first thing to read. ACPI routes card detect
 rem through a GpioInt, but the driver reads the controller CDETECT; if bit
 rem 0 is set the slot reports empty and sdport never initialises a card.
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag" /s > "%OUT%\74-rkdwmmc-diag.txt" 2>&1
+echo   %TIME%  74-rkdwmmc-diag.txt >> "%OUT%\00-index.txt"
+
+rem --- PROBE: the two storage devices, in full ----------------------------
+rem 11-enum-acpi.txt has these, buried in 200 KB. Their own file keeps the
+rem fields that matter together: Service, LogConf/BootConfig (what the
+rem arbiter granted), Device Parameters, and whether a child node exists.
+rem A controller Started with no child under it is the shape both the eMMC
+rem and the SD slot have been stuck in.
+reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0D40" /s > "%OUT%\75-emmc-enum.txt" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCPFE2C" /s > "%OUT%\76-sd-enum.txt" 2>&1
+echo   %TIME%  75/76-storage-enum >> "%OUT%\00-index.txt"
+
+rem --- PROBE: the GPIO controllers -----------------------------------------
+rem rk3576gpio drives five of these, and the SD slot's card detect is a
+rem GpioInt on \_SB.GPI0 routed through them. It is also the other suspect
+rem for the DRIVER_PNP_WATCHDOG: a PnP callback that does not return starves
+rem everything behind it, which is what "the spinner turns very slowly" is.
+reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP3002" /s > "%OUT%\77-gpio-enum.txt" 2>&1
+pnputil /enum-devices /deviceid "ACPI\RKCP3002" >> "%OUT%\77-gpio-enum.txt" 2>&1
+echo   %TIME%  77-gpio-enum >> "%OUT%\00-index.txt"
+
+rem --- PROBE: services, and which of ours are running ----------------------
+rem sc.exe is not in every WinPE (it is absent from the ADK 22621 image), so
+rem read the service keys instead. Start and ErrorControl say how the driver
+rem was meant to load; a driver that never loaded has no Enum subkey.
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc" /s > "%OUT%\78-services.txt" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\rk3576gpio" /s >> "%OUT%\78-services.txt" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\sdbus" /s >> "%OUT%\78-services.txt" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\sdstor" /s >> "%OUT%\78-services.txt" 2>&1
+echo   %TIME%  78-services >> "%OUT%\00-index.txt"
+
+rem --- PROBE: the last bugcheck, if the firmware kept it -------------------
+rem WinPE has no crash dump, but a bugcheck that happened before a warm
+rem reboot can leave its code here. DRIVER_PNP_WATCHDOG is 0x1D5 and names
+rem the stuck device object in its parameters.
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /s > "%OUT%\79-crashcontrol.txt" 2>&1
+echo   %TIME%  79-crashcontrol >> "%OUT%\00-index.txt"
 
 echo done >> "%OUT%\00-index.txt"
 endlocal
