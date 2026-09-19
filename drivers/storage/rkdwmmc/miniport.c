@@ -32,6 +32,74 @@ Environment:
 #define DWMMC_DATA_ERROR_BITS  (DWMMC_INT_DRTO | DWMMC_INT_DCRC | DWMMC_INT_SBE | \
                                 DWMMC_INT_EBE | DWMMC_INT_FRUN | DWMMC_INT_HTO)
 
+RKDWMMC_DIAG g_RkDiag;
+
+//
+// Publish g_RkDiag under the driver's own service key. See rkdwmmc.h for why
+// this exists instead of tracing.
+//
+VOID
+RkdwmmcDiagFlush(
+    VOID
+    )
+{
+    UNICODE_STRING     path;
+    OBJECT_ATTRIBUTES  attr;
+    HANDLE             key = NULL;
+    NTSTATUS           status;
+    ULONG              disp;
+
+    //
+    // The interrupt handler updates g_RkDiag at DIRQL. Registry access needs
+    // PASSIVE_LEVEL, so this is a no-op from there and the values land on the
+    // next callback that is allowed to write.
+    //
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return;
+    }
+
+    RtlInitUnicodeString(&path,
+        L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Services\\rkdwmmc\\Diag");
+    InitializeObjectAttributes(&attr, &path,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL, NULL);
+
+    status = ZwCreateKey(&key, KEY_WRITE, &attr, 0, NULL,
+                         REG_OPTION_NON_VOLATILE, &disp);
+    if (!NT_SUCCESS(status)) {
+        return;
+    }
+
+#define RK_DIAG_PUT(_name, _field)                                            \
+    do {                                                                      \
+        UNICODE_STRING _vn;                                                   \
+        ULONG _v = (ULONG)(g_RkDiag._field);                                  \
+        RtlInitUnicodeString(&_vn, L##_name);                                 \
+        ZwSetValueKey(key, &_vn, 0, REG_DWORD, &_v, sizeof(_v));              \
+    } while (0)
+
+    RK_DIAG_PUT("CardDetectCalls",   CardDetectCalls);
+    RK_DIAG_PUT("CardDetectRaw",     CardDetectRaw);
+    RK_DIAG_PUT("CardDetectPresent", CardDetectPresent);
+    RK_DIAG_PUT("BusOpCalls",        BusOpCalls);
+    RK_DIAG_PUT("BusOpLastType",     BusOpLastType);
+    RK_DIAG_PUT("RequestCalls",      RequestCalls);
+    RK_DIAG_PUT("LastCmdIndex",      LastCmdIndex);
+    RK_DIAG_PUT("LastCmdArg",        LastCmdArg);
+    RK_DIAG_PUT("LastCmdReg",        LastCmdReg);
+    RK_DIAG_PUT("LastCmdStatus",     LastCmdStatus);
+    RK_DIAG_PUT("InterruptCalls",    InterruptCalls);
+    RK_DIAG_PUT("LastMintsts",       LastMintsts);
+    RK_DIAG_PUT("SeenMintsts",       SeenMintsts);
+    RK_DIAG_PUT("CmdErrors",         CmdErrors);
+    RK_DIAG_PUT("BaseClockKhz",      BaseClockKhz);
+    RK_DIAG_PUT("FifoOffset",        FifoOffset);
+
+#undef RK_DIAG_PUT
+
+    ZwClose(key);
+}
+
 _Use_decl_annotations_
 NTSTATUS
 RkdwmmcGetSlotCount(
@@ -83,6 +151,10 @@ RkdwmmcGetSlotCapabilities(
     // particular is derived from a CIU rate this driver has to assume until
     // the firmware exports the real one.
     //
+    g_RkDiag.BaseClockKhz = Capabilities->BaseClockFrequencyKhz;
+    g_RkDiag.FifoOffset   = slot->FifoOffset;
+    RkdwmmcDiagFlush();
+
     RkLog(RK_DBG_INFO, "Capabilities: base=%u kHz maxblk=%u slots=%u\n",
           Capabilities->BaseClockFrequencyKhz,
           Capabilities->MaximumBlockSize,
@@ -127,6 +199,10 @@ RkdwmmcIssueBusOperation(
     )
 {
     PRKDWMMC_SLOT slot = (PRKDWMMC_SLOT)PrivateExtension;
+
+    g_RkDiag.BusOpCalls++;
+    g_RkDiag.BusOpLastType = BusOperation->Type;
+    RkdwmmcDiagFlush();
 
     RkLog(RK_DBG_INFO, "BusOperation type=%u\n", BusOperation->Type);
 
@@ -215,9 +291,16 @@ RkdwmmcGetCardDetectState(
     // "empty" forever and never be asked for anything else.
     //
     ULONG cdetect = DwmmcRead(slot->Regs, DWMMC_CDETECT);
+    BOOLEAN present = ((cdetect & 1u) == 0);
+
+    g_RkDiag.CardDetectCalls++;
+    g_RkDiag.CardDetectRaw = cdetect;
+    g_RkDiag.CardDetectPresent = present ? 1u : 0u;
+    RkdwmmcDiagFlush();
+
     RkLog(RK_DBG_INFO, "GetCardDetectState: CDETECT=0x%08x -> %s\n",
-          cdetect, ((cdetect & 1u) == 0) ? "present" : "empty");
-    return (cdetect & 1u) == 0;
+          cdetect, present ? "present" : "empty");
+    return present;
 }
 
 _Use_decl_annotations_
@@ -330,6 +413,14 @@ RkdwmmcIssueRequest(
 
     {
         NTSTATUS status = DwmmcSendCommand(slot, cmd, command->Argument);
+
+        g_RkDiag.RequestCalls++;
+        g_RkDiag.LastCmdIndex  = command->Index;
+        g_RkDiag.LastCmdArg    = command->Argument;
+        g_RkDiag.LastCmdReg    = cmd;
+        g_RkDiag.LastCmdStatus = (ULONG)status;
+        RkdwmmcDiagFlush();
+
         RkLog(RK_DBG_INFO,
               "CMD%u arg=0x%08x resp=%u xfer=%u cmdreg=0x%08x -> 0x%08x\n",
               command->Index, command->Argument, command->ResponseType,
@@ -400,6 +491,12 @@ RkdwmmcInterrupt(
     // question is whether the interrupt arrived at all and with which bits --
     // the mapping below can only be judged against what the hardware raised.
     //
+    // DIRQL here: accumulate only. RkdwmmcDiagFlush is a no-op above
+    // PASSIVE_LEVEL and the next passive callback publishes these.
+    g_RkDiag.InterruptCalls++;
+    g_RkDiag.LastMintsts = status;
+    g_RkDiag.SeenMintsts |= status;
+
     RkLog(RK_DBG_INFO, "IRQ MINTSTS=0x%08x\n", status);
 
     //
@@ -411,6 +508,7 @@ RkdwmmcInterrupt(
     }
 
     if (status & DWMMC_CMD_ERROR_BITS) {
+        g_RkDiag.CmdErrors++;
         errors |= SDPORT_ERROR_CMD_TIMEOUT;     // map RTO/RCRC/RESP_ERR
     }
     if (status & DWMMC_DATA_ERROR_BITS) {

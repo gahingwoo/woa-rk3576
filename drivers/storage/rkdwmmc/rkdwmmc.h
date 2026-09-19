@@ -107,6 +107,49 @@ typedef struct _RKDWMMC_SLOT {
     ((void)(_Level), DbgPrint("rkdwmmc: " __VA_ARGS__))
 
 //
+// Diagnostics, published to the registry rather than the debugger.
+//
+// The kernel debugger is the only way a DbgPrint leaves this board, and on
+// CM5-IO it is not a usable instrument: with no listener attached the target
+// retransmits forever and storage enumeration times out, and with one attached
+// the CONTINUE packet is rejected and the exchange stalls on RESEND. Several
+// boots were spent on that.
+//
+// So the driver records what it did and collect.cmd reads it afterwards from
+// Linux. It is a snapshot rather than a trace, which is enough for the
+// question in hand: was a card detected, did commands go out, did interrupts
+// arrive.
+//
+//   HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag
+//
+// The interrupt handler runs above PASSIVE_LEVEL and cannot touch the
+// registry, so everything accumulates in memory and is flushed from whichever
+// passive-level callback runs next.
+//
+typedef struct _RKDWMMC_DIAG {
+    ULONG   CardDetectCalls;
+    ULONG   CardDetectRaw;        // last CDETECT register value
+    ULONG   CardDetectPresent;    // what we told sdport, 1 or 0
+    ULONG   BusOpCalls;
+    ULONG   BusOpLastType;
+    ULONG   RequestCalls;
+    ULONG   LastCmdIndex;
+    ULONG   LastCmdArg;
+    ULONG   LastCmdReg;
+    ULONG   LastCmdStatus;        // NTSTATUS from DwmmcSendCommand
+    ULONG   InterruptCalls;
+    ULONG   LastMintsts;
+    ULONG   SeenMintsts;          // every bit ever raised, OR-ed
+    ULONG   CmdErrors;
+    ULONG   BaseClockKhz;
+    ULONG   FifoOffset;
+} RKDWMMC_DIAG, *PRKDWMMC_DIAG;
+
+extern RKDWMMC_DIAG g_RkDiag;
+
+VOID RkdwmmcDiagFlush(VOID);
+
+//
 // hw.c — dw_mmc register engine (verified).
 //
 ULONG    DwmmcFifoOffset(_In_ volatile UCHAR *Regs);

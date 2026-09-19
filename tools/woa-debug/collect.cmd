@@ -136,5 +136,16 @@ echo list volume >> "%OUT%\dp2.txt"
 diskpart /s "%OUT%\dp2.txt" > "%OUT%\73-diskpart-late.txt" 2>&1
 del "%OUT%\dp2.txt" 2>nul
 
+rem --- PROBE: what rkdwmmc recorded about itself -------------------------
+rem The driver publishes a snapshot here rather than tracing, because the
+rem kernel debugger is not a usable instrument on this board: with no
+rem listener the target retransmits forever and storage enumeration times
+rem out, and with one attached the exchange stalls on RESEND.
+rem
+rem CardDetectRaw is the first thing to read. ACPI routes card detect
+rem through a GpioInt, but the driver reads the controller CDETECT; if bit
+rem 0 is set the slot reports empty and sdport never initialises a card.
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag" /s > "%OUT%\74-rkdwmmc-diag.txt" 2>&1
+
 echo done >> "%OUT%\00-index.txt"
 endlocal
