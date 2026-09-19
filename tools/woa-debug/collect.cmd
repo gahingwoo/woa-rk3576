@@ -74,8 +74,15 @@ pnputil /enum-devices /problem > "%OUT%\63-problem-devices.txt" 2>&1
 rem --- PROBE: Setup's own PnP complaints --------------------------------------
 rem setupact.log is copied whole above; this pulls the lines worth reading
 rem first, so a 24 KB log does not have to be moved over a serial console.
-findstr /i /c:"pci" /c:"resource" /c:"arbit" /c:"conflict" /c:"nvme" ^
-    X:\Windows\Panther\setupact.log > "%OUT%\64-setupact-pnp.txt" 2>&1
+rem WinPE ships find, not findstr -- findstr is not in boot.wim at all, and
+rem the 2026-09-18 run produced nothing but "is not recognized".  find takes
+rem one string per call, so loop over them.
+type nul > "%OUT%\64-setupact-pnp.txt"
+for %%S in ("pci" "resource" "arbit" "conflict" "nvme") do (
+    echo. >> "%OUT%\64-setupact-pnp.txt"
+    echo === %%~S === >> "%OUT%\64-setupact-pnp.txt"
+    find /i %%S X:\Windows\Panther\setupact.log >> "%OUT%\64-setupact-pnp.txt" 2>&1
+)
 
 rem --- OPTIONAL: load our own drivers ----------------------------------------
 rem Only runs if the packages are on the stick. Unsigned kernel drivers need

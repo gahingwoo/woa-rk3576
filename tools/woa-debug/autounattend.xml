@@ -36,6 +36,19 @@
                language="neutral"
                versionScope="nonSxS"
                xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <!--
+        Windows 10 21H2 Setup refuses an answer file that has no UserData:
+        it stops with "Windows cannot read the <ProductKey> setting from the
+        unattend answer file" before running anything below. No <Key> element
+        here and WillShowUI=Always, so Setup asks for the key itself exactly
+        as it would with no answer file at all - this satisfies the check
+        without making the install any more unattended.
+      -->
+      <UserData>
+        <ProductKey>
+          <WillShowUI>Always</WillShowUI>
+        </ProductKey>
+      </UserData>
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
