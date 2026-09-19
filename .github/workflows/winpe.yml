@@ -128,8 +128,17 @@ jobs:
                      Select-Object -ExpandProperty FullName
             & $st sign /fd sha256 /f $pfx /p $pfxPw $files
             if ($LASTEXITCODE) { throw "signtool failed for $($d.Name): $LASTEXITCODE" }
-            & $st verify /pa /v $files 2>&1 | Select-String -Pattern 'Successfully|Issued to' |
-              ForEach-Object { Write-Host "   $_" }
+            # Check that a signature is there, not that it chains to a
+            # trusted root. `signtool verify /pa` asks the second question,
+            # which a self-signed certificate fails by design -- and it leaves
+            # $LASTEXITCODE non-zero, which the pwsh wrapper turns into a
+            # failed step. Bypassing that chain is the whole point of
+            # testsigning on the target.
+            foreach ($sig in Get-AuthenticodeSignature $files) {
+              $who = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '<none>' }
+              Write-Host ("   {0,-14} {1}  {2}" -f $sig.Status, (Split-Path $sig.Path -Leaf), $who)
+              if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
+            }
           }
 
           Get-ChildItem $env:DRIVER_STAGE -Recurse -File |
