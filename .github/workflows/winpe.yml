@@ -92,6 +92,13 @@ jobs:
             Write-Host "== SdPort* exports referenced in the header"
             Select-String -Path $sdport.FullName -Pattern 'SdPort[A-Za-z]+' -AllMatches |
               ForEach-Object { $_.Matches.Value } | Sort-Object -Unique | Write-Host
+            # The bus-operation enum and the event list: what sdport asks the
+            # miniport to do, and what it expects to be told back. Both
+            # drivers stop mid-sequence and the snapshot only records the last
+            # operation type, so these names are needed to read it.
+            Write-Host "== SDPORT_BUS_OPERATION_TYPE and SDPORT_EVENT_*"
+            Select-String -Path $sdport.FullName -Pattern '(SdBusOperation|SdReset|SdSet|SdExecute|#define SDPORT_EVENT|#define SDPORT_ERROR)' |
+              ForEach-Object { $_.Line } | Write-Host
           } else {
             Write-Host "!! sdport.h not found under the WDK include tree"
           }

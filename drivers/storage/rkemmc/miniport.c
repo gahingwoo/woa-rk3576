@@ -103,8 +103,31 @@ RkemmcDiagFlush(
     RK_DIAG_PUT("BaseClockKhz",        BaseClockKhz);
     RK_DIAG_PUT("HostVersion",         HostVersion);
     RK_DIAG_PUT("Capabilities",        Capabilities);
+    RK_DIAG_PUT("TraceCount",          TraceCount);
 
 #undef RK_DIAG_PUT
+
+    //
+    // The ring, one value per command: Cmd00, Cmd01, ...  Written as separate
+    // values rather than one blob so `reg query /s` prints them readably on a
+    // board with no tools.
+    //
+    {
+        ULONG i;
+        ULONG n = (g_RkDiag.TraceCount < RKEMMC_TRACE_DEPTH)
+                      ? g_RkDiag.TraceCount : RKEMMC_TRACE_DEPTH;
+
+        for (i = 0; i < n; i++) {
+            WCHAR          nameBuf[8];
+            UNICODE_STRING valueName;
+            ULONG          data = g_RkDiag.Trace[i];
+
+            (VOID)RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), L"Cmd%02u", i);
+            RtlInitUnicodeString(&valueName, nameBuf);
+            (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
+                                &data, sizeof(data));
+        }
+    }
 }
 
 _Use_decl_annotations_
@@ -442,6 +465,19 @@ RkemmcIssueRequest(
     g_RkDiag.LastCmdArg    = command->Argument;
     g_RkDiag.LastCmdReg    = cmdReg;
     g_RkDiag.LastCmdStatus = (ULONG)status;
+
+    //
+    // Open a trace slot for this command.  The interrupt and the DPC fill in
+    // what happened to it; a slot that stays at 0 in both status bytes is a
+    // command that was issued and never answered, which is a different fault
+    // from one that was never issued at all.
+    //
+    if (g_RkDiag.TraceCount < RKEMMC_TRACE_DEPTH) {
+        g_RkDiag.Trace[g_RkDiag.TraceCount] =
+            ((g_RkDiag.TraceCount & 0xFF) << 24) | ((command->Index & 0xFF) << 16);
+    }
+
+    g_RkDiag.TraceCount++;
     // No flush: this is the command path and the SD driver showed that a
     // registry write per command is far too expensive to sit here.
 
@@ -516,9 +552,26 @@ RkemmcInterrupt(
     g_RkDiag.LastIntStatus = intStatus;
     g_RkDiag.SeenIntStatus |= intStatus;
 
+    //
+    // Fold what the controller reported into the slot the in-flight command
+    // opened.  Only the low byte of each status register: the bits that
+    // distinguish the outcomes all live there.
+    //
+    if ((g_RkDiag.TraceCount > 0) &&
+        (g_RkDiag.TraceCount <= RKEMMC_TRACE_DEPTH))
+    {
+        g_RkDiag.Trace[g_RkDiag.TraceCount - 1] |= (intStatus & 0xFF);
+    }
+
     if (intStatus & SDHCI_INT_ERROR) {
         errStatus = EmmcRead16(slot, SDHCI_ERR_INT_STATUS);
         g_RkDiag.SeenErrStatus |= errStatus;
+
+        if ((g_RkDiag.TraceCount > 0) &&
+            (g_RkDiag.TraceCount <= RKEMMC_TRACE_DEPTH))
+        {
+            g_RkDiag.Trace[g_RkDiag.TraceCount - 1] |= ((errStatus & 0xFF) << 8);
+        }
 
         if (errStatus & SDHCI_ERR_CMD_MASK) {
             g_RkDiag.CmdErrors++;

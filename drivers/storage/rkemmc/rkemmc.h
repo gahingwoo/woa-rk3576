@@ -65,6 +65,12 @@ Environment:
 #define RKEMMC_RST_N_SETTLE_US      200
 
 //
+// How many commands to keep.  eMMC identification is around twenty, so this
+// holds the whole of it.
+//
+#define RKEMMC_TRACE_DEPTH          24
+
+//
 // Per-slot private extension (SDPORT_INITIALIZATION_DATA.PrivateExtensionSize).
 //
 typedef struct _RKEMMC_SLOT {
@@ -146,6 +152,23 @@ typedef struct _RKEMMC_DIAG {
     ULONG   BaseClockKhz;
     ULONG   HostVersion;
     ULONG   Capabilities;
+
+    //
+    // A ring of the last RKEMMC_TRACE_DEPTH commands.  The counters above say
+    // how far the stack got; they cannot say where it stopped.  Sixteen
+    // commands went out on 2026-09-20 and the snapshot could only name the
+    // last one, which is not enough to tell a refused command from one that
+    // was never issued.
+    //
+    // Each entry packs the command index, the outcome and the interrupt
+    // status into one DWORD so it can be read with reg query and needs no
+    // parsing on the board:
+    //
+    //   [31:24] sequence number   [23:16] command index
+    //   [15:8]  error status low  [7:0]   normal status low
+    //
+    ULONG   TraceCount;
+    ULONG   Trace[RKEMMC_TRACE_DEPTH];
 } RKEMMC_DIAG, *PRKEMMC_DIAG;
 
 extern RKEMMC_DIAG g_RkDiag;

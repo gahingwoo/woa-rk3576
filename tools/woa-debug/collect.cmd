@@ -187,6 +187,12 @@ rem shipped before this probe did.
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkemmc\Diag" /s > "%OUT%\74b-rkemmc-diag.txt" 2>&1
 echo   %TIME%  74b-rkemmc-diag.txt >> "%OUT%\00-index.txt"
 
+rem Cmd00..CmdNN in that file are the command trace, one DWORD each:
+rem   [31:24] sequence  [23:16] command index
+rem   [15:8]  ERR_INT_STATUS low byte   [7:0] INT_STATUS low byte
+rem A slot whose two status bytes are both 0 is a command that went out
+rem and was never answered -- a different fault from one never issued.
+
 rem --- PROBE: the two storage devices, in full ----------------------------
 rem 11-enum-acpi.txt has these, buried in 200 KB. Their own file keeps the
 rem fields that matter together: Service, LogConf/BootConfig (what the
