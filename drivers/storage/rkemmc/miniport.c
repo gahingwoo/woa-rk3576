@@ -180,8 +180,16 @@ RkemmcGetSlotCapabilities(
     // so that no tuning is required.  Claiming them would get the card
     // switched into a timing the host cannot sample.
     //
+    //
+    // 3.0 V only, which is what the controller claims: CAPS0 reads 0x3A6DC881
+    // on this board and its voltage bits say 3.0 V supported, 3.3 V and 1.8 V
+    // not.  Linux agrees -- it leaves POWER_CONTROL at 0x0D, 3.0 V with bus
+    // power on.  Advertising 3.3 V, as this did, invites sdport to ask for a
+    // voltage the hardware does not have.
+    //
     Capabilities->Supported.SignalingVoltage18V = FALSE;
-    Capabilities->Supported.Voltage33V = TRUE;
+    Capabilities->Supported.Voltage33V = FALSE;
+    Capabilities->Supported.Voltage30V = TRUE;
     Capabilities->Supported.Voltage18V = FALSE;
 
     g_RkDiag.BaseClockKhz = Capabilities->BaseClockFrequencyKhz;
