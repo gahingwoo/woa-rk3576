@@ -211,6 +211,7 @@ rem sc.exe is not in every WinPE (it is absent from the ADK 22621 image), so
 rem read the service keys instead. Start and ErrorControl say how the driver
 rem was meant to load; a driver that never loaded has no Enum subkey.
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc" /s > "%OUT%\78-services.txt" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkemmc" /s >> "%OUT%\78-services.txt" 2>&1
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\rk3576gpio" /s >> "%OUT%\78-services.txt" 2>&1
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\sdbus" /s >> "%OUT%\78-services.txt" 2>&1
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\sdstor" /s >> "%OUT%\78-services.txt" 2>&1
@@ -222,6 +223,60 @@ rem reboot can leave its code here. DRIVER_PNP_WATCHDOG is 0x1D5 and names
 rem the stuck device object in its parameters.
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /s > "%OUT%\79-crashcontrol.txt" 2>&1
 echo   %TIME%  79-crashcontrol >> "%OUT%\00-index.txt"
+
+rem =========================================================================
+rem  EXPERIMENT: does an insertion edge wake sdport up?
+rem =========================================================================
+rem
+rem Everything above this line is automatic and is already on disk.  What
+rem follows needs a hand on the SD card, so it pauses.  Closing the window
+rem here loses nothing.
+rem
+rem Why: the ACPI card detect in Sdhc.asl is
+rem
+rem     GpioInt (Edge, ActiveBoth, Shared, PullUp, 0, "\_SB.GPI0") { ... }
+rem
+rem an EDGE.  A card already in the slot when the machine boots produces no
+rem edge, so sdport would be waiting for an event that happened before it was
+rem watching.  That fits what the driver reports: on 2026-09-20, with a card
+rem physically in the slot, rkdwmmc recorded CardDetectCalls 0, BusOpCalls 0,
+rem RequestCalls 0 -- sdport read the capabilities and never came back.
+rem
+rem If ejecting and reinserting makes the count move, the hypothesis holds and
+rem the fix is in the ACPI description, not in the driver.  If it does not,
+rem the hypothesis is dead and the next place to look is the GPIO driver.
+echo.
+echo ==========================================================
+echo  SD card experiment.  Close this window to skip it.
+echo ==========================================================
+echo.
+echo  Step 1 of 3: make sure the SD card IS in the slot.
+pause
+echo list disk > "%OUT%\dp3.txt"
+diskpart /s "%OUT%\dp3.txt" > "%OUT%\80-sd-before.txt" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag" /s > "%OUT%\81-diag-before.txt" 2>&1
+echo   %TIME%  80/81 sd-before >> "%OUT%\00-index.txt"
+
+echo.
+echo  Step 2 of 3: EJECT the card now, wait two seconds, then press a key.
+pause
+diskpart /s "%OUT%\dp3.txt" > "%OUT%\82-sd-ejected.txt" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag" /s > "%OUT%\83-diag-ejected.txt" 2>&1
+echo   %TIME%  82/83 sd-ejected >> "%OUT%\00-index.txt"
+
+echo.
+echo  Step 3 of 3: RE-INSERT the card, wait two seconds, then press a key.
+pause
+diskpart /s "%OUT%\dp3.txt" > "%OUT%\84-sd-reinserted.txt" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag" /s > "%OUT%\85-diag-reinserted.txt" 2>&1
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkemmc\Diag" /s > "%OUT%\86-rkemmc-diag-late.txt" 2>&1
+echo   %TIME%  84/85/86 sd-reinserted >> "%OUT%\00-index.txt"
+del "%OUT%\dp3.txt" 2>nul
+
+echo.
+echo  Done.  Read 81 / 83 / 85 side by side: CardDetectCalls and BusOpCalls
+echo  are the numbers that answer this.
+echo.
 
 echo done >> "%OUT%\00-index.txt"
 endlocal
