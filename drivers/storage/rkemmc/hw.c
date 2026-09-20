@@ -376,12 +376,53 @@ EmmcSetPower(
 
     if (!On) {
         EmmcWrite8(Slot, SDHCI_POWER_CONTROL, 0);
+        Slot->PowerValue = 0;
+        Slot->PowerProgrammed = TRUE;
         return;
     }
 
-    power = (UCHAR)(Voltage18 ? SDHCI_POWER_180 : SDHCI_POWER_330);
+    //
+    // 3.0 V, not 3.3 V.  The capability register on this board reads
+    // 0x3A6DC881, whose voltage bits say 3.0 V supported and both 3.3 V and
+    // 1.8 V not -- and Linux leaves POWER_CONTROL at 0x0D, which is 3.0 V with
+    // the bus-power bit set.  Programming a voltage the controller does not
+    // claim is not a safe default.
+    //
+    // Voltage18 is therefore ignored: this board has no 1.8 V VDD rail for the
+    // eMMC and GetSlotCapabilities does not offer one.
+    //
+    UNREFERENCED_PARAMETER(Voltage18);
+
+    power = (UCHAR)(SDHCI_POWER_300 | SDHCI_POWER_ON);
+
+    //
+    // Do nothing if it is already there.  This guard is the whole point of
+    // the function.
+    //
+    // The write below deliberately clears the bus-power bit first, which
+    // powers the card off; on a soldered eMMC that is a power cycle.  The card
+    // returns to idle and forgets the RCA it was given, so every addressed
+    // command afterwards goes unanswered -- no response, no error, nothing.
+    //
+    // That is exactly what the command trace showed on CM5-IO 2026-09-20.
+    // Identification ran cleanly to CMD6 SWITCH -- CID, CSD and two EXT_CSD
+    // reads all good, zero data errors -- and then the next CMD8 recorded no
+    // interrupt status and no error status at all.  sdport had called
+    // SdSetVoltage in between, and this function power-cycled a card that was
+    // already powered at the voltage being asked for.
+    //
+    // Linux guards the same register the same way: sdhci_set_power_noreg
+    // returns early when host->pwr already equals the requested value.
+    //
+    if (Slot->PowerProgrammed && (Slot->PowerValue == power)) {
+        return;
+    }
+
+    EmmcWrite8(Slot, SDHCI_POWER_CONTROL, (UCHAR)(power & ~SDHCI_POWER_ON));
     EmmcWrite8(Slot, SDHCI_POWER_CONTROL, power);
-    EmmcWrite8(Slot, SDHCI_POWER_CONTROL, (UCHAR)(power | SDHCI_POWER_ON));
+
+    Slot->PowerValue = power;
+    Slot->PowerProgrammed = TRUE;
 
     //
     // Toggling power clears SDCLK_ENABLE on this controller implementation --

@@ -89,6 +89,16 @@ typedef struct _RKEMMC_SLOT {
     ULONG                BusWidthBits;
 
     //
+    // What is currently programmed in POWER_CONTROL, and whether anything has
+    // been programmed yet.  Writing that register with the bus-power bit clear
+    // powers the card off, and on a soldered eMMC that is a power cycle: the
+    // card returns to idle and forgets its RCA, so every addressed command
+    // after it goes unanswered.
+    //
+    UCHAR                PowerValue;
+    BOOLEAN              PowerProgrammed;
+
+    //
     // PIO state for the in-flight data command.  SDMA is a later step: the
     // point of v1 is to find out whether a card enumerates at all.
     //
