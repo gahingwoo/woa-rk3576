@@ -73,6 +73,26 @@ jobs:
             'drivers/storage/rkemmc/rkemmc.vcxproj',
             'drivers/gpio/rk3576gpio/rk3576gpio.vcxproj'
           )
+          # Record the sdport miniport API surface into the log.
+          #
+          # These drivers are written against a header that only exists on the
+          # runner, so every question about a signature costs a CI round trip
+          # and gets answered by a compile error. Print the declarations once
+          # per build instead. It is a grep; it costs nothing.
+          $sdport = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\Include" `
+                                  -Filter sdport.h -Recurse -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+          if ($sdport) {
+            Write-Host "== sdport.h: $($sdport.FullName)"
+            Select-String -Path $sdport.FullName -Pattern '^\s*(SDPORT_|NTSTATUS|VOID|BOOLEAN|_IRQL)' -Context 0,3 |
+              ForEach-Object { $_.Line } | Write-Host
+            Write-Host "== SdPort* exports referenced in the header"
+            Select-String -Path $sdport.FullName -Pattern 'SdPort[A-Za-z]+' -AllMatches |
+              ForEach-Object { $_.Matches.Value } | Sort-Object -Unique | Write-Host
+          } else {
+            Write-Host "!! sdport.h not found under the WDK include tree"
+          }
+
           New-Item -ItemType Directory -Force -Path $env:DRIVER_STAGE | Out-Null
           foreach ($proj in $projects) {
             Write-Host "== $proj"
