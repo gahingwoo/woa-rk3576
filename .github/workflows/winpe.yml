@@ -324,10 +324,30 @@ jobs:
           # BaudRate 0, which means "use the rate already configured" -- 1.5
           # Mbaud here -- and bcdedit would only offer the legacy list up to
           # 115200, which is not what this line runs at.
+          #
+          # Both switches, not just `debug`.
+          #
+          # `debug on` arms the *kernel* debugger, which only comes alive once
+          # ntoskrnl reaches KdInitSystem. A boot that dies before that emits
+          # nothing at all, and that is exactly what CM5-IO did on 2026-09-20:
+          # the spinner turned -- winload draws it, not the kernel -- and the
+          # serial line carried zero KD packets from ExitBootServices onward,
+          # while a boot that gets further has been seen to send hundreds. So
+          # the hang is in winload, which `debug` cannot see into.
+          #
+          # `bootdebug on` arms the boot debugger in winload (on {default})
+          # and in the boot manager (on {bootmgr}).
+          #
           $bcd = "$env:PE_ROOT\media\EFI\Microsoft\Boot\BCD"
           & bcdedit.exe /store $bcd /set '{default}' debug on
           if ($LASTEXITCODE) { throw "bcdedit debug on failed: $LASTEXITCODE" }
+          & bcdedit.exe /store $bcd /set '{default}' bootdebug on
+          if ($LASTEXITCODE) { throw "bcdedit bootdebug on failed: $LASTEXITCODE" }
+          & bcdedit.exe /store $bcd /set '{bootmgr}' bootdebug on
+          if ($LASTEXITCODE) { throw "bcdedit bootmgr bootdebug failed: $LASTEXITCODE" }
           & bcdedit.exe /store $bcd /dbgsettings SERIAL
+          & bcdedit.exe /store $bcd /enum '{dbgsettings}' | Write-Host
+          & bcdedit.exe /store $bcd /enum '{bootmgr}' | Write-Host
           & bcdedit.exe /store $bcd /enum '{default}' | Write-Host
 
       - name: Show what came out
