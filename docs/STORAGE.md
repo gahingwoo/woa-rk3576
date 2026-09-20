@@ -127,6 +127,71 @@ sdport completes a request from the events the ISR reports. It does not. The
 miniport owns the end of the request and has to call `SdPortCompleteRequest`.
 A stack waiting forever on a request nobody finished looks exactly like this.
 
+### 2026-09-20, later: what the command trace showed
+
+`RequestDpc` was the stall. With it implemented the eMMC driver went from one
+command to eighteen, and sdbus created the card node — `SD\VID_ab&OID_0022&PID_QK11X`,
+which matches the CID the firmware reads (`0xAB`, ASCII `"QK11"`). `sdstor`
+then refuses it with `CM_PROB_FAILED_START` / `0xC000000D`.
+
+The trace, one DWORD per command
+(`[31:24]` seq, `[23:16]` index, `[15:8]` err status, `[7:0]` int status):
+
+| seq | command | result |
+|---|---|---|
+| 0 | CMD0 | response |
+| 1 | CMD8 `SEND_IF_COND` | command timeout — SD-only, expected on eMMC |
+| 2 | CMD5 | command timeout — SDIO probe, expected |
+| 3 | CMD0 | response |
+| 4-6 | CMD1 ×3 | response — `SEND_OP_COND` polling |
+| 7 | CMD2 | response — `ALL_SEND_CID` |
+| 8 | CMD3 | response — `SET_RCA` |
+| 9 | CMD10 | response — `SEND_CID` |
+| 10 | CMD9 | response — `SEND_CSD` |
+| 11 | CMD7 | response + transfer complete — `SELECT_CARD` |
+| 12-13 | CMD8 `SEND_EXT_CSD` ×2 | response + data available + transfer complete |
+| 14 | CMD6 `SWITCH` | response + transfer complete |
+| **15** | **CMD8** | **nothing at all** |
+| 16 | CMD0 | response — sdbus restarts identification |
+| 17 | CMD1 | command timeout |
+
+So identification is clean, including two full 512-byte EXT_CSD reads with zero
+data errors, and dies on the command after `SWITCH`.
+
+Two readings fit a slot with no status in it, and they want opposite repairs:
+
+- the card ignored the command, or
+- **the command was never written to the command register.** `EmmcSendCommand`
+  waits for `CMD_INHIBIT`/`DATA_INHIBIT` to clear and returns
+  `STATUS_DEVICE_BUSY` without issuing if it gives up.
+
+The second is the likely one and was the standing bug: that wait was **10 ms**.
+CMD6 `SWITCH` is R1b and an eMMC holds DAT0 low while it applies the change —
+this card's EXT_CSD asks for it, `Partition switching timing 4` and
+`Out-of-interrupt busy timing 0xA` — and the spec allows hundreds of
+milliseconds. Raised to 500 ms, and the trace now sets bit 31 on a command that
+never went out, with `IssueFailures`, `LastBusyPresent` and `LastBusyMask`
+beside it. **Not yet run.**
+
+Two other defects fixed on the way, neither of them this stall:
+
+- `EmmcSetPower` wrote `POWER_CONTROL` with the bus-power bit clear before
+  writing it set, which power-cycles a soldered eMMC. Guarded, the way
+  `sdhci_set_power_noreg` guards it. **The guard alone caused a regression** —
+  `SDHCI_RESET_ALL` zeroes that register in hardware, so a cached value made
+  the driver skip restoring power and the card stayed off. Eighteen commands
+  became one. Linux clears `host->pwr` on its full-reset path; so do we now.
+- The voltage was 3.3 V, which `CAPS0 = 0x3A6DC881` says this controller does
+  not support. 3.0 V is what it claims and what Linux leaves programmed
+  (`POWER_CONTROL 0x0D`).
+
+### The SD slot has not moved
+
+`rkdwmmc` is Started and has issued **no commands at all** across every run:
+three bus operations, the last `SdSetBusSpeed`, then nothing. The
+`RequestDpc` repair cannot help it, because no request is ever made. That is
+the next thing to take apart, and it is a different fault from the eMMC's.
+
 ### Settled 2026-09-20: the SD card-detect edge hypothesis is dead
 
 `Sdhc.asl` describes card detect as `GpioInt(Edge, ActiveBoth, ...)`, and the
