@@ -262,6 +262,22 @@ typedef struct _RKEMMC_DIAG {
     //
     ULONG   BusTraceCount;
     ULONG   BusTrace[RKEMMC_TRACE_DEPTH];
+
+    //
+    // The controller sampled at ENTRY to each bus operation, before this
+    // driver touches anything.  Published as BusPreNN / BusClkNN / BusErrNN.
+    //
+    // The entry point matters and getting it wrong wasted a round: the Final*
+    // set below is taken in the flush, and the last flush happens inside an
+    // SdResetHost *after* EmmcResetAll has run, so it describes a
+    // freshly-reset controller rather than a failed one.  A sample taken on
+    // the way in to the first bus operation after a failure is the failure
+    // itself -- for the 2026-09-20 run that is the SdResetHost at command
+    // position 16, immediately after the CMD8 that drew no interrupt.
+    //
+    ULONG   BusPresent[RKEMMC_TRACE_DEPTH];   // PRESENT_STATE
+    ULONG   BusClk[RKEMMC_TRACE_DEPTH];       // [31:16] CLOCK_CTRL [15:0] INT_STATUS
+    ULONG   BusErr[RKEMMC_TRACE_DEPTH];       // [31:16] ERR_INT_STATUS [15:8] HOST_CTRL [7:0] POWER_CTRL
 } RKEMMC_DIAG, *PRKEMMC_DIAG;
 
 extern RKEMMC_DIAG g_RkDiag;

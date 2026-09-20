@@ -191,6 +191,24 @@ RkemmcDiagFlush(
             RtlInitUnicodeString(&valueName, nameBuf);
             (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
                                 &data, sizeof(data));
+
+            data = g_RkDiag.BusPresent[i];
+            (VOID)RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), L"BPr%02u", i);
+            RtlInitUnicodeString(&valueName, nameBuf);
+            (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
+                                &data, sizeof(data));
+
+            data = g_RkDiag.BusClk[i];
+            (VOID)RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), L"BCk%02u", i);
+            RtlInitUnicodeString(&valueName, nameBuf);
+            (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
+                                &data, sizeof(data));
+
+            data = g_RkDiag.BusErr[i];
+            (VOID)RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), L"BEr%02u", i);
+            RtlInitUnicodeString(&valueName, nameBuf);
+            (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
+                                &data, sizeof(data));
         }
     }
 }
@@ -330,6 +348,25 @@ RkemmcIssueBusOperation(
     )
 {
     PRKEMMC_SLOT slot = (PRKEMMC_SLOT)PrivateExtension;
+
+    //
+    // Sample before touching anything.  This is the only place the controller
+    // can be seen as a failed command left it: the ISR never runs for a
+    // command that draws no interrupt, and by the time the flush samples, an
+    // SdResetHost has already wiped the evidence.
+    //
+    if (g_RkDiag.BusTraceCount < RKEMMC_TRACE_DEPTH) {
+        ULONG i = g_RkDiag.BusTraceCount;
+
+        g_RkDiag.BusPresent[i] = EmmcRead32(slot, SDHCI_PRESENT_STATE);
+        g_RkDiag.BusClk[i] =
+            ((ULONG)EmmcRead16(slot, SDHCI_CLOCK_CONTROL) << 16) |
+            EmmcRead16(slot, SDHCI_INT_STATUS);
+        g_RkDiag.BusErr[i] =
+            ((ULONG)EmmcRead16(slot, SDHCI_ERR_INT_STATUS) << 16) |
+            ((ULONG)EmmcRead8(slot, SDHCI_HOST_CONTROL) << 8) |
+            EmmcRead8(slot, SDHCI_POWER_CONTROL);
+    }
 
     g_RkDiag.BusOpCalls++;
     g_RkDiag.BusOpLastType = BusOperation->Type;
