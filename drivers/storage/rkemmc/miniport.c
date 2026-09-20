@@ -131,6 +131,12 @@ RkemmcDiagFlush(
             RtlInitUnicodeString(&valueName, nameBuf);
             (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
                                 &data, sizeof(data));
+
+            data = g_RkDiag.TraceArg[i];
+            (VOID)RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), L"Arg%02u", i);
+            RtlInitUnicodeString(&valueName, nameBuf);
+            (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
+                                &data, sizeof(data));
         }
 
         n = (g_RkDiag.BusTraceCount < RKEMMC_TRACE_DEPTH)
@@ -556,6 +562,7 @@ RkemmcIssueRequest(
         g_RkDiag.Trace[g_RkDiag.TraceCount] =
             ((g_RkDiag.TraceCount & 0x7F) << 24) | ((command->Index & 0xFF) << 16) |
             (NT_SUCCESS(status) ? 0u : 0x80000000u);
+        g_RkDiag.TraceArg[g_RkDiag.TraceCount] = command->Argument;
     }
 
     g_RkDiag.TraceCount++;

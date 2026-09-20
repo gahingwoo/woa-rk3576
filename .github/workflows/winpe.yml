@@ -97,7 +97,12 @@ jobs:
             # drivers stop mid-sequence and the snapshot only records the last
             # operation type, so these names are needed to read it.
             Write-Host "== SDPORT_BUS_OPERATION_TYPE and SDPORT_EVENT_*"
-            Select-String -Path $sdport.FullName -Pattern '(SdBusOperation|SdReset|SdSet|SdExecute|#define SDPORT_EVENT|#define SDPORT_ERROR)' |
+            # Print the whole enum, not the names that happen to match: the
+            # numbering is what the driver's trace records, and a member
+            # before SdResetHost would shift every value by one.
+            Select-String -Path $sdport.FullName -Pattern 'SDPORT_BUS_OPERATION_TYPE' -Context 20,4 |
+              ForEach-Object { $_.Context.PreContext; $_.Line; $_.Context.PostContext; "" } | Write-Host
+            Select-String -Path $sdport.FullName -Pattern '(#define SDPORT_EVENT|#define SDPORT_ERROR)' |
               ForEach-Object { $_.Line } | Write-Host
             # The capability and bus-operation structures. Which voltage and
             # speed fields exist decides what the miniport may advertise, and

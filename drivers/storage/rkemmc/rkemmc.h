@@ -208,6 +208,19 @@ typedef struct _RKEMMC_DIAG {
     ULONG   Trace[RKEMMC_TRACE_DEPTH];
 
     //
+    // The argument of each traced command, published as Arg00..ArgNN.
+    //
+    // Needed for CMD6 SWITCH above all.  Its argument is
+    // [25:24] access, [23:16] EXT_CSD index, [15:8] value, [2:0] command set --
+    // which is the difference between "the card was switched to high speed"
+    // and "the card was switched to a bus width the host is not using".  On
+    // 2026-09-20 the card stopped answering immediately after a SWITCH with no
+    // bus operation of any kind in between, so what that SWITCH wrote is the
+    // whole question.
+    //
+    ULONG   TraceArg[RKEMMC_TRACE_DEPTH];
+
+    //
     // The bus operations, interleaved with the commands by sequence number so
     // the two rings can be read side by side:
     //
