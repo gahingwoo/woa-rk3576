@@ -188,9 +188,38 @@ Two other defects fixed on the way, neither of them this stall:
 ### The SD slot has not moved
 
 `rkdwmmc` is Started and has issued **no commands at all** across every run:
-three bus operations, the last `SdSetBusSpeed`, then nothing. The
+three bus operations, the last one `SdSetVoltage`, then nothing. The
 `RequestDpc` repair cannot help it, because no request is ever made. That is
 the next thing to take apart, and it is a different fault from the eMMC's.
+
+### The bus-operation numbering, since it is easy to get wrong
+
+```c
+typedef enum _SDPORT_BUS_OPERATION_TYPE {
+    SdBusOperationUndefined = 0,
+    SdResetHw,              // 1
+    SdResetHost,            // 2
+    SdSetClock,             // 3
+    SdSetVoltage,           // 4
+    SdSetBusWidth,          // 5
+    SdSetBusSpeed,          // 6
+    SdSetSignalingVoltage,  // 7
+    SdExecuteTuning         // 8
+```
+
+There are **two members before `SdResetHost`**, and a grep for the member
+names alone does not show them. Every `BusOpLastType` reading taken before
+2026-09-20 in this file was two too low -- "the last operation was
+`SdSetBusWidth`" and "the last operation was `SdSetBusSpeed`" were both wrong
+by that amount. The driver's own `switch` uses the symbolic names and was
+never affected.
+
+What the corrected bus trace says about the eMMC run: the sequence is
+`SdResetHw`, `SdResetHost`, `SdSetVoltage(1)`, `SdSetClock(400)`, and then
+nothing but `SdResetHost` until the recovery after the failure. **No
+`SdSetBusWidth` and no `SdSetBusSpeed` anywhere**, and the clock never leaves
+400 kHz. So sdbus is changing something inside the card with CMD6 and never
+asking the host to follow -- which makes the SWITCH argument the last unknown.
 
 ### Settled 2026-09-20: the SD card-detect edge hypothesis is dead
 
