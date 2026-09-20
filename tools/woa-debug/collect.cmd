@@ -167,6 +167,26 @@ rem 0 is set the slot reports empty and sdport never initialises a card.
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag" /s > "%OUT%\74-rkdwmmc-diag.txt" 2>&1
 echo   %TIME%  74-rkdwmmc-diag.txt >> "%OUT%\00-index.txt"
 
+rem --- PROBE: rkemmc, the eMMC miniport, same idea -----------------------
+rem Read VendorBitsBefore first.  It is EMMC_CTRL as the driver found it
+rem straight after an SDHCI RESET_ALL, and it is the premise the whole
+rem driver rests on: bits 0 and 2 clear means the reset really does wipe
+rem CARD_IS_EMMC and EMMC_RST_N and the restore is needed.  If they are
+rem SET, the premise is wrong and docs/STORAGE.md needs rewriting -- that
+rem would matter more than the card not enumerating.
+rem
+rem Then VendorBitsAfter (did the write-back take), ClockStableWaits and
+rem ClockStableTimeouts (did the internal clock relock after the CRU rate
+rem changed), and RequestCalls/SeenErrStatus (did commands go out at all,
+rem and what did the controller say about them).
+rem
+rem This has to run inside WinPE.  HKLM\SYSTEM\CurrentControlSet lives on
+rem the RAM disk there, so the snapshot is gone the moment the board
+rem reboots -- the first rkemmc run was lost that way, because the driver
+rem shipped before this probe did.
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkemmc\Diag" /s > "%OUT%\74b-rkemmc-diag.txt" 2>&1
+echo   %TIME%  74b-rkemmc-diag.txt >> "%OUT%\00-index.txt"
+
 rem --- PROBE: the two storage devices, in full ----------------------------
 rem 11-enum-acpi.txt has these, buried in 200 KB. Their own file keeps the
 rem fields that matter together: Service, LogConf/BootConfig (what the
