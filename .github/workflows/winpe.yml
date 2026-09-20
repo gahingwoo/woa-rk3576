@@ -382,8 +382,16 @@ jobs:
           echo "media $(du -sm media | cut -f1) MB -> image ${MB} MB"
           truncate -s "${MB}M" winpe.img
 
-          # One ESP. The board's UEFI boots EFI/Boot/bootaa64.efi from it.
-          sgdisk -o -n 1:2048:0 -t 1:ef00 -c 1:WINPE winpe.img
+          # A basic data partition, not an ESP.
+          #
+          # UEFI boots EFI/Boot/bootaa64.efi from removable media whatever the
+          # GPT type code says -- firmware looks for a FAT filesystem, not for
+          # type ef00 -- but Windows deliberately refuses to assign a drive
+          # letter to an EFI System Partition. With ef00 the board booted the
+          # stick and then WinPE could see the disk and not mount it, so the
+          # probes in tools/woa-debug had nowhere to run from and nowhere to
+          # write. This is also what Rufus writes for a UEFI/GPT stick.
+          sgdisk -o -n 1:2048:0 -t 1:0700 -c 1:WINPE winpe.img
 
           LOOP=$(sudo losetup --find --show -P winpe.img)
           trap 'sudo losetup -d "$LOOP" || true' EXIT
