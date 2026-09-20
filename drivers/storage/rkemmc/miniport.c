@@ -214,7 +214,13 @@ RkemmcSlotInitialize(
     RkLog(RK_DBG_INFO, "SlotInitialize @ 0x%llx len=0x%x ver=0x%04x\n",
           PhysicalBase.QuadPart, Length, g_RkDiag.HostVersion);
 
-    RkemmcDiagFlush();
+    //
+    // Deliberately no RkemmcDiagFlush() here.  This is the earliest callback
+    // and, for a boot-start driver, one of the earliest things that runs at
+    // all; opening and writing a registry key from it is a risk for no gain,
+    // because GetSlotCapabilities publishes the same snapshot moments later.
+    // The SD driver does not flush here either.
+    //
     return STATUS_SUCCESS;
 }
 

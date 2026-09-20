@@ -50,9 +50,19 @@ AddService = rkemmc,0x00000002,RKEMMC_Service
 [RKEMMC_Service]
 DisplayName    = %RKEMMC.SvcDesc%
 ServiceType    = 1 ; SERVICE_KERNEL_DRIVER
-; Boot start: the eMMC is where Windows is meant to be installed, so the
-; storage stack has to be able to reach it before the boot volume is mounted.
-StartType      = 0 ; SERVICE_BOOT_START
+; Demand start while this driver is being brought up.
+;
+; It wants to be boot start eventually -- the eMMC is where Windows is meant
+; to be installed, so the storage stack has to reach it before the boot
+; volume is mounted.  But boot start also means any fault here is a boot
+; fault, and the first image carrying this driver went 1 good boot to 3 bad
+; where the same WinPE without it had gone 5 for 5.  Small numbers and not a
+; clean comparison, but there is no reason to carry the risk during bring-up:
+; PnP starts the driver when it enumerates the device either way, and WinPE
+; does not boot from the eMMC.
+;
+; Move it back to 0 once it has been seen to work.
+StartType      = 3 ; SERVICE_DEMAND_START
 ErrorControl   = 1 ; SERVICE_ERROR_NORMAL
 ServiceBinary  = %13%\rkemmc.sys
 LoadOrderGroup = System Bus Extender

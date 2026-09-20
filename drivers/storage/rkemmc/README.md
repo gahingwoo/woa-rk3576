@@ -78,9 +78,13 @@ same fix on this side.
   the WDK `<sdport.h>`; building the SD driver corrected four of them, and this
   one has not had that pass yet.
 - **Not yet run on silicon.**
-- `StartType` is **boot start**, because the eMMC is where Windows is meant to
-  be installed. That also means a fault here is a boot fault. Until it has run,
-  test it from WinPE.
+- `StartType` is **demand start** for now. It wants to be boot start
+  eventually, but boot start also means any fault here is a boot fault, and
+  the first image carrying this driver went 1 good boot to 3 bad where the
+  same WinPE without it had gone 5 for 5. Small numbers, and not a clean
+  comparison -- the driver-free image was also carrying `bootdebug`, which
+  changes timing -- but there is no reason to hold the risk during bring-up.
+  PnP starts the driver when it enumerates the device either way.
 - The `_DSM` clock table in `Emmc.asl` it mirrors was RK3588's until
   `edk2-rk3576` commit `63508ba`: RK3588's parent is 1200 MHz and RK3576's is
   400 MHz, so the four fast entries were programming 66.7, 33.3, 50 and
