@@ -872,12 +872,38 @@ RkemmcRequestDpc(
     }
 
     //
-    // A command with no payload is finished once its response has arrived.
+    // A command with no payload is finished once its response has arrived --
+    // unless the response carries busy, in which case it is finished when the
+    // busy ends.
+    //
+    // R1b is the whole reason this distinction exists.  An eMMC asserts busy
+    // while it applies a CMD6 SWITCH, and SDHCI reports the end of that busy
+    // as Transfer Complete, a second interrupt after the response.  Completing
+    // on the response alone hands the request back while the card is still
+    // programming, sdport issues the next command immediately, and the card --
+    // not listening yet -- never answers it.
+    //
+    // Measured on CM5-IO 2026-09-20.  Two identical SEND_EXT_CSDs succeeded, a
+    // CMD6 SWITCH setting ERASE_GROUP_DEF succeeded, and the third identical
+    // SEND_EXT_CSD drew no interrupt of any kind.  The controller sampled on
+    // the way in to the next bus operation had PRESENT_STATE 0x02F700F1
+    // against the usual 0x03F700F0: CMD_INHIBIT set, so the command was still
+    // in flight, and the CMD line held low -- with the clock running, no error
+    // latched and the data lines idle.  A command issued into a card that was
+    // not ready for it.
     //
     if (Request->Command.TransferType == SdTransferTypeNone) {
-        if ((Events & SDPORT_EVENT_CARD_RESPONSE) != 0) {
+        BOOLEAN busy = (Request->Command.ResponseType == SdResponseTypeR1B) ||
+                       (Request->Command.ResponseType == SdResponseTypeR5B);
+
+        if (busy) {
+            if ((Events & SDPORT_EVENT_CARD_RW_END) != 0) {
+                SdPortCompleteRequest(Request, STATUS_SUCCESS);
+            }
+        } else if ((Events & SDPORT_EVENT_CARD_RESPONSE) != 0) {
             SdPortCompleteRequest(Request, STATUS_SUCCESS);
         }
+
         return;
     }
 
