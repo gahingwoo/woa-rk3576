@@ -388,6 +388,8 @@ RkdwmmcIssueRequest(
     PSDPORT_COMMAND command = &Request->Command;
     ULONG cmd;
 
+    slot->RequestEvents = 0;
+
     //
     // Program the data transfer if this command moves a payload, and stash the
     // PIO buffer/length for the interrupt pump.
@@ -597,14 +599,38 @@ RkdwmmcRequestDpc(
         return;
     }
 
+    slot->RequestEvents |= Events;
+
     if (Request->Command.TransferType == SdTransferTypeNone) {
-        if ((Events & SDPORT_EVENT_CARD_RESPONSE) != 0) {
+        BOOLEAN busy = (Request->Command.ResponseType == SdResponseTypeR1B) ||
+                       (Request->Command.ResponseType == SdResponseTypeR5B);
+
+        //
+        // R1b is not finished when its response arrives.  The card is busy --
+        // an eMMC holds busy while it applies a CMD6 SWITCH -- and SDHCI
+        // reports the end of it as Transfer Complete, a second interrupt.
+        // Mainline treats such a command as occupying the data line for
+        // exactly this reason (sdhci_data_line_cmd: "cmd->data || cmd->flags &
+        // MMC_RSP_BUSY") and finishes it on SDHCI_INT_DATA_END.
+        //
+        // Require both, in either order: mainline notes that some cards raise
+        // the busy-end interrupt before the command itself completes.
+        //
+        if (busy) {
+            if ((slot->RequestEvents &
+                 (SDPORT_EVENT_CARD_RESPONSE | SDPORT_EVENT_CARD_RW_END)) ==
+                (SDPORT_EVENT_CARD_RESPONSE | SDPORT_EVENT_CARD_RW_END))
+            {
+                SdPortCompleteRequest(Request, STATUS_SUCCESS);
+            }
+        } else if ((slot->RequestEvents & SDPORT_EVENT_CARD_RESPONSE) != 0) {
             SdPortCompleteRequest(Request, STATUS_SUCCESS);
         }
+
         return;
     }
 
-    if ((Events & SDPORT_EVENT_CARD_RW_END) != 0) {
+    if ((slot->RequestEvents & SDPORT_EVENT_CARD_RW_END) != 0) {
         status = (slot->DataTransferred >= slot->DataLength)
                      ? STATUS_SUCCESS
                      : STATUS_DEVICE_DATA_ERROR;

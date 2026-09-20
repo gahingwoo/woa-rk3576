@@ -594,6 +594,8 @@ RkemmcIssueRequest(
     USHORT mode;
     NTSTATUS status;
 
+    slot->RequestEvents = 0;
+
     RkemmcBuildCmd(command, &cmdReg, &mode);
 
     if (command->TransferType != SdTransferTypeNone) {
@@ -607,6 +609,7 @@ RkemmcIssueRequest(
         slot->DataLength = blockSize * blockCount;
         slot->DataTransferred = 0;
         slot->DataWrite = (command->TransferDirection == SdTransferDirectionWrite);
+
     } else {
         slot->DataBuffer = NULL;
         slot->DataLength = 0;
@@ -892,15 +895,31 @@ RkemmcRequestDpc(
     // latched and the data lines idle.  A command issued into a card that was
     // not ready for it.
     //
+    slot->RequestEvents |= Events;
+
     if (Request->Command.TransferType == SdTransferTypeNone) {
         BOOLEAN busy = (Request->Command.ResponseType == SdResponseTypeR1B) ||
                        (Request->Command.ResponseType == SdResponseTypeR5B);
 
+        //
+        // R1b is not finished when its response arrives.  The card is busy --
+        // an eMMC holds busy while it applies a CMD6 SWITCH -- and SDHCI
+        // reports the end of it as Transfer Complete, a second interrupt.
+        // Mainline treats such a command as occupying the data line for
+        // exactly this reason (sdhci_data_line_cmd: "cmd->data || cmd->flags &
+        // MMC_RSP_BUSY") and finishes it on SDHCI_INT_DATA_END.
+        //
+        // Require both, in either order: mainline notes that some cards raise
+        // the busy-end interrupt before the command itself completes.
+        //
         if (busy) {
-            if ((Events & SDPORT_EVENT_CARD_RW_END) != 0) {
+            if ((slot->RequestEvents &
+                 (SDPORT_EVENT_CARD_RESPONSE | SDPORT_EVENT_CARD_RW_END)) ==
+                (SDPORT_EVENT_CARD_RESPONSE | SDPORT_EVENT_CARD_RW_END))
+            {
                 SdPortCompleteRequest(Request, STATUS_SUCCESS);
             }
-        } else if ((Events & SDPORT_EVENT_CARD_RESPONSE) != 0) {
+        } else if ((slot->RequestEvents & SDPORT_EVENT_CARD_RESPONSE) != 0) {
             SdPortCompleteRequest(Request, STATUS_SUCCESS);
         }
 
@@ -913,7 +932,7 @@ RkemmcRequestDpc(
     // did not cover, so a short transfer that ended early is a failure rather
     // than something to keep waiting on.
     //
-    if ((Events & SDPORT_EVENT_CARD_RW_END) != 0) {
+    if ((slot->RequestEvents & SDPORT_EVENT_CARD_RW_END) != 0) {
         status = (slot->DataTransferred >= slot->DataLength)
                      ? STATUS_SUCCESS
                      : STATUS_DEVICE_DATA_ERROR;

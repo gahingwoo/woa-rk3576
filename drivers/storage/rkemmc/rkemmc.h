@@ -117,6 +117,16 @@ typedef struct _RKEMMC_SLOT {
     ULONG                DataTransferred;
     BOOLEAN              DataWrite;
 
+    //
+    // Events seen so far for the request in flight, OR-ed across however many
+    // interrupts it takes.  An R1b command is finished only when both its
+    // response and its busy-end have arrived, and mainline warns they can
+    // arrive in either order: "Some cards handle busy-end interrupt before the
+    // command completed, so make sure we do things in the proper order"
+    // (sdhci.c, the MMC_RSP_BUSY branch of sdhci_data_irq).
+    //
+    ULONG            RequestEvents;
+
 } RKEMMC_SLOT, *PRKEMMC_SLOT;
 
 //
