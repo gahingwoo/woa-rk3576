@@ -55,6 +55,53 @@ cannot know about three Rockchip vendor bits, so nothing restores them.
 where firmware has no say. `_DSD`, `_DSM`, `_RMV` and the `_CID` binding are
 all irrelevant to it.
 
+### Checked 2026-09-20: RK3588 upstream has nothing to copy
+
+The obvious hope was that `edk2-porting/edk2-rk3588`, which is where our
+`Emmc.asl` came from, had already solved this. It has not, and it is worth
+recording so nobody spends the search again.
+
+- There is no `PNP0D40` anywhere in that repository, and nothing
+  sdport-related. The `_CID` on our node is **ours**, not theirs.
+- Their `Emmc.asl` and `Sdhc.asl` use custom HIDs (`RKCP0D40`, `RKCPFE2C`) plus
+  `_DSD` `compatible` strings. That is the Linux ACPI-with-DT-bindings route;
+  one of their own methods is commented "Used by downstream Linux driver."
+- Windows on RK3588 does not boot from eMMC or SD either.
+
+The same comparison did turn up two real defects in our copy, both now fixed in
+`edk2-rk3576`:
+
+- `b178307` — the eMMC `_DSD` `compatible` property had three elements. A
+  `_DSD` property is a two-element package `{name, value}`; a list of strings
+  has to be nested, as `Sdhc.asl` does it.
+- `63508ba` — **the `_DSM` clock table was still RK3588's.** RK3588's
+  `CCLK_SRC_EMMC` parent is 1200 MHz, so its dividers read 1200/6, /8, /12 and
+  /24 for 200, 150, 100 and 50 MHz. Only the register address had been changed
+  for RK3576, whose parent is 400 MHz — so the same dividers were actually
+  programming 66.7, 33.3, 50 and 16.7 MHz while `_DSM` went on returning the
+  RK3588 numbers to the caller. The two slow entries survived the copy because
+  they run off the 24 MHz crystal.
+
+### The driver: `drivers/storage/rkemmc`
+
+Written 2026-09-20. An sdport miniport that does the SDHCI reset *and* writes
+the three vendor bits back, modelled on `rkdwmmc` and on this project's own
+EDK2 driver for the same controller.
+
+Two things it carries over from the firmware side, both properties of the
+silicon:
+
+- **The SDHCI divider is non-functional**; the rate comes from `CCLK_SRC_EMMC`
+  in the CRU and the divider stays 0. Mainline states this outright.
+- **After the CRU rate changes, the controller has to relock** — stop SDCLK,
+  wait for Internal Clock Stable, start SDCLK. Skipping it cost a command
+  timeout on the first CMD7 after every speed change, a data CRC error on the
+  CMD8 behind it, and about five minutes per boot on the firmware side
+  (`edk2-rk3576` `cb31cb4`).
+
+Not yet built and not yet run on silicon. What to read first is listed in the
+driver's README.
+
 ### Ruled out by measurement, do not revisit
 
 - *Base clock broken.* `CAPS0 = 0x3A6DC881`, bits[15:8] = `0xC8` = 200 MHz.

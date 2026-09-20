@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WDK / EWDK driver project for rkemmc (Windows on ARM64).
+
+  This is an sdport miniport (WDM model, not KMDF): DriverEntry calls
+  SdPortInitialize. Build (EWDK prompt, after LaunchBuildEnv.cmd):
+      msbuild rkemmc.vcxproj /p:Configuration=Release /p:Platform=ARM64
+
+  If MSBuild cannot resolve the WDK targets, recreate from the VS "Kernel Mode
+  Driver, Empty (WDM)" template and add hw.c / miniport.c + the headers; link
+  sdport.lib. The settings below mirror that template.
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{7C2A9E41-5D63-4F18-8A20-9E6B1C4D8F35}</ProjectGuid>
+    <TemplateGuid>{497e31cb-056d-4f7a-8b7d-9f8f6e8d9b6d}</TemplateGuid>
+    <RootNamespace>rkemmc</RootNamespace>
+    <MinimumVisualStudioVersion>14.0</MinimumVisualStudioVersion>
+    <Configuration>Release</Configuration>
+    <Platform Condition="'$(Platform)' == ''">ARM64</Platform>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>WDM</DriverType>
+    <!--
+      Desktop, not Universal: sdport.sys!SdPortInitialize is not part of the
+      Universal DDI surface, so ApiValidator rejects a Universal sdport
+      miniport. The RK3588 dwcsdhc miniport is Desktop for the same reason.
+    -->
+    <DriverTargetPlatform>Desktop</DriverTargetPlatform>
+    <!--
+      Catalog target list. The WDK default for ARM64 is Server10_ARM64, i.e.
+      build 14393, which predates the 16299 these INFs require for DIRID 13, so
+      inf2cat finds no installable DDInstall section and fails signability.
+      RS3 is 16299, the real floor. 10_GE (Windows 11 24H2) is deliberately
+      absent: RK3576 is ARMv8.0 and 24H2 requires ARMv8.1 LSE atomics, so it
+      cannot boot on this silicon (see docs/BRINGUP-PLAN.md).
+    -->
+    <Inf2CatWindowsVersionList>10_RS3_ARM64,10_RS4_ARM64,10_RS5_ARM64,10_19H1_ARM64,10_VB_ARM64,10_CO_ARM64,10_NI_ARM64</Inf2CatWindowsVersionList>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <!--
+    armasm64 for the SMC stub. The ARM64 toolset ships marmasm (not masm), so
+    the item type is MARMASM and these two imports are what define it.
+  -->
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\marmasm.props" />
+  </ImportGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <!-- _KERNEL_MODE is predefined by the WDK toolset; redefining it is C4117. -->
+      <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <!-- sdport.lib provides SdPortInitialize and the miniport imports. -->
+      <AdditionalDependencies>$(DDK_LIB_PATH)sdport.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Inf>
+      <SpecifyArchitecture>true</SpecifyArchitecture>
+      <Architecture>arm64</Architecture>
+    </Inf>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="miniport.c" />
+    <ClCompile Include="hw.c" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The WDK has no SMC intrinsic, so the SMCCC shim is hand-written. -->
+    <MARMASM Include="arm64\ArmSmc.asm" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="rkemmc.h" />
+    <ClInclude Include="rkemmc_regs.h" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Inf Include="rkemmc.inf" />
+  </ItemGroup>
+
+
+  <!--
+    Stage the built .sys (and the stamped INF) into the package directory.
+    Without this the package directory holds only the INF, and inf2cat's
+    signability test fails with 22.9.1 "rkemmc.sys ... is missing".
+  -->
+  <ItemGroup>
+    <FilesToPackage Include="$(TargetPath)" />
+    <FilesToPackage Include="@(Inf->'%(CopyOutput)')" Condition="'@(Inf)'!=''" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\marmasm.targets" />
+  </ImportGroup>
+</Project>
