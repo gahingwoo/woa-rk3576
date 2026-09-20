@@ -84,8 +84,11 @@ jobs:
                     Select-Object -First 1
           if ($sdport) {
             Write-Host "== sdport.h: $($sdport.FullName)"
-            Select-String -Path $sdport.FullName -Pattern '^\s*(SDPORT_|NTSTATUS|VOID|BOOLEAN|_IRQL)' -Context 0,3 |
-              ForEach-Object { $_.Line } | Write-Host
+            # Print the context, not just the matched line: the matched line
+            # is usually the return type and the signature is underneath it.
+            Select-String -Path $sdport.FullName -Pattern 'SdPort[A-Za-z]+\(' -Context 2,8 |
+              ForEach-Object { $_.Context.PreContext; $_.Line; $_.Context.PostContext; "" } |
+              Write-Host
             Write-Host "== SdPort* exports referenced in the header"
             Select-String -Path $sdport.FullName -Pattern 'SdPort[A-Za-z]+' -AllMatches |
               ForEach-Object { $_.Matches.Value } | Sort-Object -Unique | Write-Host

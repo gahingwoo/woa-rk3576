@@ -573,15 +573,43 @@ RkdwmmcRequestDpc(
     ULONG Errors
     )
 {
+    PRKDWMMC_SLOT slot = (PRKDWMMC_SLOT)PrivateExtension;
+    NTSTATUS status;
+
     //
-    // sdport drives request progress from the events/errors collected by the
-    // Interrupt callback. With the simple PIO model the heavy lifting already
-    // happened in the ISR; here we let sdport complete the request.
+    // This used to do nothing, on the assumption that sdport completes a
+    // request from the events the ISR reports. It does not: the miniport owns
+    // the end of the request and has to call SdPortCompleteRequest.
     //
-    UNREFERENCED_PARAMETER(PrivateExtension);
-    UNREFERENCED_PARAMETER(Request);
-    UNREFERENCED_PARAMETER(Events);
-    UNREFERENCED_PARAMETER(Errors);
+    // Found on the eMMC driver, which shares this file's structure: it issued
+    // CMD0, the controller answered with no error, and sdport never asked for
+    // anything again. This driver stops in the same shape -- three bus
+    // operations and then nothing -- so the same repair belongs here, even
+    // though it has not yet been seen to get as far as a command.
+    //
+    if (Errors != 0) {
+        status = ((Errors & (SDPORT_ERROR_CMD_TIMEOUT | SDPORT_ERROR_DATA_TIMEOUT)) != 0)
+                     ? STATUS_IO_TIMEOUT
+                     : STATUS_CRC_ERROR;
+
+        g_RkDiag.LastCmdStatus = (ULONG)status;
+        SdPortCompleteRequest(Request, status);
+        return;
+    }
+
+    if (Request->Command.TransferType == SdTransferTypeNone) {
+        if ((Events & SDPORT_EVENT_CARD_RESPONSE) != 0) {
+            SdPortCompleteRequest(Request, STATUS_SUCCESS);
+        }
+        return;
+    }
+
+    if ((Events & SDPORT_EVENT_CARD_RW_END) != 0) {
+        status = (slot->DataTransferred >= slot->DataLength)
+                     ? STATUS_SUCCESS
+                     : STATUS_DEVICE_DATA_ERROR;
+        SdPortCompleteRequest(Request, status);
+    }
 }
 
 _Use_decl_annotations_

@@ -618,14 +618,59 @@ RkemmcRequestDpc(
     ULONG Errors
     )
 {
+    PRKEMMC_SLOT slot = (PRKEMMC_SLOT)PrivateExtension;
+    NTSTATUS status;
+
     //
-    // With the PIO model the transfer already happened in the ISR; sdport
-    // completes the request from the events and errors reported there.
+    // This used to do nothing, on the assumption that sdport completes a
+    // request from the events the ISR reports.  It does not: the miniport
+    // owns the end of the request and has to call SdPortCompleteRequest.
     //
-    UNREFERENCED_PARAMETER(PrivateExtension);
-    UNREFERENCED_PARAMETER(Request);
-    UNREFERENCED_PARAMETER(Events);
-    UNREFERENCED_PARAMETER(Errors);
+    // Measured on CM5-IO 2026-09-20, which is what found it.  The driver
+    // issued exactly one command, CMD0.  The controller answered, the
+    // interrupt arrived, SDPORT_EVENT_CARD_RESPONSE was reported, and
+    // SeenErrStatus stayed 0 -- and sdport never asked for anything again.
+    // A stack waiting forever on a request nobody finished looks exactly like
+    // that.  The SD driver stops the same way three bus operations in.
+    //
+    if (Errors != 0) {
+        //
+        // The line that failed has already been reset in the ISR, per the SD
+        // spec's error recovery.  Map to something the class driver can act
+        // on: a timeout is a missing card or a wedged bus, a CRC error is
+        // worth retrying.
+        //
+        status = ((Errors & (SDPORT_ERROR_CMD_TIMEOUT | SDPORT_ERROR_DATA_TIMEOUT)) != 0)
+                     ? STATUS_IO_TIMEOUT
+                     : STATUS_CRC_ERROR;
+
+        g_RkDiag.LastCmdStatus = (ULONG)status;
+        SdPortCompleteRequest(Request, status);
+        return;
+    }
+
+    //
+    // A command with no payload is finished once its response has arrived.
+    //
+    if (Request->Command.TransferType == SdTransferTypeNone) {
+        if ((Events & SDPORT_EVENT_CARD_RESPONSE) != 0) {
+            SdPortCompleteRequest(Request, STATUS_SUCCESS);
+        }
+        return;
+    }
+
+    //
+    // A data command is finished when the transfer ends.  Check the byte count
+    // as well as the event: the ISR drains whatever the watermark interrupts
+    // did not cover, so a short transfer that ended early is a failure rather
+    // than something to keep waiting on.
+    //
+    if ((Events & SDPORT_EVENT_CARD_RW_END) != 0) {
+        status = (slot->DataTransferred >= slot->DataLength)
+                     ? STATUS_SUCCESS
+                     : STATUS_DEVICE_DATA_ERROR;
+        SdPortCompleteRequest(Request, status);
+    }
 }
 
 _Use_decl_annotations_

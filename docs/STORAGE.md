@@ -82,6 +82,71 @@ The same comparison did turn up two real defects in our copy, both now fixed in
   RK3588 numbers to the caller. The two slow entries survived the copy because
   they run off the 24 MHz crystal.
 
+### Measured 2026-09-20, with the driver loaded
+
+`rkemmc` binds and starts: `ACPI\RKCP0D40\3` shows `Service: rkemmc`,
+`Status: Started`, `oem2.inf`. The hardware-ID match beats the inbox driver's
+compatible-ID match on `PNP0D40`, which had only ever been reasoning.
+
+**One row of the table above is wrong.** From the driver's own snapshot, taken
+straight after an SDHCI `RESET_ALL`:
+
+```
+VendorBitsBefore  0xC  = 0b1100    bit0 CARD_IS_EMMC = 0   cleared
+                                   bit2 EMMC_RST_N   = 1   NOT cleared
+VendorBitsAfter   0xD              both set after the restore
+MiscConAfter      0x3              MISC_INTCLK_EN set
+```
+
+`CARD_IS_EMMC` really is wiped by the reset, and restoring it is necessary.
+`EMMC_RST_N` is **not** — it survives, and was already 1 before the driver
+wrote it. Five resets were recorded and the value is the same each time, so
+this is not a one-off. `MISC_INTCLK_EN` is still unknown: the driver records
+that register only after setting it.
+
+The clock path checks out. 400 kHz requested, 400 kHz delivered, CRU value
+`0xFF00BB00` — mux 2 (xin_24m), divider 60, 24 MHz / 60 = 400 kHz — and
+`ClockStableWaits 0`, so the internal clock relocks immediately after the rate
+changes.
+
+**What actually blocks it is not the vendor bits.**
+
+```
+BusOpCalls     5     last type 2 (SdSetVoltage)
+RequestCalls   1     LastCmdIndex 0 (CMD0), LastCmdStatus STATUS_SUCCESS
+InterruptCalls 1     LastIntStatus 0x1 (SDHCI_INT_RESPONSE)
+SeenErrStatus  0     CmdErrors 0   DataErrors 0
+```
+
+CMD0 went out, the controller answered, the interrupt arrived, the event was
+reported, nothing errored -- and sdport never asked for anything again. The SD
+driver stops in the same shape, three bus operations in and no command at all.
+
+Both miniports had a `RequestDpc` that did nothing, on the assumption that
+sdport completes a request from the events the ISR reports. It does not. The
+miniport owns the end of the request and has to call `SdPortCompleteRequest`.
+A stack waiting forever on a request nobody finished looks exactly like this.
+
+### Settled 2026-09-20: the SD card-detect edge hypothesis is dead
+
+`Sdhc.asl` describes card detect as `GpioInt(Edge, ActiveBoth, ...)`, and the
+standing theory was that a card already in the slot at boot produces no edge,
+leaving sdport waiting for an event that had already happened. Tested by
+ejecting and reinserting the card inside WinPE, with the driver's snapshot read
+before, after the ejection and after the reinsertion:
+
+```
+                 before   ejected   reinserted
+CardDetectCalls     0        0          0
+BusOpCalls          3        3          3
+InterruptCalls      0        0          0
+list disk        unchanged unchanged  unchanged
+```
+
+A real insertion edge changed nothing. The hypothesis is refuted, not
+unconfirmed. sdport is not waiting on card detect; it is not running at all,
+for the reason above.
+
 ### The driver: `drivers/storage/rkemmc`
 
 Written 2026-09-20. An sdport miniport that does the SDHCI reset *and* writes
