@@ -59,14 +59,6 @@
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
 
-  <!--
-    armasm64 for the SMC stub. The ARM64 toolset ships marmasm (not masm), so
-    the item type is MARMASM and these two imports are what define it.
-  -->
-  <ImportGroup Label="ExtensionSettings">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\marmasm.props" />
-  </ImportGroup>
-
   <ItemDefinitionGroup>
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
@@ -90,11 +82,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The WDK has no SMC intrinsic, so the SMCCC shim is hand-written. -->
-    <MARMASM Include="arm64\ArmSmc.asm" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ClInclude Include="rkemmc.h" />
     <ClInclude Include="rkemmc_regs.h" />
   </ItemGroup>
@@ -115,8 +102,4 @@
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-
-  <ImportGroup Label="ExtensionTargets">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\marmasm.targets" />
-  </ImportGroup>
 </Project>
