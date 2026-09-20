@@ -141,6 +141,21 @@ EmmcResetAll(
     status = EmmcWaitReset(Slot, SDHCI_RESET_ALL);
 
     //
+    // A RESET_ALL zeroes POWER_CONTROL in hardware, so whatever
+    // EmmcSetPower last wrote there is gone.  Forget it, or the guard in that
+    // function will decide the card is already powered at the requested
+    // voltage and skip the write -- leaving the card powered off.
+    //
+    // That is not hypothetical: adding the guard without this line took the
+    // driver from sixteen commands to one.  CMD0 went out and recorded no
+    // interrupt status and no error status at all, because there was nothing
+    // on the other end to answer it.  Linux avoids the same trap by clearing
+    // host->pwr on its full-reset path.
+    //
+    Slot->PowerProgrammed = FALSE;
+    Slot->PowerValue = 0;
+
+    //
     // Unconditionally, even if the wait timed out: if the controller is in a
     // bad state the vendor bits are exactly what it needs to come back, and
     // leaving them clear guarantees it will not.
