@@ -17,13 +17,14 @@ no inbox driver for, plus docs for the peripherals that *do* use inbox drivers.
 
 | Peripheral | Bind (`_HID`) | Approach | State |
 |---|---|---|---|
-| [GPIO](drivers/gpio/rk3576gpio) | `RKCP3002` | GpioClx miniport | builds for ARM64² · not run on silicon |
-| [I²C](drivers/i2c/rk3xi2c) | `RKCP3001` | SpbCx (rk3x) | builds for ARM64² · not run on silicon |
+| [GPIO](drivers/gpio/rk3576gpio) | `RKCP3002` | GpioClx miniport | **Started on hardware** (4 instances) |
+| [I²C](drivers/i2c/rk3xi2c) | `RKCP3001` | SpbCx (rk3x) | builds for ARM64² · code 28 on hardware, no driver matched yet |
 | [SPI](drivers/spi/rk3xspi) | `RKCP3003`¹ | SpbCx (rk3066) | builds for ARM64² · not run on silicon |
-| [SD card](drivers/storage/rkdwmmc) | `RKCPFE2C` | sdport (dw_mmc) | builds for ARM64² · not run on silicon |
+| [SD card](drivers/storage/rkdwmmc) | `RKCPFE2C` | sdport (dw_mmc) | **Started on hardware**, but sdport issues no commands — 3 bus operations and stops ([storage](docs/STORAGE.md)) |
+| [eMMC](drivers/storage/rkemmc) | `RKCP0D40` | sdport (DWCMSHC) | **Started on hardware**; identification runs to CMD6 `SWITCH` and the card node appears, `sdstor` then refuses it ([storage](docs/STORAGE.md)) |
 | [Ethernet GMAC0](drivers/net/dwmac) | `RKCP6543` | NetAdapterCx (DWMAC-4.20a) | builds for ARM64² · not run on silicon |
-| eMMC | `RKCP0D40` | **inbox** SDHCI | no driver — add `_CID PNP0D40`¹ ([storage](docs/STORAGE.md)) |
-| USB (xHCI) | `PNP0D10` | **inbox** usbxhci | no driver — already enumerated |
+| NVMe | — (PCIe) | **inbox** stornvme | **Working** — `stornvme` and `disk` both Started, in a stock ADK WinPE |
+| USB (xHCI) | `PNP0D10` | **inbox** usbxhci | working for input; `XHC0` (the USB-C DWC3) is code 10 |
 | Display | — (no ACPI) | **inbox** BasicDisplay | UEFI GOP framebuffer ([display](docs/DISPLAY.md)) |
 | Audio (SAI + ES8388) | — (no ACPI) | blocked | needs firmware SAI enablement; **USB Audio** works inbox meanwhile ([audio](docs/AUDIO.md)) |
 
@@ -35,6 +36,32 @@ no inbox driver for, plus docs for the peripherals that *do* use inbox drivers.
 
 With inbox display (GOP) + USB input + storage + the drivers above, the platform
 has every piece needed to boot Windows to the desktop with networking.
+
+### 2026-09-20: where this actually stands
+
+WinPE boots and runs. All 8 CPUs come up at 1608 MHz, the NVMe works on the
+inbox driver, and both storage miniports load and start. What does not work
+yet is the cards behind them.
+
+**The eMMC is close.** `rkemmc` runs identification cleanly through two full
+512-byte EXT_CSD reads with zero data errors, and sdbus creates the card node —
+`SD\VID_ab&OID_0022&PID_QK11X`, matching the CID the firmware reads. It dies on
+the command after CMD6 `SWITCH`, which is almost certainly a 10 ms wait for an
+R1b busy that an eMMC is allowed to hold for hundreds. `sdstor` refuses the
+card with `0xC000000D`.
+
+**The SD slot has not moved.** `rkdwmmc` is Started and has issued no commands
+at all: three bus operations, then nothing. A different fault from the eMMC's,
+and the next one to take apart. The card-detect theory that stood for two days
+— an edge-triggered `GpioInt` and a card already in the slot at boot — was
+tested by ejecting and reinserting inside WinPE and is **refuted**: nothing
+changed.
+
+One firmware-side finding worth knowing before testing anything here: **an SD
+card in the slot used to make Windows crawl or bugcheck**, because no UEFI
+driver quiesced the SD controller at ExitBootServices and its interrupt line
+went to the OS still asserted. Fixed in the firmware port; 4 clean
+card-present boots since, which is not yet a number to trust.
 
 ### 2026-09-18: Windows Setup boots on CM5-IO
 
@@ -48,10 +75,12 @@ in the firmware port, not here.
 This changes what "not run on silicon" means above — it was blocked on nothing
 booting. It is not unblocked for all five drivers, though:
 
-* **Windows sees no storage yet.** `list disk` shows only the USB stick it
-  booted from — no NVMe, no eMMC. Until that is fixed there is nowhere to
-  install to, and four of the five drivers need an **installed** Windows
-  because WinPE ships no GpioClx, SpbCx or NetAdapterCx.
+* **Windows sees no storage yet.** ~~`list disk` shows only the USB stick it
+  booted from — no NVMe, no eMMC.~~ The NVMe works as of 2026-09-19, once two
+  MCFG bugs in the firmware were fixed, so there is somewhere to install to.
+  The eMMC and SD card still do not appear; see the 2026-09-20 note above.
+  Four of the five drivers still need an **installed** Windows, because WinPE
+  ships no GpioClx, SpbCx or NetAdapterCx.
 * **`rkdwmmc` is the exception.** `sdport` is in WinPE, so the SD driver can
   be loaded there with `drvload` — see [docs/DEBUGGING.md](docs/DEBUGGING.md),
   which also explains how to get any data at all out of WinPE on a board with
