@@ -542,19 +542,34 @@ EmmcSendCommand(
     }
 
     //
-    // Bounded, and short: if the line is still busy after 10 ms something is
-    // wrong and reporting it beats blocking sdport's request pump.
+    // How long to wait for the line to go idle.
     //
-    for (i = 0; i < 10000; i++) {
+    // This was 10 ms, which is far too short and cost a full round of
+    // bring-up.  CMD6 SWITCH is an R1b command and an eMMC holds DAT0 low
+    // while it applies the change; the spec allows hundreds of milliseconds,
+    // and this card's EXT_CSD asks for it -- partition switching timing 4 and
+    // out-of-interrupt busy timing 0xA.  The SEND_EXT_CSD that sdbus issues
+    // straight after the SWITCH needs DATA_INHIBIT clear, found it set, and
+    // was abandoned here without ever reaching the command register.  In the
+    // trace that is indistinguishable from a command the card ignored, which
+    // is why the bit below exists.
+    //
+    for (i = 0; i < RKEMMC_INHIBIT_TIMEOUT_US; i++) {
         if ((EmmcRead32(Slot, SDHCI_PRESENT_STATE) & mask) == 0) {
             break;
         }
         EmmcStall(1);
     }
 
-    if (i == 10000) {
-        RkLog(RK_DBG_ERROR, "CMD%u: line busy, present=0x%08x\n",
-              (CommandReg >> 8) & 0x3F, EmmcRead32(Slot, SDHCI_PRESENT_STATE));
+    if (i == RKEMMC_INHIBIT_TIMEOUT_US) {
+        ULONG present = EmmcRead32(Slot, SDHCI_PRESENT_STATE);
+
+        g_RkDiag.IssueFailures++;
+        g_RkDiag.LastBusyPresent = present;
+        g_RkDiag.LastBusyMask = mask;
+
+        RkLog(RK_DBG_ERROR, "CMD%u: line busy, present=0x%08x mask=0x%08x\n",
+              (CommandReg >> 8) & 0x3F, present, mask);
         return STATUS_DEVICE_BUSY;
     }
 

@@ -190,6 +190,7 @@ echo   %TIME%  74b-rkemmc-diag.txt >> "%OUT%\00-index.txt"
 rem Cmd00..CmdNN in that file are the command trace, one DWORD each:
 rem   [31:24] sequence  [23:16] command index
 rem   [15:8]  ERR_INT_STATUS low byte   [7:0] INT_STATUS low byte
+rem   bit 31  set = the command never reached the command register
 rem A slot whose two status bytes are both 0 is a command that went out
 rem and was never answered -- a different fault from one never issued.
 

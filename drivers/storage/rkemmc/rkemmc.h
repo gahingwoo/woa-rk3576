@@ -65,6 +65,16 @@ Environment:
 #define RKEMMC_RST_N_SETTLE_US      200
 
 //
+// How long a command may wait for CMD/DAT to go idle, in microseconds.
+//
+// 500 ms.  An eMMC holds DAT0 low after an R1b command such as CMD6 SWITCH
+// while it applies the change, and the spec allows hundreds of milliseconds
+// for it.  This was 10 ms and the SEND_EXT_CSD that follows a SWITCH was
+// being abandoned before it ever reached the command register.
+//
+#define RKEMMC_INHIBIT_TIMEOUT_US   500000
+
+//
 // How many commands to keep.  eMMC identification is around twenty, so this
 // holds the whole of it.
 //
@@ -177,6 +187,15 @@ typedef struct _RKEMMC_DIAG {
     //   [31:24] sequence number   [23:16] command index
     //   [15:8]  error status low  [7:0]   normal status low
     //
+    //
+    // Commands abandoned in EmmcSendCommand because CMD or DAT never went
+    // idle -- never written to the command register at all.  Without this,
+    // such a command looks in the trace exactly like one the card ignored.
+    //
+    ULONG   IssueFailures;
+    ULONG   LastBusyPresent;      // PRESENT_STATE when the wait gave up
+    ULONG   LastBusyMask;         // which inhibit bits were being waited on
+
     ULONG   TraceCount;
     ULONG   Trace[RKEMMC_TRACE_DEPTH];
 } RKEMMC_DIAG, *PRKEMMC_DIAG;

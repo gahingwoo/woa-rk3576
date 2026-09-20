@@ -103,6 +103,9 @@ RkemmcDiagFlush(
     RK_DIAG_PUT("BaseClockKhz",        BaseClockKhz);
     RK_DIAG_PUT("HostVersion",         HostVersion);
     RK_DIAG_PUT("Capabilities",        Capabilities);
+    RK_DIAG_PUT("IssueFailures",       IssueFailures);
+    RK_DIAG_PUT("LastBusyPresent",     LastBusyPresent);
+    RK_DIAG_PUT("LastBusyMask",        LastBusyMask);
     RK_DIAG_PUT("TraceCount",          TraceCount);
 
 #undef RK_DIAG_PUT
@@ -481,8 +484,17 @@ RkemmcIssueRequest(
     // from one that was never issued at all.
     //
     if (g_RkDiag.TraceCount < RKEMMC_TRACE_DEPTH) {
+        //
+        // Bit 31 marks a command that was never written to the command
+        // register -- EmmcSendCommand gave up waiting for CMD or DAT to go
+        // idle.  The sequence number only reaches RKEMMC_TRACE_DEPTH, so the
+        // top bit of that byte is free for it.  Without this, such a command
+        // is indistinguishable from one the card simply ignored, and the two
+        // want opposite repairs.
+        //
         g_RkDiag.Trace[g_RkDiag.TraceCount] =
-            ((g_RkDiag.TraceCount & 0xFF) << 24) | ((command->Index & 0xFF) << 16);
+            ((g_RkDiag.TraceCount & 0x7F) << 24) | ((command->Index & 0xFF) << 16) |
+            (NT_SUCCESS(status) ? 0u : 0x80000000u);
     }
 
     g_RkDiag.TraceCount++;
