@@ -191,6 +191,9 @@ rem Cmd00..CmdNN in that file are the command trace, one DWORD each:
 rem   [31:24] sequence  [23:16] command index
 rem   [15:8]  ERR_INT_STATUS low byte   [7:0] INT_STATUS low byte
 rem   bit 31  set = the command never reached the command register
+rem ArgNN is that command argument, PreNN is PRESENT_STATE right after it
+rem went out, and the Final* values are the controller resampled on the
+rem last flush -- i.e. how it was left after whatever went wrong.
 rem A slot whose two status bytes are both 0 is a command that went out
 rem and was never answered -- a different fault from one never issued.
 
