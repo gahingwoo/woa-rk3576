@@ -196,8 +196,30 @@ typedef struct _RKEMMC_DIAG {
     ULONG   LastBusyPresent;      // PRESENT_STATE when the wait gave up
     ULONG   LastBusyMask;         // which inhibit bits were being waited on
 
+    //
+    // SdSetClock with a frequency of zero, which switches SDCLK off.  Counted
+    // separately because the early return does not update ClockRequestedHz,
+    // so such a call leaves the snapshot claiming the last real rate while the
+    // clock is actually stopped.
+    //
+    ULONG   ClockOffCalls;
+
     ULONG   TraceCount;
     ULONG   Trace[RKEMMC_TRACE_DEPTH];
+
+    //
+    // The bus operations, interleaved with the commands by sequence number so
+    // the two rings can be read side by side:
+    //
+    //   [31:24] command-trace position when this ran
+    //   [23:16] SDPORT_BUS_OPERATION_TYPE
+    //   [15:0]  the parameter, as far as it fits (kHz, width, voltage)
+    //
+    // 0 SdResetHost  1 SdSetClock  2 SdSetVoltage  3 SdSetBusWidth
+    // 4 SdSetBusSpeed  5 SdSetSignalingVoltage  6 SdExecuteTuning
+    //
+    ULONG   BusTraceCount;
+    ULONG   BusTrace[RKEMMC_TRACE_DEPTH];
 } RKEMMC_DIAG, *PRKEMMC_DIAG;
 
 extern RKEMMC_DIAG g_RkDiag;

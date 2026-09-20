@@ -103,6 +103,8 @@ RkemmcDiagFlush(
     RK_DIAG_PUT("BaseClockKhz",        BaseClockKhz);
     RK_DIAG_PUT("HostVersion",         HostVersion);
     RK_DIAG_PUT("Capabilities",        Capabilities);
+    RK_DIAG_PUT("ClockOffCalls",       ClockOffCalls);
+    RK_DIAG_PUT("BusTraceCount",       BusTraceCount);
     RK_DIAG_PUT("IssueFailures",       IssueFailures);
     RK_DIAG_PUT("LastBusyPresent",     LastBusyPresent);
     RK_DIAG_PUT("LastBusyMask",        LastBusyMask);
@@ -126,6 +128,20 @@ RkemmcDiagFlush(
             ULONG          data = g_RkDiag.Trace[i];
 
             (VOID)RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), L"Cmd%02u", i);
+            RtlInitUnicodeString(&valueName, nameBuf);
+            (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
+                                &data, sizeof(data));
+        }
+
+        n = (g_RkDiag.BusTraceCount < RKEMMC_TRACE_DEPTH)
+                ? g_RkDiag.BusTraceCount : RKEMMC_TRACE_DEPTH;
+
+        for (i = 0; i < n; i++) {
+            WCHAR          nameBuf[8];
+            UNICODE_STRING valueName;
+            ULONG          data = g_RkDiag.BusTrace[i];
+
+            (VOID)RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), L"Bus%02u", i);
             RtlInitUnicodeString(&valueName, nameBuf);
             (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
                                 &data, sizeof(data));
@@ -270,6 +286,42 @@ RkemmcIssueBusOperation(
     g_RkDiag.BusOpCalls++;
     g_RkDiag.BusOpLastType = BusOperation->Type;
 
+    //
+    // Record it against the command-trace position, so the two rings read as
+    // one sequence.  The parameter is whichever field this operation uses;
+    // they are all small enough to fit in the low half.
+    //
+    if (g_RkDiag.BusTraceCount < RKEMMC_TRACE_DEPTH) {
+        ULONG param = 0;
+
+        switch (BusOperation->Type) {
+        case SdSetClock:
+            param = BusOperation->Parameters.FrequencyKhz;
+            break;
+        case SdSetBusWidth:
+            param = (ULONG)BusOperation->Parameters.BusWidth;
+            break;
+        case SdSetVoltage:
+            param = (ULONG)BusOperation->Parameters.Voltage;
+            break;
+        case SdSetSignalingVoltage:
+            param = (ULONG)BusOperation->Parameters.SignalingVoltage;
+            break;
+        case SdSetBusSpeed:
+            param = (ULONG)BusOperation->Parameters.BusSpeed;
+            break;
+        default:
+            break;
+        }
+
+        g_RkDiag.BusTrace[g_RkDiag.BusTraceCount] =
+            ((g_RkDiag.TraceCount & 0xFF) << 24) |
+            ((BusOperation->Type & 0xFF) << 16) |
+            (param & 0xFFFF);
+    }
+
+    g_RkDiag.BusTraceCount++;
+
     RkLog(RK_DBG_INFO, "BusOperation type=%u\n", BusOperation->Type);
 
     switch (BusOperation->Type) {
@@ -310,8 +362,19 @@ RkemmcIssueBusOperation(
 
     case SdSetBusSpeed:
         //
-        // Rate was already applied by SdSetClock.  What is left is the timing
-        // mode in HOST_CONTROL2 and the high-speed bit.
+        // Rate was already applied by SdSetClock.  What is left is the
+        // high-speed bit in HOST_CONTROL.
+        //
+        // HOST_CONTROL2's UHS field is deliberately not touched.  This used to
+        // force SDR25 on every call, which was invented rather than derived:
+        // that field is an SD concept, mainline's dwcmshc driver only writes it
+        // for HS400, and SDR25 implies 1.8 V signalling on some
+        // implementations while VDD_180 here is clear.  A controller that
+        // responds to that by gating its clock output would produce exactly
+        // what was measured on 2026-09-20 -- the command after CMD6 SWITCH
+        // issued into the command register and not one interrupt afterwards,
+        // not even the command timeout SDHCI raises on its own, because that
+        // counter runs off SDCLK.
         //
         {
             UCHAR ctrl = EmmcRead8(slot, SDHCI_HOST_CONTROL);
@@ -322,8 +385,6 @@ RkemmcIssueBusOperation(
                 ctrl &= (UCHAR)~SDHCI_CTRL_HISPD;
             }
             EmmcWrite8(slot, SDHCI_HOST_CONTROL, ctrl);
-
-            EmmcSetUhsMode(slot, SDHCI_CTRL_UHS_SDR25);
         }
         return STATUS_SUCCESS;
 

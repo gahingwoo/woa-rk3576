@@ -308,6 +308,12 @@ EmmcSetClock(
         USHORT clk = EmmcRead16(Slot, SDHCI_CLOCK_CONTROL);
         EmmcWrite16(Slot, SDHCI_CLOCK_CONTROL, clk & (USHORT)~SDHCI_CLOCK_CARD_EN);
         Slot->CurrentClockHz = 0;
+        //
+        // Counted, because this path does not touch ClockRequestedHz -- so
+        // without it the snapshot goes on reporting the last real rate while
+        // SDCLK is stopped, which is a state worth being able to see.
+        //
+        g_RkDiag.ClockOffCalls++;
         return STATUS_SUCCESS;
     }
 
