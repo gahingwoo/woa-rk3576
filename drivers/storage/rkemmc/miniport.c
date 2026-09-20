@@ -28,6 +28,12 @@ RKEMMC_DIAG g_RkDiag;
 
 static HANDLE g_RkDiagKey = NULL;
 
+//
+// The slot, kept so the flush can resample the controller.  One controller,
+// one slot; SlotInitialize sets it and Cleanup clears it.
+//
+static PRKEMMC_SLOT g_RkSlot = NULL;
+
 /*++
 
 Routine Description:
@@ -52,6 +58,23 @@ RkemmcDiagFlush(
 
     if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
         return;
+    }
+
+    //
+    // Resample the controller, so the last flush describes it as it was left.
+    //
+    if (g_RkSlot != NULL) {
+        g_RkDiag.FinalPresent      = EmmcRead32(g_RkSlot, SDHCI_PRESENT_STATE);
+        g_RkDiag.FinalIntStatus    = EmmcRead16(g_RkSlot, SDHCI_INT_STATUS);
+        g_RkDiag.FinalErrStatus    = EmmcRead16(g_RkSlot, SDHCI_ERR_INT_STATUS);
+        g_RkDiag.FinalIntEnable    = EmmcRead16(g_RkSlot, SDHCI_INT_ENABLE);
+        g_RkDiag.FinalSignalEnable = EmmcRead16(g_RkSlot, SDHCI_SIGNAL_ENABLE);
+        g_RkDiag.FinalClockCtrl    = EmmcRead16(g_RkSlot, SDHCI_CLOCK_CONTROL);
+        g_RkDiag.FinalHostCtrl     = EmmcRead8 (g_RkSlot, SDHCI_HOST_CONTROL);
+        g_RkDiag.FinalHostCtrl2    = EmmcRead16(g_RkSlot, SDHCI_HOST_CONTROL2);
+        g_RkDiag.FinalPowerCtrl    = EmmcRead8 (g_RkSlot, SDHCI_POWER_CONTROL);
+        g_RkDiag.FinalEmmcCtrl     = EmmcRead32(g_RkSlot, DWCMSHC_EMMC_CTRL);
+        g_RkDiag.FinalMiscCon      = EmmcRead32(g_RkSlot, DWCMSHC_EMMC_MISC_CON);
     }
 
     if (g_RkDiagKey == NULL) {
@@ -109,6 +132,17 @@ RkemmcDiagFlush(
     RK_DIAG_PUT("LastBusyPresent",     LastBusyPresent);
     RK_DIAG_PUT("LastBusyMask",        LastBusyMask);
     RK_DIAG_PUT("TraceCount",          TraceCount);
+    RK_DIAG_PUT("FinalPresent",        FinalPresent);
+    RK_DIAG_PUT("FinalIntStatus",      FinalIntStatus);
+    RK_DIAG_PUT("FinalErrStatus",      FinalErrStatus);
+    RK_DIAG_PUT("FinalIntEnable",      FinalIntEnable);
+    RK_DIAG_PUT("FinalSignalEnable",   FinalSignalEnable);
+    RK_DIAG_PUT("FinalClockCtrl",      FinalClockCtrl);
+    RK_DIAG_PUT("FinalHostCtrl",       FinalHostCtrl);
+    RK_DIAG_PUT("FinalHostCtrl2",      FinalHostCtrl2);
+    RK_DIAG_PUT("FinalPowerCtrl",      FinalPowerCtrl);
+    RK_DIAG_PUT("FinalEmmcCtrl",       FinalEmmcCtrl);
+    RK_DIAG_PUT("FinalMiscCon",        FinalMiscCon);
 
 #undef RK_DIAG_PUT
 
@@ -134,6 +168,12 @@ RkemmcDiagFlush(
 
             data = g_RkDiag.TraceArg[i];
             (VOID)RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), L"Arg%02u", i);
+            RtlInitUnicodeString(&valueName, nameBuf);
+            (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
+                                &data, sizeof(data));
+
+            data = g_RkDiag.TracePresent[i];
+            (VOID)RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), L"Pre%02u", i);
             RtlInitUnicodeString(&valueName, nameBuf);
             (VOID)ZwSetValueKey(g_RkDiagKey, &valueName, 0, REG_DWORD,
                                 &data, sizeof(data));
@@ -264,6 +304,8 @@ RkemmcSlotInitialize(
         RkLog(RK_DBG_ERROR, "could not map CRU 0x%08x; clock stays as firmware left it\n",
               RK3576_CRU_CLKSEL_CON89);
     }
+
+    g_RkSlot = slot;
 
     EmmcInitController(slot);
 
@@ -563,6 +605,8 @@ RkemmcIssueRequest(
             ((g_RkDiag.TraceCount & 0x7F) << 24) | ((command->Index & 0xFF) << 16) |
             (NT_SUCCESS(status) ? 0u : 0x80000000u);
         g_RkDiag.TraceArg[g_RkDiag.TraceCount] = command->Argument;
+        g_RkDiag.TracePresent[g_RkDiag.TraceCount] =
+            EmmcRead32(slot, SDHCI_PRESENT_STATE);
     }
 
     g_RkDiag.TraceCount++;
@@ -893,6 +937,8 @@ RkemmcCleanup(
     )
 {
     UNREFERENCED_PARAMETER(Miniport);
+
+    g_RkSlot = NULL;
 
     if (g_RkDiagKey != NULL) {
         ZwClose(g_RkDiagKey);

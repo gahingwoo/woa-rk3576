@@ -221,6 +221,35 @@ typedef struct _RKEMMC_DIAG {
     ULONG   TraceArg[RKEMMC_TRACE_DEPTH];
 
     //
+    // PRESENT_STATE sampled immediately after each command was written to the
+    // command register, published as Pre00..PreNN.  A command that draws no
+    // interrupt at all leaves nothing else to look at; this says whether the
+    // controller even accepted it -- CMD_INHIBIT set means it is in flight,
+    // clear means it was swallowed.
+    //
+    ULONG   TracePresent[RKEMMC_TRACE_DEPTH];
+
+    //
+    // The controller's resting state, resampled on every flush, so the last
+    // flush describes it after whatever went wrong.  Reasoning from counters
+    // ran out on 2026-09-20: two identical CMD8s succeeded, a harmless CMD6
+    // SWITCH (ERASE_GROUP_DEF = 1) succeeded, and the third identical CMD8
+    // drew no interrupt of any kind -- not even the command timeout SDHCI
+    // raises on its own.
+    //
+    ULONG   FinalPresent;
+    ULONG   FinalIntStatus;
+    ULONG   FinalErrStatus;
+    ULONG   FinalIntEnable;
+    ULONG   FinalSignalEnable;
+    ULONG   FinalClockCtrl;
+    ULONG   FinalHostCtrl;
+    ULONG   FinalHostCtrl2;
+    ULONG   FinalPowerCtrl;
+    ULONG   FinalEmmcCtrl;
+    ULONG   FinalMiscCon;
+
+    //
     // The bus operations, interleaved with the commands by sequence number so
     // the two rings can be read side by side:
     //
