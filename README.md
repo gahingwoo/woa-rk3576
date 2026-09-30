@@ -32,32 +32,35 @@ replaced on 2026-10-01; they are in git history.
 
 | Peripheral | `_HID` | Driver | RK3576 changes | State |
 |---|---|---|---|---|
-| eMMC | `RKCP0D40` | [dwcsdhc](drivers/sd/dwcsdhc) (sdport) | card clock from the CRU instead of a BL31 SiP call; vendor bits restored after reset | builds · not yet run on RK3576 |
-| SD card | `RKCPFE2C` | [dwcmshc](drivers/sd/dwcmshc) (sdport) | clock from the CRU, phases in the controller's `TIMING_CON`, 3.3 V only | builds · not yet run on RK3576 |
-| GPIO | `RKCP3002` | [rk3xgpio](drivers/gpio/rk3xgpio) (GpioClx) | accepts GPIO version `V2_2` | builds · not yet run on RK3576¹ |
-| I²C | `RKCP3001` | [rk3xi2c](drivers/i2c/rk3xi2c) (SpbCx) | none; needs `rockchip,bclk` from the firmware² | builds · not yet run on RK3576 |
-| DMA | `ARMH0330` | [pl330dma](drivers/dma/pl330dma) | none | builds · not yet run on RK3576 |
-| Ethernet GMAC0 | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | none | builds · not yet run on RK3576³ |
-| SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | ours; RK3588 has no SPI driver | builds · not run on silicon |
+| eMMC | `RKCP0D40` | [dwcsdhc](drivers/sd/dwcsdhc) (sdport) | card clock from the CRU instead of a BL31 SiP call; vendor bits restored after reset | **Started; the eMMC is a disk** (29 GB), first time under Windows |
+| SD card | `RKCPFE2C` | [dwcmshc](drivers/sd/dwcmshc) (sdport) | clock from the CRU, phases in the controller's `TIMING_CON`, 3.3 V only | **Started; the card is a disk**, and it goes and comes back on eject/reinsert |
+| GPIO | `RKCP3002` | [rk3xgpio](drivers/gpio/rk3xgpio) (GpioClx) | accepts GPIO version `V2_2` | **Started**, all 5 banks¹ |
+| I²C | `RKCP3001` | [rk3xi2c](drivers/i2c/rk3xi2c) (SpbCx) | none; needs `rockchip,bclk` from the firmware² | **Started**, all 10 |
+| DMA | `ARMH0330` | [pl330dma](drivers/dma/pl330dma) | none | **Started**, all 3 |
+| Ethernet GMAC0 | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | none | **Started**; link not checked yet³ |
+| SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | ours; RK3588 has no SPI driver | **Started**, all 5; no SPI device exercised |
 | NVMe | — (PCIe) | **inbox** stornvme | | **Working** in a stock ADK WinPE |
 | USB (xHCI) | `PNP0D10` | **inbox** usbxhci | | working for input; `XHC0` (the USB-C DWC3) is code 10 |
 | Display | — | **inbox** BasicDisplay | | UEFI GOP framebuffer ([display](docs/DISPLAY.md)) |
 | Audio | — | not ported | | RK3576 uses SAI, not RK3588's I²S-TDM ([audio](docs/AUDIO.md)) |
 
-¹ The driver it replaced, written for this repo, had started on hardware on four
-  of the five banks. If `rk3xgpio` does worse, restore `drivers/gpio/rk3576gpio`
-  from before `a971d55` and inject it instead.
+¹ The driver it replaced, written for this repo, had started on four of the
+  five banks.
 ² The firmware did not publish it, and `rk3xi2c` refuses to start without it.
-  Added on the firmware's `woa-drivers` branch.
+  Added in firmware `de1d712`.
 ³ `dwc_eqos` reads link state from the MAC's RGMII in-band status and never
   touches MDIO. Whether CM5-IO's Motorcomm YT8531C sends in-band status the way
   RK3588 boards' PHYs do is not known yet.
 
-"Builds" means zero errors in CI against the WDK on every push. None of the
-ported drivers has run on RK3576 hardware yet.
+Measured 2026-10-01 on CM5-IO, in WinPE built from this tree, with firmware
+`de1d712`: every one of the 26 devices above Started, and the four devices
+Windows reports a problem with are the ones it always has (the RTC and a UART
+with Linux-only IDs, `XHC0`, one `PRP0001`). One boot, with an SD card in the
+slot. At boot the SD card was first identified with an all-zero CID; after
+reinsertion it read the real one. Both times the disk worked.
 
-GPIO, I²C, SPI and GMAC sit on class extensions (GpioClx, SpbCx, NetAdapterCx);
-the two storage drivers need only sdport, which WinPE carries.
+WinPE carries every class extension these need (sdport, GpioClx, SpbCx,
+NetAdapterCx): all of them started there.
 
 ### What the board had shown before the port
 
@@ -110,7 +113,7 @@ In the firmware's `main`:
 - The eMMC `_DSD` and `_DSM` corrected for RK3576.
 - Both SD/eMMC controllers quiesced at ExitBootServices.
 
-On the firmware's `woa-drivers` branch, for the ported drivers:
+Added in `de1d712` for the ported drivers:
 
 - `rockchip,bclk` on every I²C controller.
 - The SD UHS modes off and `no-1-8-v` set: nothing Windows can reach switches

@@ -78,12 +78,12 @@ Two limits worth knowing before reading a failure as a bug in the driver:
 
 * **Signing.** Unsigned kernel drivers need test signing enabled in the
   stick's BCD and Secure Boot off, or `drvload` fails with a signature error.
-* **Frameworks.** WinPE does not ship GpioClx, SpbCx or NetAdapterCx, so
+* **Frameworks.** The WinPE this repo builds (ADK 22621) carries sdport,
+  GpioClx, SpbCx and NetAdapterCx: on 2026-10-01
   [gpio](../drivers/gpio/rk3xgpio), [i2c](../drivers/i2c/rk3xi2c),
-  [spi](../drivers/spi/rk3xspi) and [net](../drivers/net/dwc_eqos) cannot load
-  there however they are signed. They need an installed Windows.
-  `sdport` **is** present, because WinPE boots from storage, so
-  [rkdwmmc](../drivers/sd/dwcmshc) is the one that can be tried this way.
+  [spi](../drivers/spi/rk3xspi), [net](../drivers/net/dwc_eqos) and both SD
+  drivers all started in it. This page used to say the three frameworks were
+  missing; that had never been measured, and it was wrong.
 
 ## Adding a probe
 
