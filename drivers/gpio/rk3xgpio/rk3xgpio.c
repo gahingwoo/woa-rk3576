@@ -13,6 +13,7 @@
 #define GPIO_TYPE_V1		(0)           /* GPIO Version ID reserved */
 #define GPIO_TYPE_V2		(0x01000C2B)  /* GPIO Version ID 0x01000C2B */
 #define GPIO_TYPE_V2_1		(0x0101157C)  /* GPIO Version ID 0x0101157C */
+#define GPIO_TYPE_V2_2		(0x010219C8)  /* GPIO Version ID 0x010219C8 */
 
 //
 // Define total number of pins on the simulated GPIO controller.
@@ -730,8 +731,11 @@ Return Value:
         // Get GPIO Bank Type
         UINT32 id = read32(GpioBank, GPIO_REGS_V2.VersionID);
 
-        //If not gpio v2, then default to v1
-        if (id == GPIO_TYPE_V2 || id == GPIO_TYPE_V2_1) {
+        //If not gpio v2, then default to v1.
+        //V2_2 has the v2 register layout; mainline gpio-rockchip.c handles
+        //V2, V2_1 and V2_2 alike. Without it an RK3576 bank reporting V2_2
+        //would be driven through the V1 offsets.
+        if (id == GPIO_TYPE_V2 || id == GPIO_TYPE_V2_1 || id == GPIO_TYPE_V2_2) {
             GpioBank->Registers = GPIO_REGS_V2;
             GpioBank->GpioType = GPIO_TYPE_V2;
         }
