@@ -64,14 +64,17 @@ jobs:
           # cross-workflow download needs a run id and a token, and this keeps
           # the image and the drivers in it from drifting apart.
           #
-          # rkdwmmc needs rk3576gpio, because Sdhc.asl routes card detect
-          # through GpioInt on \_SB.GPI0 rather than the controller's CDETECT.
-          # rkemmc needs neither: the eMMC is soldered down, so there is no
-          # detect line and no GPIO dependency.
+          # The drivers imported from worproject build as one solution; SPI is
+          # ours and builds on its own. The SD driver needs the GPIO one,
+          # because Sdhc.asl routes card detect through GpioInt on \_SB.GPI0
+          # rather than the controller's CDETECT.
+          #
+          # Injected from the solution: eMMC, SD, GPIO, I2C, DMA, GMAC. Not the
+          # audio drivers: the RK3576 DSDT publishes no audio device, and
+          # rk3xi2sbus binds RKCP3003, which is the HID our SPI controllers use.
+          $solutionDrivers = @('dwcsdhc', 'dwcmshc', 'rk3xgpio', 'rk3xi2c', 'pl330dma', 'dwc_eqos')
           $projects = @(
-            'drivers/storage/rkdwmmc/rkdwmmc.vcxproj',
-            'drivers/storage/rkemmc/rkemmc.vcxproj',
-            'drivers/gpio/rk3576gpio/rk3576gpio.vcxproj'
+            'drivers/spi/rk3xspi/rk3xspi.vcxproj'
           )
           # Record the sdport miniport API surface into the log.
           #
@@ -115,6 +118,20 @@ jobs:
           }
 
           New-Item -ItemType Directory -Force -Path $env:DRIVER_STAGE | Out-Null
+
+          Write-Host "== build/RockchipDrivers.sln"
+          msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:SignMode=Off /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed for RockchipDrivers.sln" }
+          foreach ($name in $solutionDrivers) {
+            $src = Join-Path 'build\ARM64\Release\Output' $name
+            if (-not (Test-Path (Join-Path $src "$name.sys"))) { throw "no $name.sys in $src" }
+            $out = Join-Path $env:DRIVER_STAGE $name
+            New-Item -ItemType Directory -Force -Path $out | Out-Null
+            Get-ChildItem $src -File -Include *.sys,*.inf,*.cat -Recurse |
+              Copy-Item -Destination $out -Force
+          }
+
           foreach ($proj in $projects) {
             Write-Host "== $proj"
             msbuild $proj /p:Configuration=Release /p:Platform=ARM64 `
