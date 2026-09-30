@@ -89,6 +89,30 @@ Environment:
 #define DWCMSHC_EMMC_DLL_CMDOUT         0x810
 #define DWCMSHC_EMMC_DLL_STATUS0        0x840
 #define DWCMSHC_EMMC_DLL_STATUS1        0x844
+#define DWCMSHC_EMMC_MISC_CON           0x81c
+
+//
+// Bits defined in DWCMSHC_EMMC_MISC_CON
+//
+
+#define DWCMSHC_MISC_INTCLK_EN                       (1 << 1)
+
+//
+// RK3576: the card clock comes from CCLK_SRC_EMMC in the CRU, programmed
+// directly. RK3588 asks EL3 for it through a Rockchip SiP call, and the BL31
+// this board ships does not implement that service.
+//
+// CRU_CLKSEL_CON(89): [15:14] mux, [13:8] divider - 1, upper half is the
+// write mask. The same values as the firmware's own Emmc.asl _DSM.
+//
+
+#define RK3576_CRU_CLKSEL_CON89         0x27200464
+#define RK3576_CRU_EMMC_WRITE_MASK      0xFF000000
+#define RK3576_CRU_EMMC_MUX_GPLL_400M   (0u << 14)
+#define RK3576_CRU_EMMC_MUX_XIN_24M     (2u << 14)
+#define RK3576_CRU_EMMC_DIV(_n)         ((((ULONG)(_n)) - 1) << 8)
+#define RK3576_CRU_EMMC_PARENT_400M     400000000UL
+#define RK3576_CRU_EMMC_PARENT_24M      24000000UL
 
 //
 // Bits defined in DWCMSHC_EMMC_CONTROL

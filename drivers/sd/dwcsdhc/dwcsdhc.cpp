@@ -22,11 +22,17 @@ Environment:
 #include "precomp.h"
 #pragma hdrstop
 #include <acpiutil.hpp>
-#include <rk_sip_sdmmc.h>
 
 #include "dwcsdhc.h"
 
 static PDRIVER_OBJECT s_pDriverObject;
+
+//
+// CCLK_SRC_EMMC in the RK3576 CRU. One controller, so one mapping for the
+// driver's lifetime; NULL in crashdump mode, where the memory manager is off
+// limits and the clock is already what the running system set.
+//
+static volatile ULONG *s_CruClkSel;
 
 INIT_SEGMENT_BEGIN; //======================================================
 
@@ -284,6 +290,23 @@ Return value:
     //
 
     SdhcExtension->CrashdumpMode = CrashdumpMode;
+
+    //
+    // Map CCLK_SRC_EMMC. It lies outside this device's _CRS, and sdport gives
+    // a miniport no way to evaluate the _DSM that would set it.
+    //
+
+    if (!CrashdumpMode && (s_CruClkSel == NULL)) {
+        PHYSICAL_ADDRESS CruClkSel;
+
+        CruClkSel.QuadPart = RK3576_CRU_CLKSEL_CON89;
+        s_CruClkSel = (volatile ULONG *)MmMapIoSpaceEx(CruClkSel,
+                                                       sizeof(ULONG),
+                                                       PAGE_READWRITE | PAGE_NOCACHE);
+        if (s_CruClkSel == NULL) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
 
     //
     // Initialize host capabilities.
@@ -1075,6 +1098,11 @@ Return value:
 {
     UNREFERENCED_PARAMETER(Miniport);
 
+    if (s_CruClkSel != NULL) {
+        MmUnmapIoSpace((PVOID)s_CruClkSel, sizeof(ULONG));
+        s_CruClkSel = NULL;
+    }
+
     s_pDriverObject = NULL;
 }
 
@@ -1115,6 +1143,8 @@ Return value:
     UCHAR Reset;
     UCHAR Retries;
     UCHAR Mask;
+    ULONG MiscCon;
+    ULONG EmmcControl;
 
     switch (ResetType) {
     case SdResetTypeAll:
@@ -1139,6 +1169,13 @@ Return value:
     }
 
     //
+    // A reset clears Rockchip vendor bits that no standard SDHCI path knows
+    // to set again. Read the one mainline preserves before it goes.
+    //
+
+    MiscCon = SdhcReadRegisterUlong(SdhcExtension, DWCMSHC_EMMC_MISC_CON);
+
+    //
     // Reset the host controller.
     //
 
@@ -1157,6 +1194,29 @@ Return value:
         }
 
     } while ((Reset & Mask) != 0);
+
+    //
+    // MISC_INTCLK_EN keeps the controller's internal clock running. As
+    // mainline rk35xx_sdhci_reset() does, write it back together with the
+    // pre-reset value after every reset, whatever the reset type.
+    //
+
+    SdhcWriteRegisterUlong(SdhcExtension,
+                           DWCMSHC_EMMC_MISC_CON,
+                           MiscCon | DWCMSHC_MISC_INTCLK_EN);
+
+    if (Mask == SDHC_RESET_ALL) {
+
+        //
+        // CARD_IS_EMMC was measured cleared by RESET_ALL on RK3576
+        // (EMMC_RST_N was not). This controller only ever drives eMMC.
+        //
+
+        EmmcControl = SdhcReadRegisterUlong(SdhcExtension, DWCMSHC_EMMC_CONTROL);
+        SdhcWriteRegisterUlong(SdhcExtension,
+                               DWCMSHC_EMMC_CONTROL,
+                               EmmcControl | DWCMSHC_CARD_IS_EMMC);
+    }
 
     //
     // Set the max HW timeout for bus operations.
@@ -1222,18 +1282,52 @@ DwcSdhcRkSetClock(
     _In_ ULONG TargetFrequencyKhz
     )
 {
-    NTSTATUS Status;
+    ULONG FrequencyHz;
+    ULONG Divider;
+    ULONG Value;
 
-    Status = RkSipSdmmcClockRateSet(
-        (ULONG_PTR)SdhcExtension->PhysicalBaseAddress.QuadPart,
-        RK_SIP_SDMMC_CLOCK_ID_EMMC_CCLK,
-        TargetFrequencyKhz * 1000);
-
-    if (!NT_SUCCESS(Status)) {
-        return Status;
+    FrequencyHz = TargetFrequencyKhz * 1000;
+    if (FrequencyHz == 0) {
+        return STATUS_INVALID_PARAMETER;
     }
 
-    return DwcSdhcRkConfigurePhy(SdhcExtension, TargetFrequencyKhz);
+    //
+    // In crashdump mode nothing is mapped and the clock stays at the rate the
+    // running system left it.
+    //
+
+    if (s_CruClkSel != NULL) {
+
+        //
+        // 400 MHz from GPLL for anything the crystal cannot reach, 24 MHz
+        // from the crystal below that (the 400 kHz identification clock is
+        // only reachable from there). Round the divider up so the card is
+        // never clocked faster than asked.
+        //
+
+        if (FrequencyHz >= RK3576_CRU_EMMC_PARENT_24M) {
+            Divider = (RK3576_CRU_EMMC_PARENT_400M + FrequencyHz - 1) / FrequencyHz;
+            Value = RK3576_CRU_EMMC_MUX_GPLL_400M;
+        } else {
+            Divider = (RK3576_CRU_EMMC_PARENT_24M + FrequencyHz - 1) / FrequencyHz;
+            Value = RK3576_CRU_EMMC_MUX_XIN_24M;
+        }
+
+        if (Divider < 1) {
+            Divider = 1;
+        } else if (Divider > 64) {
+            Divider = 64;
+        }
+
+        Value |= RK3576_CRU_EMMC_WRITE_MASK | RK3576_CRU_EMMC_DIV(Divider);
+        WRITE_REGISTER_ULONG((volatile ULONG *)s_CruClkSel, Value);
+    }
+
+    //
+    // DwcSdhcRkConfigurePhy compares against a rate in Hz.
+    //
+
+    return DwcSdhcRkConfigurePhy(SdhcExtension, FrequencyHz);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
