@@ -28,3 +28,8 @@ MSHC_PLATFORM_SET_CLOCK MshcRockchipSetClock;
 MSHC_PLATFORM_SET_VOLTAGE MshcRockchipSetVoltage;
 MSHC_PLATFORM_SET_SIGNALING_VOLTAGE MshcRockchipSetSignalingVoltage;
 MSHC_PLATFORM_EXECUTE_TUNING MshcRockchipExecuteTuning;
+
+VOID
+MshcRockchipCleanup(
+    _In_ PMSHC_EXTENSION MshcExtension
+    );

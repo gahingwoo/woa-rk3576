@@ -1316,6 +1316,8 @@ MshcCleanup(
             IoFreeWorkItem(MshcExtension->CompleteRequestBusyWorkItem);
         }
 
+        MshcRockchipCleanup(MshcExtension);
+
         MshcLogCleanup(MshcExtension);
     }
 

@@ -555,6 +555,13 @@ struct _MSHC_EXTENSION {
     ULONG BusFrequencyKhz;
 
     //
+    // RK3576: CCLK_SRC_SDMMC0 in the CRU (NULL in crashdump mode), and the
+    // card clock it was last set to, which the internal phase maths needs.
+    //
+    volatile ULONG *RkCruClkSel;
+    ULONG RkCardClockHz;
+
+    //
     // Current request state
     //
     PSDPORT_REQUEST OutstandingRequest;
