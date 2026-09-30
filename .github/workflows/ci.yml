@@ -26,6 +26,38 @@ jobs:
       - name: Markdown relative links
         run: bash .github/scripts/check-links.sh
 
+  solution:
+    name: WDK build (build/RockchipDrivers.sln)
+    # The drivers imported from worproject/Rockchip-Windows-Drivers build as one
+    # solution, the way their own CI does it. Built here as-is first, so every
+    # RK3576 change after the import is measured against a baseline that
+    # compiled.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Build the solution (ARM64 Release)
+        shell: pwsh
+        run: |
+          msbuild build\RockchipDrivers.sln `
+            /p:Configuration=Release `
+            /p:Platform=ARM64 `
+            /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed for RockchipDrivers.sln" }
+
+      - name: Upload driver packages
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rk3576-woa-solution-arm64
+          path: build/ARM64/Release/Output/
+          if-no-files-found: error
+
   build:
     name: WDK build (${{ matrix.name }})
     runs-on: windows-2022
@@ -34,7 +66,6 @@ jobs:
       matrix:
         include:
           - { name: gpio, proj: drivers/gpio/rk3576gpio/rk3576gpio.vcxproj }
-          - { name: i2c,  proj: drivers/i2c/rk3xi2c/rk3xi2c.vcxproj }
           - { name: spi,  proj: drivers/spi/rk3xspi/rk3xspi.vcxproj }
           - { name: sd,   proj: drivers/storage/rkdwmmc/rkdwmmc.vcxproj }
           - { name: gmac, proj: drivers/net/dwmac/dwmac.vcxproj }

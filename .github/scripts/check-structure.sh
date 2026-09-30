@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 #
-# Verify every driver package is complete: each directory that holds a .vcxproj
-# must also have C source, an INF, a README and a build.cmd. Fast, no toolchain.
+# Verify every driver package is complete. Fast, no toolchain.
+#
+# Two styles live under drivers/: this repository's own (C, .inf, README.md,
+# build.cmd) and the imported worproject drivers (C++, .inx templated per
+# architecture, built through build/RockchipDrivers.sln). Each directory with a
+# .vcxproj must have source (C, C++ or assembly; a header-only static library
+# counts); each one that is not a static library must also ship an INF or INX.
+# A driver binds a hardware ID: ACPI\<HID> for devices the firmware publishes,
+# or a bus-enumerated ID such as CSAUDIO\... for a child of another driver.
 #
 set -uo pipefail
 
@@ -10,12 +17,21 @@ fail=0
 while IFS= read -r vcx; do
     dir=$(dirname "$vcx")
     missing=""
-    for pat in '*.c' '*.h' '*.inf' 'README.md' 'build.cmd'; do
-        # shellcheck disable=SC2086
-        if ! compgen -G "$dir/$pat" >/dev/null; then
-            missing="$missing $pat"
-        fi
+    is_lib=0
+    grep -q '<ConfigurationType>StaticLibrary</ConfigurationType>' "$vcx" && is_lib=1
+    has_src=0
+    for pat in '*.c' '*.cpp' '*.asm' 'arm64/*.asm'; do
+        compgen -G "$dir/$pat" >/dev/null && has_src=1
     done
+    [ "$is_lib" -eq 1 ] && compgen -G "$dir/*.h" >/dev/null && has_src=1
+    if [ "$has_src" -eq 0 ]; then
+        missing="$missing source"
+    fi
+    if [ "$is_lib" -eq 0 ]; then
+        if ! compgen -G "$dir/*.inf" >/dev/null && ! compgen -G "$dir/*.inx" >/dev/null; then
+            missing="$missing INF/INX"
+        fi
+    fi
     if [ -n "$missing" ]; then
         echo "::error file=$vcx::$dir is missing:$missing"
         fail=1
@@ -24,17 +40,28 @@ while IFS= read -r vcx; do
     fi
 done < <(find drivers -name '*.vcxproj' | sort)
 
-# Every driver INF must bind an ACPI HID and target ARM64.
+# INFs are often saved as UTF-16LE with a BOM, which GNU grep cannot read.
+as_utf8() {
+    if [ "$(head -c 2 "$1" | od -An -tx1 | tr -d ' ')" = "fffe" ]; then
+        iconv -f UTF-16 -t UTF-8 "$1"
+    else
+        cat "$1"
+    fi
+}
+
+# Every driver INF must target ARM64 and bind a hardware ID. An INX is a
+# template that stampinf expands, so NT$ARCH$ stands for NTARM64 there.
 while IFS= read -r inf; do
-    if ! grep -q 'NTARM64' "$inf"; then
+    text=$(as_utf8 "$inf")
+    if ! grep -qE 'NTARM64|NT\$ARCH\$' <<<"$text"; then
         echo "::error file=$inf::INF does not target NTARM64"
         fail=1
     fi
-    if ! grep -qE 'ACPI\\[A-Za-z0-9]+' "$inf"; then
-        echo "::error file=$inf::INF has no ACPI\\<HID> hardware id"
+    if ! grep -qE '(ACPI|CSAUDIO)\\[A-Za-z0-9&_]+' <<<"$text"; then
+        echo "::error file=$inf::INF has no ACPI\\<HID> or bus hardware id"
         fail=1
     fi
-done < <(find drivers -name '*.inf' | sort)
+done < <(find drivers -name '*.inf' -o -name '*.inx' | sort)
 
 if [ "$fail" -eq 0 ]; then
     echo "structure checks passed"
