@@ -45,8 +45,8 @@ replaced on 2026-10-01; they are in git history.
 | Audio | — | not ported | | RK3576 uses SAI, not RK3588's I²S-TDM ([audio](docs/AUDIO.md)) |
 
 ¹ The driver it replaced, written for this repo, had started on hardware on four
-  of the five banks. If `rk3xgpio` does worse, that one commit is the thing to
-  revert.
+  of the five banks. If `rk3xgpio` does worse, restore `drivers/gpio/rk3576gpio`
+  from before `a971d55` and inject it instead.
 ² The firmware did not publish it, and `rk3xi2c` refuses to start without it.
   Added on the firmware's `woa-drivers` branch.
 ³ `dwc_eqos` reads link state from the MAC's RGMII in-band status and never
