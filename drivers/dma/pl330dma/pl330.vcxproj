@@ -11,14 +11,14 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{B3E71397-9BE4-492B-AAED-4D056E59CB1F}</ProjectGuid>
+    <ProjectGuid>{58434B4F-EE73-4D1E-A78D-9FEC5CEC83C7}</ProjectGuid>
     <TemplateGuid>{1bc93793-694f-48fe-9372-81e2b05556fd}</TemplateGuid>
     <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
     <MinimumVisualStudioVersion>11.0</MinimumVisualStudioVersion>
     <Configuration>Win8.1 Debug</Configuration>
     <Platform Condition="'$(Platform)' == ''">Win32</Platform>
-    <RootNamespace>rk3xi2c</RootNamespace>
-    <ProjectName>rk3xi2c</ProjectName>
+    <RootNamespace>pl330</RootNamespace>
+    <ProjectName>pl330dma</ProjectName>
     <WindowsTargetPlatformVersion>$(LatestTargetPlatformVersion)</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -53,11 +53,11 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <ClCompile>
-      <WppEnabled>false</WppEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile. ScanConfigurationData)'  == ''">trace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <TreatWarningAsError>false</TreatWarningAsError>
-      <AdditionalIncludeDirectories>$(SPB_INC_PATH)\$(SPB_VERSION_MAJOR).$(SPB_VERSION_MINOR);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <WppEnabled>false</WppEnabled>
     </ClCompile>
     <Inf>
       <TimeStamp>1.0.0</TimeStamp>
@@ -71,11 +71,11 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <ClCompile>
-      <WppEnabled>false</WppEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile. ScanConfigurationData)'  == ''">trace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <TreatWarningAsError>false</TreatWarningAsError>
-      <AdditionalIncludeDirectories>$(SPB_INC_PATH)\$(SPB_VERSION_MAJOR).$(SPB_VERSION_MINOR);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <WppEnabled>false</WppEnabled>
     </ClCompile>
     <Inf>
       <TimeStamp>1.0.0</TimeStamp>
@@ -88,7 +88,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <Inf Include="rk3xi2c.inx" />
+    <Inf Include="pl330dma.inx" />
   </ItemGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
@@ -96,16 +96,17 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="driver.h" />
-    <ClInclude Include="rk3xi2c.h" />
+    <ClInclude Include="opcodes.h" />
+    <ClInclude Include="pl330.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="clocks.c" />
-    <ClCompile Include="rockchipi2c.c" />
-    <ClCompile Include="rk3xi2c.c" />
-    <ClCompile Include="mdlchain.c" />
+    <ClCompile Include="dmacontroller.c" />
+    <ClCompile Include="insn.c" />
+    <ClCompile Include="pl330.c" />
+    <ClCompile Include="threads.c" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="rk3xi2c.rc" />
+    <ResourceCompile Include="pl330.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1,164 +1,204 @@
-/*++
+#ifndef __CROS_EC_REGS_H__
+#define __CROS_EC_REGS_H__
 
-Module Name:
+#define BITS_PER_LONG sizeof(LONG) * 8
+#define BITS_PER_LONG_LONG sizeof(LONGLONG) * 8
+#define BIT(nr) (1UL << (nr))
 
-    rk3xi2c.h
+#define GENMASK(h, l) (((~0UL) - (1UL << (l)) + 1) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
+#define GENMASK_ULL(h, l) (((~0ULL) - (1ULL << (l)) + 1) & (~0ULL >> (BITS_PER_LONG_LONG - 1 - (h))))
 
-Abstract:
+typedef enum ADDRESS_MODE
+{
+    AddressMode7Bit,
+    AddressMode10Bit
+}
+ADDRESS_MODE, * PADDRESS_MODE;
 
-    Internal definitions for the Rockchip rk3x I2C controller driver. The driver
-    is an SpbCx (SpbCx.sys) controller: SpbCx owns the I/O queue and the
-    I2cSerialBus resource hub; this driver maps the controller, parses each
-    target's address/speed, and runs byte transfers on the rk3x engine.
+typedef struct PBC_TARGET_SETTINGS
+{
+    // TODO: Update this structure to include other
+    //       target settings needed to configure the
+    //       controller (i.e. connection speed, phase/
+    //       polarity for SPI).
 
-    v1 uses a *polled* transfer engine (interrupts left disabled, REG_IPD
-    polled). SpbCx dispatches I/O sequentially at PASSIVE_LEVEL, so polling is
-    safe and simple. An interrupt-driven engine is a later optimization.
+    ADDRESS_MODE                  AddressMode;
+    USHORT                        Address;
+    ULONG                         ConnectionSpeed;
+}
+PBC_TARGET_SETTINGS, * PPBC_TARGET_SETTINGS;
 
-Environment:
-
-    Kernel mode.
-
---*/
-
-#pragma once
-
-#include <ntddk.h>
-#include <wdf.h>
-#include <initguid.h>
-
+/////////////////////////////////////////////////
 //
-// SpbCx controller API + ACPI/connection descriptor structs.
+// Context definitions.
 //
-#include <SPBCx.h>
-#include <reshub.h>
+/////////////////////////////////////////////////
 
-//
-// SpbCx connection descriptors. reshub.h declares only the generic
-// PNP_SERIAL_BUS_DESCRIPTOR; the bus-type-specific extensions below are the
-// ACPI 6.x I2cSerialBus layout and are not in any WDK header, so -- as in
-// every Microsoft SpbCx sample -- they are declared here.
-//
-#include <pshpack1.h>
+typedef struct PBC_TARGET   PBC_TARGET, * PPBC_TARGET;
 
-typedef struct _PNP_I2C_SERIAL_BUS_DESCRIPTOR {
-    PNP_SERIAL_BUS_DESCRIPTOR SerialBusDescriptor;
-    ULONG  ConnectionSpeed;
-    USHORT SlaveAddress;
-    // followed by optional vendor data, then the resource name
-} PNP_I2C_SERIAL_BUS_DESCRIPTOR, *PPNP_I2C_SERIAL_BUS_DESCRIPTOR;
+struct PBC_TARGET
+{
+    // TODO: Update this structure with variables that 
+    //       need to be stored in the target context.
 
-#include <poppack.h>
+    // Handle to the SPB target.
+    SPBTARGET                      SpbTarget;
 
-#define I2C_SERIAL_BUS_TYPE                         0x01
-#define I2C_SERIAL_BUS_SPECIFIC_FLAG_10BIT_ADDRESS  0x0001
+    // Target specific settings.
+    PBC_TARGET_SETTINGS            Settings;
+};
 
-#include "rk3xi2c_regs.h"
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(PBC_TARGET, GetTargetContext);
 
-#define RK3XI2C_POOL_TAG        'I2kR'   // "Rk2I"
+#define I2C_SERIAL_BUS_TYPE 0x01
+#define I2C_SERIAL_BUS_SPECIFIC_FLAG_10BIT_ADDRESS 0x0001
 
-//
-// Functional input clock feeding the SCL divider. The rk3x SCL rate is
-// input_clk / (8 * (CLKDIVL+1 + CLKDIVH+1)). Windows-on-ARM has no clock
-// framework, so we assume the rate the EDK2 firmware leaves the I2C clock at.
-// Assuming the *highest* plausible rate is the safe bias: if the real clock is
-// lower the bus simply runs slower than requested, never faster.
-//
-// TODO: source this from an ACPI _DSD property once the EDK2 port exports it,
-// instead of a compile-time constant.
-//
-#define RK3XI2C_INPUT_CLK_HZ    200000000UL
+/* Register Map */
+#define REG_CON        0x00 /* control register */
+#define REG_CLKDIV     0x04 /* clock divisor register */
+#define REG_MRXADDR    0x08 /* slave address for REGISTER_TX */
+#define REG_MRXRADDR   0x0c /* slave register address for REGISTER_TX */
+#define REG_MTXCNT     0x10 /* number of bytes to be transmitted */
+#define REG_MRXCNT     0x14 /* number of bytes to be received */
+#define REG_IEN        0x18 /* interrupt enable */
+#define REG_IPD        0x1c /* interrupt pending */
+#define REG_FCNT       0x20 /* finished count */
 
-#define RK3XI2C_DEFAULT_BUS_HZ  100000UL   // standard mode fallback
-#define RK3XI2C_FAST_BUS_HZ     400000UL
+/* Data buffer offsets */
+#define TXBUFFER_BASE 0x100
+#define RXBUFFER_BASE 0x200
 
-//
-// Per-transfer timeout (microseconds) waiting on a chunk to finish.
-//
-#define RK3XI2C_XFER_TIMEOUT_US 100000UL   // 100 ms
+/* REG_CON bits */
+#define REG_CON_EN        BIT(0)
+enum {
+    REG_CON_MOD_TX = 0,      /* transmit data */
+    REG_CON_MOD_REGISTER_TX, /* select register and restart */
+    REG_CON_MOD_RX,          /* receive data */
+    REG_CON_MOD_REGISTER_RX, /* broken: transmits read addr AND writes
+                  * register addr */
+};
+#define REG_CON_MOD(mod)  ((mod) << 1)
+#define REG_CON_MOD_MASK  (BIT(1) | BIT(2))
+#define REG_CON_START     BIT(3)
+#define REG_CON_STOP      BIT(4)
+#define REG_CON_LASTACK   BIT(5) /* 1: send NACK after last received byte */
+#define REG_CON_ACTACK    BIT(6) /* 1: stop if NACK is received */
 
-//
-// Tracing (DbgPrintEx; WPP avoided for build simplicity). Format string is the
-// first variadic arg; include "\n" explicitly.
-//
-#define RK_DBG_ERROR            DPFLTR_ERROR_LEVEL
-#define RK_DBG_INFO             DPFLTR_INFO_LEVEL
-#define RK_DBG_TRACE            DPFLTR_TRACE_LEVEL
+#define REG_CON_TUNING_MASK GENMASK_ULL(15, 8)
 
-#define RkLog(_Level, ...)                                                    \
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, (_Level), "rk3xi2c: " __VA_ARGS__)
+#define REG_CON_SDA_CFG(cfg) ((cfg) << 8)
+#define REG_CON_STA_CFG(cfg) ((cfg) << 12)
+#define REG_CON_STO_CFG(cfg) ((cfg) << 14)
 
-//
-// Controller context (on the WDFDEVICE).
-//
-typedef struct _RK3XI2C_CONTEXT {
-    volatile UCHAR  *Regs;
-    PHYSICAL_ADDRESS RegsPhysical;
-    ULONG            RegsLength;
-} RK3XI2C_CONTEXT, *PRK3XI2C_CONTEXT;
+/* REG_MRXADDR bits */
+#define REG_MRXADDR_VALID(x) BIT(24 + (x)) /* [x*8+7:x*8] of MRX[R]ADDR valid */
 
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(RK3XI2C_CONTEXT, GetControllerContext)
+/* REG_IEN/REG_IPD bits */
+#define REG_INT_BTF       BIT(0) /* a byte was transmitted */
+#define REG_INT_BRF       BIT(1) /* a byte was received */
+#define REG_INT_MBTF      BIT(2) /* master data transmit finished */
+#define REG_INT_MBRF      BIT(3) /* master data receive finished */
+#define REG_INT_START     BIT(4) /* START condition generated */
+#define REG_INT_STOP      BIT(5) /* STOP condition generated */
+#define REG_INT_NAKRCV    BIT(6) /* NACK received */
+#define REG_INT_ALL       0x7f
 
-//
-// Per-target context (allocated on each SPBTARGET in OnTargetConnect).
-//
-typedef struct _RK3XI2C_TARGET {
-    USHORT  Address;          // 7-bit slave address
-    BOOLEAN TenBitAddress;    // 10-bit addressing requested
-    ULONG   ConnectionSpeed;  // Hz, from the I2cSerialBus descriptor
-    ULONG   ClkDiv;           // precomputed REG_CLKDIV value
-} RK3XI2C_TARGET, *PRK3XI2C_TARGET;
+/* Constants */
+#define WAIT_TIMEOUT      1000 /* ms */
+#define DEFAULT_SCL_RATE  (100 * 1000) /* Hz */
 
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(RK3XI2C_TARGET, GetTargetContext)
+/**
+ * struct i2c_spec_values - I2C specification values for various modes
+ * @min_hold_start_ns: min hold time (repeated) START condition
+ * @min_low_ns: min LOW period of the SCL clock
+ * @min_high_ns: min HIGH period of the SCL cloc
+ * @min_setup_start_ns: min set-up time for a repeated START conditio
+ * @max_data_hold_ns: max data hold time
+ * @min_data_setup_ns: min data set-up time
+ * @min_setup_stop_ns: min set-up time for STOP condition
+ * @min_hold_buffer_ns: min bus free time between a STOP and
+ * START condition
+ */
+struct i2c_spec_values {
+    unsigned long min_hold_start_ns;
+    unsigned long min_low_ns;
+    unsigned long min_high_ns;
+    unsigned long min_setup_start_ns;
+    unsigned long max_data_hold_ns;
+    unsigned long min_data_setup_ns;
+    unsigned long min_setup_stop_ns;
+    unsigned long min_hold_buffer_ns;
+};
 
-//
-// One logical I2C message for the transfer engine.
-//
-typedef struct _RK3X_I2C_MSG {
-    USHORT  Address;          // 7-bit slave address
-    BOOLEAN Read;             // TRUE = read, FALSE = write
-    PUCHAR  Buffer;
-    ULONG   Length;
-} RK3X_I2C_MSG, *PRK3X_I2C_MSG;
+static const struct i2c_spec_values standard_mode_spec = {
+    .min_hold_start_ns = 4000,
+    .min_low_ns = 4700,
+    .min_high_ns = 4000,
+    .min_setup_start_ns = 4700,
+    .max_data_hold_ns = 3450,
+    .min_data_setup_ns = 250,
+    .min_setup_stop_ns = 4000,
+    .min_hold_buffer_ns = 4700,
+};
 
-//
-// driver.c
-//
-DRIVER_INITIALIZE DriverEntry;
-EVT_WDF_DRIVER_DEVICE_ADD       Rk3xI2cEvtDeviceAdd;
-EVT_WDF_DEVICE_PREPARE_HARDWARE Rk3xI2cEvtPrepareHardware;
-EVT_WDF_DEVICE_RELEASE_HARDWARE Rk3xI2cEvtReleaseHardware;
+static const struct i2c_spec_values fast_mode_spec = {
+    .min_hold_start_ns = 600,
+    .min_low_ns = 1300,
+    .min_high_ns = 600,
+    .min_setup_start_ns = 600,
+    .max_data_hold_ns = 900,
+    .min_data_setup_ns = 100,
+    .min_setup_stop_ns = 600,
+    .min_hold_buffer_ns = 1300,
+};
 
-//
-// spb.c — SpbCx callbacks.
-//
-EVT_SPB_TARGET_CONNECT      Rk3xI2cEvtTargetConnect;
-EVT_SPB_CONTROLLER_READ      Rk3xI2cEvtIoRead;
-EVT_SPB_CONTROLLER_WRITE     Rk3xI2cEvtIoWrite;
-EVT_SPB_CONTROLLER_SEQUENCE  Rk3xI2cEvtIoSequence;
+static const struct i2c_spec_values fast_mode_plus_spec = {
+    .min_hold_start_ns = 260,
+    .min_low_ns = 500,
+    .min_high_ns = 260,
+    .min_setup_start_ns = 260,
+    .max_data_hold_ns = 400,
+    .min_data_setup_ns = 50,
+    .min_setup_stop_ns = 260,
+    .min_hold_buffer_ns = 500,
+};
 
-//
-// hw.c — rk3x transfer engine.
-//
-_IRQL_requires_max_(PASSIVE_LEVEL)
-ULONG
-Rk3xI2cComputeClkDiv(
-    _In_ ULONG InputClockHz,
-    _In_ ULONG BusClockHz
-    );
+/**
+ * struct rk3x_i2c_calced_timings - calculated V1 timings
+ * @div_low: Divider output for low
+ * @div_high: Divider output for high
+ * @tuning: Used to adjust setup/hold data time,
+ * setup/hold start time and setup stop time for
+ * v1's calc_timings, the tuning should all be 0
+ * for old hardware anyone using v0's calc_timings.
+ */
+struct rk3x_i2c_calced_timings {
+    unsigned long div_low;
+    unsigned long div_high;
+    unsigned int tuning;
+};
 
-_IRQL_requires_max_(PASSIVE_LEVEL)
+enum rk3x_i2c_state {
+    STATE_IDLE,
+    STATE_START,
+    STATE_READ,
+    STATE_WRITE,
+    STATE_STOP
+};
+
 NTSTATUS
-Rk3xI2cTransfer(
-    _In_ PRK3XI2C_CONTEXT Ctx,
-    _In_ ULONG ClkDiv,
-    _In_reads_(MsgCount) PRK3X_I2C_MSG Msgs,
-    _In_ ULONG MsgCount,
-    _Out_ PULONG BytesTransferred
-    );
+MdlChainGetByte(
+    PMDL pMdlChain,
+    size_t Length,
+    size_t Index,
+    UCHAR* pByte);
 
-_IRQL_requires_max_(PASSIVE_LEVEL)
-VOID
-Rk3xI2cHwInit(
-    _In_ PRK3XI2C_CONTEXT Ctx
-    );
+NTSTATUS
+MdlChainSetByte(
+    PMDL pMdlChain,
+    size_t Length,
+    size_t Index,
+    UCHAR Byte
+);
+
+#endif /* __CROS_EC_REGS_H__ */

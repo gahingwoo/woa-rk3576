@@ -29,3 +29,5 @@ Build/
 # the output rule above would otherwise silently swallow it.
 !drivers/storage/rkdwmmc/arm64/
 !drivers/storage/rkdwmmc/arm64/*.asm
+!drivers/lib/arm_smc_lib/arm64/
+!drivers/lib/arm_smc_lib/arm64/*.asm
