@@ -65,10 +65,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: gpio, proj: drivers/gpio/rk3576gpio/rk3576gpio.vcxproj }
           - { name: spi,  proj: drivers/spi/rk3xspi/rk3xspi.vcxproj }
-          - { name: sd,   proj: drivers/storage/rkdwmmc/rkdwmmc.vcxproj }
-          - { name: gmac, proj: drivers/net/dwmac/dwmac.vcxproj }
     steps:
       - uses: actions/checkout@v4
 

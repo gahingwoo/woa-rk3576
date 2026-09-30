@@ -1,5 +1,12 @@
 # Getting data out of Windows on this board
 
+> **2026-10-01:** the drivers this page names — `rkemmc`, `rkdwmmc`,
+> `rk3576gpio`, `dwmac` — were written from scratch and have since been
+> replaced by ports of worproject's RK3588 drivers (see the
+> [README](../README.md) and [THIRD_PARTY.md](../THIRD_PARTY.md)). What this
+> page records about the hardware still holds; what it says about those
+> drivers' code is history.
+
 WinPE has no serial console. The thing that would give one — SAC, behind
 `bcdedit /ems on` — needs `sacdrv.sys` and `sacsvr`, and neither is in WinPE.
 SPCR only marks a debug port; it does not create a console. So the serial line
@@ -72,11 +79,11 @@ Two limits worth knowing before reading a failure as a bug in the driver:
 * **Signing.** Unsigned kernel drivers need test signing enabled in the
   stick's BCD and Secure Boot off, or `drvload` fails with a signature error.
 * **Frameworks.** WinPE does not ship GpioClx, SpbCx or NetAdapterCx, so
-  [gpio](../drivers/gpio/rk3576gpio), [i2c](../drivers/i2c/rk3xi2c),
-  [spi](../drivers/spi/rk3xspi) and [net](../drivers/net/dwmac) cannot load
+  [gpio](../drivers/gpio/rk3xgpio), [i2c](../drivers/i2c/rk3xi2c),
+  [spi](../drivers/spi/rk3xspi) and [net](../drivers/net/dwc_eqos) cannot load
   there however they are signed. They need an installed Windows.
   `sdport` **is** present, because WinPE boots from storage, so
-  [rkdwmmc](../drivers/storage/rkdwmmc) is the one that can be tried this way.
+  [rkdwmmc](../drivers/sd/dwcmshc) is the one that can be tried this way.
 
 ## Adding a probe
 

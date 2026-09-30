@@ -1,5 +1,12 @@
 # Building & installing the RK3576 WOA drivers
 
+> **2026-10-01:** the drivers this page names — `rkemmc`, `rkdwmmc`,
+> `rk3576gpio`, `dwmac` — were written from scratch and have since been
+> replaced by ports of worproject's RK3588 drivers (see the
+> [README](../README.md) and [THIRD_PARTY.md](../THIRD_PARTY.md)). What this
+> page records about the hardware still holds; what it says about those
+> drivers' code is history.
+
 These are **Windows ARM64 kernel-mode drivers**. They cannot be compiled on
 Linux — you need Microsoft's WDK toolchain. The source in this repo is authored
 on a Linux dev box; building happens on Windows or in CI.

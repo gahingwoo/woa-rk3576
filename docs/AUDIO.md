@@ -63,7 +63,7 @@ driver has nothing to attach to.
 - SAI controller init + the **PL330 (dmac2)** audio DMA to/from the WaveRT buffer.
 - **ES8388 codec** init over I²C (port the `es8328.c` register sequence: power,
   clocking, format, DAC/ADC routing, volume) — this driver depends on the
-  [I²C driver](../drivers/i2c/rk3xi2c) and the jack-detect [GPIO](../drivers/gpio/rk3576gpio).
+  [I²C driver](../drivers/i2c/rk3xi2c) and the jack-detect [GPIO](../drivers/gpio/rk3xgpio).
 - Firmware ACPI exposing the SAI + codec with correct resources (items 1–4).
 
 ## Stopgap that works today: USB Audio

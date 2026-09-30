@@ -132,8 +132,8 @@ echo   %TIME%  70-cpus.txt >> "%OUT%\00-index.txt"
 rem --- PROBE: the storage controllers, on their own -------------------------
 rem 10-devices.txt has everything, but these are the two the whole storage
 rem story turns on and they are worth having in a file of their own:
-rem   ACPI\RKCP0D40  eMMC  (DWCMSHC, SDHCI-compatible, inbox sdbus binds)
-rem   ACPI\RKCPFE2C  SD    (dw_mmc, needs rkdwmmc from this repo)
+rem   ACPI\RKCP0D40  eMMC  (DWCMSHC; dwcsdhc from this repo)
+rem   ACPI\RKCPFE2C  SD    (dw_mmc;  dwcmshc from this repo)
 rem Three outcomes to tell apart: no driver bound at all (INF/hardware-id or
 rem signing), bound but failed to start (the error code says why), or started
 rem with no child (the controller is up and the card is not).
@@ -155,47 +155,20 @@ diskpart /s "%OUT%\dp2.txt" > "%OUT%\73-diskpart-late.txt" 2>&1
 echo   %TIME%  73-diskpart-late.txt >> "%OUT%\00-index.txt"
 del "%OUT%\dp2.txt" 2>nul
 
-rem --- PROBE: what rkdwmmc recorded about itself -------------------------
-rem The driver publishes a snapshot here rather than tracing, because the
-rem kernel debugger is not a usable instrument on this board: with no
-rem listener the target retransmits forever and storage enumeration times
-rem out, and with one attached the exchange stalls on RESEND.
-rem
-rem CardDetectRaw is the first thing to read. ACPI routes card detect
-rem through a GpioInt, but the driver reads the controller CDETECT; if bit
-rem 0 is set the slot reports empty and sdport never initialises a card.
-reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag" /s > "%OUT%\74-rkdwmmc-diag.txt" 2>&1
-echo   %TIME%  74-rkdwmmc-diag.txt >> "%OUT%\00-index.txt"
-
-rem --- PROBE: rkemmc, the eMMC miniport, same idea -----------------------
-rem Read VendorBitsBefore first.  It is EMMC_CTRL as the driver found it
-rem straight after an SDHCI RESET_ALL, and it is the premise the whole
-rem driver rests on: bits 0 and 2 clear means the reset really does wipe
-rem CARD_IS_EMMC and EMMC_RST_N and the restore is needed.  If they are
-rem SET, the premise is wrong and docs/STORAGE.md needs rewriting -- that
-rem would matter more than the card not enumerating.
-rem
-rem Then VendorBitsAfter (did the write-back take), ClockStableWaits and
-rem ClockStableTimeouts (did the internal clock relock after the CRU rate
-rem changed), and RequestCalls/SeenErrStatus (did commands go out at all,
-rem and what did the controller say about them).
-rem
-rem This has to run inside WinPE.  HKLM\SYSTEM\CurrentControlSet lives on
-rem the RAM disk there, so the snapshot is gone the moment the board
-rem reboots -- the first rkemmc run was lost that way, because the driver
-rem shipped before this probe did.
-reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkemmc\Diag" /s > "%OUT%\74b-rkemmc-diag.txt" 2>&1
-echo   %TIME%  74b-rkemmc-diag.txt >> "%OUT%\00-index.txt"
-
-rem Cmd00..CmdNN in that file are the command trace, one DWORD each:
-rem   [31:24] sequence  [23:16] command index
-rem   [15:8]  ERR_INT_STATUS low byte   [7:0] INT_STATUS low byte
-rem   bit 31  set = the command never reached the command register
-rem ArgNN is that command argument, PreNN is PRESENT_STATE right after it
-rem went out, and the Final* values are the controller resampled on the
-rem last flush -- i.e. how it was left after whatever went wrong.
-rem A slot whose two status bytes are both 0 is a command that went out
-rem and was never answered -- a different fault from one never issued.
+rem --- PROBE: every device one of our drivers binds -------------------------
+rem One file with the status of each: bound or not, which driver, started or
+rem the problem code. The drivers are the ones ported from worproject's RK3588
+rem set, plus our SPI:
+rem   RKCP0D40 eMMC dwcsdhc   RKCPFE2C SD  dwcmshc   RKCP3002 GPIO rk3xgpio
+rem   RKCP3001 I2C  rk3xi2c   ARMH0330 DMA pl330dma  RKCP6543 GMAC dwc_eqos
+rem   RKCP3003 SPI  rk3xspi
+rem They keep no registry diagnostics; what they log goes to WPP and the
+rem in-flight recorder, which WinPE cannot read back.
+for %%H in (RKCP0D40 RKCPFE2C RKCP3002 RKCP3001 ARMH0330 RKCP6543 RKCP3003) do (
+  echo ===== ACPI\%%H >> "%OUT%\74-our-devices.txt"
+  pnputil /enum-devices /deviceid "ACPI\%%H" /drivers >> "%OUT%\74-our-devices.txt" 2>&1
+)
+echo   %TIME%  74-our-devices.txt >> "%OUT%\00-index.txt"
 
 rem --- PROBE: the two storage devices, in full ----------------------------
 rem 11-enum-acpi.txt has these, buried in 200 KB. Their own file keeps the
@@ -208,7 +181,7 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCPFE2C" /s > "%OUT%\76-sd-e
 echo   %TIME%  75/76-storage-enum >> "%OUT%\00-index.txt"
 
 rem --- PROBE: the GPIO controllers -----------------------------------------
-rem rk3576gpio drives five of these, and the SD slot's card detect is a
+rem rk3xgpio drives five of these, and the SD slot's card detect is a
 rem GpioInt on \_SB.GPI0 routed through them. It is also the other suspect
 rem for the DRIVER_PNP_WATCHDOG: a PnP callback that does not return starves
 rem everything behind it, which is what "the spinner turns very slowly" is.
@@ -220,9 +193,10 @@ rem --- PROBE: services, and which of ours are running ----------------------
 rem sc.exe is not in every WinPE (it is absent from the ADK 22621 image), so
 rem read the service keys instead. Start and ErrorControl say how the driver
 rem was meant to load; a driver that never loaded has no Enum subkey.
-reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc" /s > "%OUT%\78-services.txt" 2>&1
-reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkemmc" /s >> "%OUT%\78-services.txt" 2>&1
-reg query "HKLM\SYSTEM\CurrentControlSet\Services\rk3576gpio" /s >> "%OUT%\78-services.txt" 2>&1
+type nul > "%OUT%\78-services.txt"
+for %%S in (dwcsdhc dwcmshc rk3xgpio rk3xi2c pl330dma dwc_eqos rk3xspi) do (
+  reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%S" /s >> "%OUT%\78-services.txt" 2>&1
+)
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\sdbus" /s >> "%OUT%\78-services.txt" 2>&1
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\sdstor" /s >> "%OUT%\78-services.txt" 2>&1
 echo   %TIME%  78-services >> "%OUT%\00-index.txt"
@@ -235,26 +209,17 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /s > "%OUT%\79-cr
 echo   %TIME%  79-crashcontrol >> "%OUT%\00-index.txt"
 
 rem =========================================================================
-rem  EXPERIMENT: does an insertion edge wake sdport up?
+rem  EXPERIMENT: does the SD driver see the card come and go?
 rem =========================================================================
 rem
 rem Everything above this line is automatic and is already on disk.  What
 rem follows needs a hand on the SD card, so it pauses.  Closing the window
 rem here loses nothing.
 rem
-rem Why: the ACPI card detect in Sdhc.asl is
-rem
-rem     GpioInt (Edge, ActiveBoth, Shared, PullUp, 0, "\_SB.GPI0") { ... }
-rem
-rem an EDGE.  A card already in the slot when the machine boots produces no
-rem edge, so sdport would be waiting for an event that happened before it was
-rem watching.  That fits what the driver reports: on 2026-09-20, with a card
-rem physically in the slot, rkdwmmc recorded CardDetectCalls 0, BusOpCalls 0,
-rem RequestCalls 0 -- sdport read the capabilities and never came back.
-rem
-rem If ejecting and reinserting makes the count move, the hypothesis holds and
-rem the fix is in the ACPI description, not in the driver.  If it does not,
-rem the hypothesis is dead and the next place to look is the GPIO driver.
+rem Card detect reaches the SD driver as a GpioInt on \_SB.GPI0, so this
+rem exercises dwcmshc and rk3xgpio together: the disk should appear, go, and
+rem come back.  Remember the other thing a card in the slot has done on this
+rem board: before 75c0f32 it made Windows crawl or bugcheck.
 echo.
 echo ==========================================================
 echo  SD card experiment.  Close this window to skip it.
@@ -264,28 +229,27 @@ echo  Step 1 of 3: make sure the SD card IS in the slot.
 pause
 echo list disk > "%OUT%\dp3.txt"
 diskpart /s "%OUT%\dp3.txt" > "%OUT%\80-sd-before.txt" 2>&1
-reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag" /s > "%OUT%\81-diag-before.txt" 2>&1
+pnputil /enum-devices /deviceid "ACPI\RKCPFE2C" /relations > "%OUT%\81-sd-dev-before.txt" 2>&1
 echo   %TIME%  80/81 sd-before >> "%OUT%\00-index.txt"
 
 echo.
 echo  Step 2 of 3: EJECT the card now, wait two seconds, then press a key.
 pause
 diskpart /s "%OUT%\dp3.txt" > "%OUT%\82-sd-ejected.txt" 2>&1
-reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag" /s > "%OUT%\83-diag-ejected.txt" 2>&1
+pnputil /enum-devices /deviceid "ACPI\RKCPFE2C" /relations > "%OUT%\83-sd-dev-ejected.txt" 2>&1
 echo   %TIME%  82/83 sd-ejected >> "%OUT%\00-index.txt"
 
 echo.
 echo  Step 3 of 3: RE-INSERT the card, wait two seconds, then press a key.
 pause
 diskpart /s "%OUT%\dp3.txt" > "%OUT%\84-sd-reinserted.txt" 2>&1
-reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkdwmmc\Diag" /s > "%OUT%\85-diag-reinserted.txt" 2>&1
-reg query "HKLM\SYSTEM\CurrentControlSet\Services\rkemmc\Diag" /s > "%OUT%\86-rkemmc-diag-late.txt" 2>&1
-echo   %TIME%  84/85/86 sd-reinserted >> "%OUT%\00-index.txt"
+pnputil /enum-devices /deviceid "ACPI\RKCPFE2C" /relations > "%OUT%\85-sd-dev-reinserted.txt" 2>&1
+echo   %TIME%  84/85 sd-reinserted >> "%OUT%\00-index.txt"
 del "%OUT%\dp3.txt" 2>nul
 
 echo.
-echo  Done.  Read 81 / 83 / 85 side by side: CardDetectCalls and BusOpCalls
-echo  are the numbers that answer this.
+echo  Done.  80 / 82 / 84 say whether the disk came and went; 81 / 83 / 85
+echo  say whether the controller had a child device each time.
 echo.
 
 echo done >> "%OUT%\00-index.txt"

@@ -1,5 +1,12 @@
 # Storage bring-up — RK3576 (eMMC + SD)
 
+> **2026-10-01:** the drivers this page names — `rkemmc`, `rkdwmmc`,
+> `rk3576gpio`, `dwmac` — were written from scratch and have since been
+> replaced by ports of worproject's RK3588 drivers (see the
+> [README](../README.md) and [THIRD_PARTY.md](../THIRD_PARTY.md)). What this
+> page records about the hardware still holds; what it says about those
+> drivers' code is history.
+
 RK3576 exposes three MSHC-family storage controllers, but they are **two
 different IP blocks** with very different Windows stories. Getting this right
 matters: one needs *no* driver from us, the other needs a custom one.
@@ -292,13 +299,13 @@ re-applied after every reset — the three bits above, and the DLL block at
 The SD card slot is a **dw_mmc** controller. This is the *older* Synopsys
 DesignWare Mobile Storage Host IP and is **not** SDHCI register-compatible —
 there is **no Windows inbox driver** for it. It needs a custom `sdport.sys`
-miniport: [../drivers/storage/rkdwmmc](../drivers/storage/rkdwmmc).
+miniport: [../drivers/storage/rkdwmmc](../drivers/sd/dwcmshc).
 
 Notable wiring from `Sdhc.asl`:
 - MMIO 0x2A310000, GIC SPI 283 (GSIV 283).
 - **Card detect via GPIO**, not the controller's CDETECT register:
   `GpioInt (Edge, ActiveBoth, ... "\\_SB.GPI0") { GPIO_PIN_PA7 }`. This is why
-  the GPIO driver ([rk3576gpio](../drivers/gpio/rk3576gpio)) must come first.
+  the GPIO driver ([rk3576gpio](../drivers/gpio/rk3xgpio)) must come first.
 - 4-bit bus, SDR/DDR50/SDR104 capable per `_DSD`.
 
 ## Boot implications

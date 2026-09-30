@@ -1,5 +1,12 @@
 # Windows-on-ARM driver architecture — RK3576
 
+> **2026-10-01:** the drivers this page names — `rkemmc`, `rkdwmmc`,
+> `rk3576gpio`, `dwmac` — were written from scratch and have since been
+> replaced by ports of worproject's RK3588 drivers (see the
+> [README](../README.md) and [THIRD_PARTY.md](../THIRD_PARTY.md)). What this
+> page records about the hardware still holds; what it says about those
+> drivers' code is history.
+
 This repository holds the **Windows kernel drivers** for running Windows on ARM
 (WOA) on Rockchip RK3576 boards (Radxa ROCK 4D, ArmSoM CM5-IO, and the other
 CM5 carriers). The boot firmware (TF-A BL31 + OP-TEE BL32 + U-Boot SPL + EDK2
@@ -57,11 +64,11 @@ Dependency-driven. Each stage unblocks the next.
 | 8 | Audio (SAI + ES8388) | — | PortCls/WaveRT | blocked on firmware SAI enablement; USB Audio works inbox ([AUDIO.md](AUDIO.md)) |
 | 9 | Thermal, PWM, … | various | | polish |
 
-Done: **GPIO** ([rk3576gpio](../drivers/gpio/rk3576gpio)), **I²C**
+Done: **GPIO** ([rk3576gpio](../drivers/gpio/rk3xgpio)), **I²C**
 ([rk3xi2c](../drivers/i2c/rk3xi2c)), **storage** ([STORAGE.md](STORAGE.md): eMMC
-inbox, SD [rkdwmmc](../drivers/storage/rkdwmmc)), **SPI**
+inbox, SD [rkdwmmc](../drivers/sd/dwcmshc)), **SPI**
 ([rk3xspi](../drivers/spi/rk3xspi)), **GMAC**
-([dwmac](../drivers/net/dwmac)). **USB** = inbox xHCI (PNP0D10); **display** =
+([dwmac](../drivers/net/dwc_eqos)). **USB** = inbox xHCI (PNP0D10); **display** =
 inbox BasicDisplay over UEFI GOP ([DISPLAY.md](DISPLAY.md)). All core bring-up
 peripherals are now covered; remaining work is hardware validation + a real VOP2
 WDDM driver and datapath/offload polish.

@@ -1,5 +1,12 @@
 # Windows on ARM bring-up plan — RK3576 (ArmSoM CM5-IO)
 
+> **2026-10-01:** the drivers this page names — `rkemmc`, `rkdwmmc`,
+> `rk3576gpio`, `dwmac` — were written from scratch and have since been
+> replaced by ports of worproject's RK3588 drivers (see the
+> [README](../README.md) and [THIRD_PARTY.md](../THIRD_PARTY.md)). What this
+> page records about the hardware still holds; what it says about those
+> drivers' code is history.
+
 The order in which to actually get Windows running, and what each step proves.
 The point of the ordering is that **every stage is verifiable on its own**, and
 the first two need no driver from this repo at all.
