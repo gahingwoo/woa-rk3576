@@ -357,7 +357,7 @@ jobs:
           # The Windows deployment: the script, and the same test-signed driver
           # packages this image carries, as files it can inject offline.
           New-Item -ItemType Directory -Force -Path "$env:PE_ROOT\media\woa-deploy" | Out-Null
-          Copy-Item tools\woa-deploy\deploy-windows.cmd "$env:PE_ROOT\media\woa-deploy\" -Force
+          Copy-Item tools\woa-deploy\*.cmd "$env:PE_ROOT\media\woa-deploy\" -Force
           if (Test-Path $env:DRIVER_STAGE) {
             Copy-Item $env:DRIVER_STAGE "$env:PE_ROOT\media\woa-drivers" -Recurse -Force
             Get-ChildItem "$env:PE_ROOT\media\woa-drivers" -Recurse -Filter *.inf |
