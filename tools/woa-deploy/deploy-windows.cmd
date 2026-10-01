@@ -100,7 +100,7 @@ if not defined WIM (
 )
 echo.
 echo Image: %WIM%
-dism /English /Get-ImageInfo /ImageFile:"%WIM%" | findstr /r /c:"Index" /c:"Name" /c:"Size"
+dism /English /Get-ImageInfo /ImageFile:"%WIM%"
 echo.
 set /p IDX=Which index to install (for example the one named Windows 11 Pro)?
 if "%IDX%"=="" goto :fail
@@ -108,15 +108,32 @@ dism /English /Get-ImageInfo /ImageFile:"%WIM%" /Index:%IDX% > "%TEMP%\img.txt" 
   echo Index %IDX% is not in this image.
   goto :fail
 )
-findstr /c:"Architecture : ARM64" "%TEMP%\img.txt" >nul || (
+find "Architecture : ARM64" "%TEMP%\img.txt" >nul || (
   echo Index %IDX% is not an ARM64 image.
   goto :fail
 )
-findstr /r /c:"Version : 10\.0\.2[2-5][0-9][0-9][0-9]" /c:"Version : 10\.0\.1[0-9][0-9][0-9][0-9]" "%TEMP%\img.txt" >nul || (
-  echo This image is not build 25999 or older. RK3576 is ARMv8.0: Windows 11
-  echo 24H2 ^(26100^) and later cannot run on it. Use 23H2 ^(22631^) or Windows 10.
+rem "Version : 10.0.22621" -> the fifth token, split on dots and spaces.
+rem This WinPE has find.exe but no findstr.exe (seen 2026-10-01), and sort.exe
+rem is not something to count on either; use only find.
+set BUILD=
+for /f "tokens=5 delims=. " %%v in ('type "%TEMP%\img.txt" ^| find "Version :"') do (
+  if not defined BUILD set BUILD=%%v
+)
+if not defined BUILD (
+  echo Could not read the image's build number.
   goto :fail
 )
+set /a BNUM=%BUILD% 2>nul
+if %BNUM% LSS 10000 (
+  echo Could not read the image's build number ^(got "%BUILD%"^).
+  goto :fail
+)
+if %BNUM% GTR 25999 (
+  echo This image is build %BNUM%. RK3576 is ARMv8.0: Windows 11 24H2
+  echo ^(26100^) and later cannot run on it. Use 23H2 ^(22631^) or Windows 10.
+  goto :fail
+)
+echo Build %BNUM%, ARM64.
 type "%TEMP%\img.txt" >> "%LOG%"
 
 rem --- 3. confirm, then partition --------------------------------------------
@@ -139,13 +156,22 @@ if not "%OK%"=="ERASE" (
 diskpart /s "%TEMP%\dp.txt" > "%TEMP%\parts.txt"
 type "%TEMP%\parts.txt" >> "%LOG%"
 
-rem Delete from the highest partition number down to 2; partition 1 stays.
+rem Count the partitions ("Partition ###" is the header), then delete from
+rem the highest number down to 2: removing the last one never renumbers the
+rem ones before it. Partition 1 stays.
+set NPART=0
+for /f "tokens=2" %%p in ('type "%TEMP%\parts.txt" ^| find "Partition "') do (
+  if not "%%p"=="###" set /a NPART+=1
+)
+echo partitions before: %NPART% >> "%LOG%"
+if %NPART% LSS 1 (
+  echo diskpart listed no partitions on disk %DISK%. Stopping.
+  goto :faillog
+)
 > "%TEMP%\dp.txt" echo select disk %DISK%
-for /f "tokens=2" %%p in ('findstr /r /c:"^ *Partition [0-9]" "%TEMP%\parts.txt" ^| sort /r') do (
-  if not "%%p"=="1" (
-    >> "%TEMP%\dp.txt" echo select partition %%p
-    >> "%TEMP%\dp.txt" echo delete partition override
-  )
+for /l %%i in (%NPART%,-1,2) do (
+  >> "%TEMP%\dp.txt" echo select partition %%i
+  >> "%TEMP%\dp.txt" echo delete partition override
 )
 >> "%TEMP%\dp.txt" (
   echo create partition efi size=260
