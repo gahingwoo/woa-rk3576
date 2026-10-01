@@ -1365,6 +1365,13 @@ DevicePrepareHardware(
         busMode.AutoAxiLpi = true;      // true = enter LPI after (Axi_Lpi_Entry_Interval + 1) * 64 idle clocks.
         busMode.BurstLengths = context->config.blen;
         busMode.FixedBurst = context->config.fixed_burst;
+        // The DMA enabler and the descriptors use addresses wider than 32 bits
+        // whenever the hardware supports them, but the DMA only decodes the
+        // high bits with EAME set (mainline stmmac: dma_cfg->eame). Without
+        // it a buffer above 4 GB is truncated; on RK3576, where DRAM starts at
+        // 0x40000000, that lands outside DRAM and the DMA takes a fatal bus
+        // error on the first descriptor.
+        busMode.EnhancedAddressMode = context->feature1.AddressWidth != AddressWidth_32;
         Write32(&regs->Dma_SysBus_Mode, busMode);
 
         Write32(&regs->Mac_1us_Tic_Counter, DefaultCsrRate / 1'000'000u - 1);

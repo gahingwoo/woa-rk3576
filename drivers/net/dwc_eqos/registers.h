@@ -917,7 +917,7 @@ union DmaSysBusMode_t
         UINT8 BurstLengths : 7; // BLEN4 .. BLEN256 - AXI Burst Length enable bits
         UINT8 Reserved4 : 2;
         UINT8 AutoAxiLpi : 1; // AAL - Auto AXI LPI
-        UINT8 Reserved11 : 1;
+        UINT8 EnhancedAddressMode : 1; // EAME - Enhanced Address Mode Enable (40/48-bit DMA addresses)
         UINT8 AddressAlignedBeats : 1; // AAL - Address Aligned Beats
         UINT8 Reserved13 : 1;
         UINT8 Reserved14 : 1; // ??? NetBSD sets this to 1 for mixed-burst.

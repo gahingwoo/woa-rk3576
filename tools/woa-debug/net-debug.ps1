@@ -33,7 +33,7 @@ logman stop eqos -ets 2>$null | Out-Null
 logman start eqos -p '{5d8331d3-70b3-5620-5664-db28f48a4b79}' 0xFF 5 -ets -o (Join-Path $out 'eqos.etl')
 pktmon stop 2>$null | Out-Null
 pktmon filter remove | Out-Null
-pktmon start --capture --pkt-size 0 --comp all --file-name (Join-Path $out 'pkt.etl')
+pktmon start --capture --pkt-size 0 --comp all --file-size 64 --file-name (Join-Path $out 'pkt.etl')
 
 Step 'restart the adapter (driver init + link up, traced)'
 Disable-NetAdapter -Name $name -Confirm:$false
