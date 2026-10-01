@@ -108,15 +108,22 @@ dism /English /Get-ImageInfo /ImageFile:"%WIM%" /Index:%IDX% > "%TEMP%\img.txt" 
   echo Index %IDX% is not in this image.
   goto :fail
 )
-find "Architecture : ARM64" "%TEMP%\img.txt" >nul || (
-  echo Index %IDX% is not an ARM64 image.
+rem find is case-sensitive unless told otherwise, and on 2026-10-01 a check
+rem for "ARM64" missed a genuine ARM64 image. Read the value, compare it /i.
+set ARCH=
+for /f "tokens=2 delims=:" %%a in ('type "%TEMP%\img.txt" ^| find /i "Architecture"') do (
+  for %%b in (%%a) do set ARCH=%%b
+)
+if /i not "%ARCH%"=="arm64" (
+  echo Index %IDX% reports architecture "%ARCH%", not arm64. What DISM said:
+  type "%TEMP%\img.txt"
   goto :fail
 )
 rem "Version : 10.0.22621" -> the fifth token, split on dots and spaces.
 rem This WinPE has find.exe but no findstr.exe (seen 2026-10-01), and sort.exe
 rem is not something to count on either; use only find.
 set BUILD=
-for /f "tokens=5 delims=. " %%v in ('type "%TEMP%\img.txt" ^| find "Version :"') do (
+for /f "tokens=5 delims=. " %%v in ('type "%TEMP%\img.txt" ^| find /i "Version :"') do (
   if not defined BUILD set BUILD=%%v
 )
 if not defined BUILD (
@@ -125,7 +132,8 @@ if not defined BUILD (
 )
 set /a BNUM=%BUILD% 2>nul
 if %BNUM% LSS 10000 (
-  echo Could not read the image's build number ^(got "%BUILD%"^).
+  echo Could not read the image's build number ^(got "%BUILD%"^). What DISM said:
+  type "%TEMP%\img.txt"
   goto :fail
 )
 if %BNUM% GTR 25999 (
@@ -133,7 +141,7 @@ if %BNUM% GTR 25999 (
   echo ^(26100^) and later cannot run on it. Use 23H2 ^(22631^) or Windows 10.
   goto :fail
 )
-echo Build %BNUM%, ARM64.
+echo Build %BNUM%, %ARCH%.
 type "%TEMP%\img.txt" >> "%LOG%"
 
 rem --- 3. confirm, then partition --------------------------------------------
