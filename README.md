@@ -51,7 +51,7 @@ replaced on 2026-10-01; they are in git history.
 | GPIO | `RKCP3002` | [rk3xgpio](drivers/gpio/rk3xgpio) (GpioClx) | accepts GPIO version `V2_2` | **Started**, all 5 banks¹ |
 | I²C | `RKCP3001` | [rk3xi2c](drivers/i2c/rk3xi2c) (SpbCx) | none; needs `rockchip,bclk` from the firmware² | **Started**, all 10 |
 | DMA | `ARMH0330` | [pl330dma](drivers/dma/pl330dma) | none | **Started**, all 3 |
-| Ethernet GMAC0 | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | none | **Started**; adapter present in the installed system, link not checked yet³ |
+| Ethernet GMAC0 | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | DMA enhanced address mode (EAME) on, so buffers above 4 GB work³ | **Working**: the installed system gets a DHCP lease (2026-10-01, one boot) |
 | SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | ours; RK3588 has no SPI driver | **Started**, all 5; no SPI device exercised |
 | NVMe | — (PCIe) | **inbox** stornvme | | **Working** in a stock ADK WinPE |
 | USB (xHCI) | `PNP0D10` | **inbox** usbxhci | | working for input; `XHC0` (the USB-C DWC3) is code 10 |
@@ -62,9 +62,13 @@ replaced on 2026-10-01; they are in git history.
   five banks.
 ² The firmware did not publish it, and `rk3xi2c` refuses to start without it.
   Added in firmware `de1d712`.
-³ `dwc_eqos` reads link state from the MAC's RGMII in-band status and never
-  touches MDIO. Whether CM5-IO's Motorcomm YT8531C sends in-band status the way
-  RK3588 boards' PHYs do is not known yet.
+³ The driver asked Windows for 40-bit DMA addresses but never set
+  `DMA_SysBus_Mode.EAME`, so the DMA used only the low 32 bits. RK3576 DRAM
+  starts at 0x40000000 and runs past 4 GB, so a buffer above 4 GB lands
+  outside DRAM and both DMA channels stopped with a Fatal Bus Error. RK3588,
+  whose DRAM starts at 0, truncates into DRAM instead and does not fault.
+  Mainline stmmac sets EAME whenever the DMA is wider than 32 bits. Ethernet
+  also needs firmware `4e3f7af` or later, which fixed the PHY's receive delay.
 
 Measured 2026-10-01 on CM5-IO, in WinPE built from this tree, with firmware
 `de1d712`: every one of the 26 devices above Started, and the four devices
