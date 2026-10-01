@@ -1,125 +1,104 @@
-# Installing Windows on ARM on the CM5-IO (RK3576)
+# Installing Windows on the CM5-IO
 
-Status: **done on hardware, 2026-10-01.** Windows 11 23H2 Enterprise (build
-22631.2428) installed this way boots to the desktop from the CM5-IO's eMMC.
-The first attempt did not; what it took is under
-[What it took to boot](#what-it-took-to-boot). The scripts now cover all of it,
-but that installation was repaired in place: a fresh deployment with the
-current scripts has not been run yet.
+Windows 11 23H2 Enterprise (22631.2428) installed this way boots to the
+desktop from the CM5-IO's eMMC. That installation was repaired in place after
+its first boots; a fresh run of the scripts as they are now has not been done.
 
 ## Which Windows
 
-RK3576 is 4× Cortex-A72 + 4× Cortex-A53, **ARMv8.0-A**. Windows 11 24H2 and
-later use ARMv8.1 LSE atomics throughout the kernel and cannot run on it; there
-is no firmware workaround, because an undefined instruction taken at EL1 never
-reaches EL3.
+RK3576 is ARMv8.0. Windows 11 24H2 and later need ARMv8.1 atomics and cannot
+run on it, and firmware cannot work around that.
 
-| Target | Build | Verdict |
+| Target | Build | |
 |---|---|---|
-| Windows 10 ARM64 22H2 | 19045 | works |
-| Windows 11 23H2 | 22631 | works; the target here |
-| Windows 11 24H2+ / LTSC 2024 | 26100+ | cannot boot |
+| Windows 10 ARM64 22H2 | 19045 | should work, not tried |
+| Windows 11 23H2 | 22631 | works; the one tested here |
+| Windows 11 24H2 and later | 26100+ | cannot boot |
 
-Check an image before spending time on it. `dism /Get-ImageInfo` shows the
-version, and the deploy script refuses anything newer than build 25999.
+`dism /Get-ImageInfo` shows an image's build. The deploy script refuses
+anything newer than 25999.
 
 ## Why not Windows Setup
 
-Windows 11 23H2 Setup refuses this board three ways: the eMMC is 29 GB against a
-64 GB minimum, and there is no TPM 2.0 and no Secure Boot. It would also leave
-the installed system without testsigning, which it needs from the first boot:
-Windows lives on the eMMC, so the eMMC driver (`dwcsdhc`, test-signed) is
-boot-critical.
+23H2 Setup refuses this board: the eMMC is 29 GB against a 64 GB minimum, and
+there is no TPM 2.0 or Secure Boot. The installed system also needs test
+signing from its first boot, because its boot disk is behind a test-signed
+driver. So the image is applied with DISM from this repo's WinPE.
 
-So the image is applied with DISM from this repo's WinPE instead, which already
-runs every driver here and sees the eMMC.
+## What you need
 
-## Where things live
+- Firmware 0.2.0 or later from
+  [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/releases), on eMMC
+  partition 1. Earlier builds have no working Ethernet or USB-C under Windows.
+- The WinPE image from this repo's release, on a USB stick.
+- `install.wim` or `install.esd` from a Windows 11 23H2 ARM64 ISO.
 
-- **Firmware: eMMC partition 1**, sector 64, 64 MiB (`CM5IO-emmc.img` from the
-  firmware releases). The BootROM tries the eMMC first. Never touched below.
-- **Windows: the rest of the eMMC**, about 29 GB, applied compact.
-- **Fedora: the NVMe**, untouched.
+The finished layout: firmware in eMMC partition 1 (untouched), Windows on the
+rest of the eMMC, and the NVMe untouched.
 
 ## Procedure
 
-### 1. The stick
+1. Write the WinPE image to a USB stick. It has one 515 MB FAT32 partition,
+   `WINPE`, with `woa-deploy\`, `woa-debug\` and the signed drivers in
+   `woa-drivers\`; the rest of the stick is unallocated.
+2. In the unallocated space, create an exFAT or NTFS partition and copy
+   `sources\install.wim` (or `.esd`) onto it. FAT32 cannot hold it.
+3. Take the SD card out. The script stops if it sees more than one SD/eMMC
+   disk.
+4. Boot the stick from the firmware's boot menu and wait for the collector to
+   finish. Then run
 
-Write the WinPE image from this repo's `winpe` workflow to a USB stick. It has
-one 515 MB FAT32 partition, `WINPE`, holding `woa-debug\` (the collector),
-`woa-deploy\deploy-windows.cmd` and `woa-drivers\` (the test-signed driver
-packages), and leaves the rest of the stick unallocated.
+   ```
+   E:\woa-deploy\deploy-windows.cmd
+   ```
 
-In that unallocated space create one **exFAT or NTFS** partition and copy
-`sources\install.wim` (or `install.esd`) from the Windows 11 23H2 ARM64 ISO onto
-it. FAT32 will not do: the image is larger than 4 GB.
+   with the stick's drive letter, which the collector prints.
 
-### 2. Boot WinPE
+The script:
 
-**Take the SD card out of the slot.** The script stops if it sees more than one
-SD/eMMC disk, so it cannot pick the wrong one.
+1. finds the eMMC (the one `SD\` disk of 28 to 33 GB) and checks that its first
+   partition is the firmware (offset 32768, length 67076096). Anything else and
+   it stops without writing.
+2. finds the image, lists its editions, and refuses non-ARM64 images and builds
+   newer than 25999.
+3. asks you to type `ERASE`, deletes every partition after the first, and
+   creates an ESP, an MSR and an NTFS partition.
+4. applies the image with `/Compact`, adds the drivers, runs `bcdboot`, turns on
+   test signing, makes `dwcsdhc` and `sdstor` boot-start, disables `sdbus`,
+   turns off hibernation and Fast Startup, and sets `BypassNRO` so OOBE
+   finishes offline.
 
-Boot the stick from the firmware's boot menu. The collector runs on its own;
-when it finishes, the prompt says how to start the installer.
+The log is `woa-deploy\deploy.log` on the stick.
 
-### 3. Run the installer
+## First boot
 
-```
-C:\woa-deploy\deploy-windows.cmd
-```
+Remove the stick and reboot. The firmware tries the SD slot and USB before the
+eMMC, then boots `\EFI\Boot\bootaa64.efi` from the eMMC's ESP; `bcdboot`'s
+boot entry does not reach the firmware. OOBE can finish offline. The desktop
+shows "Test Mode".
 
-(the drive letter of the stick may differ; the collector prints it). It:
-
-1. finds the eMMC (the one disk whose PNP id starts `SD\`, 28-33 GB) and checks
-   that its first partition is the firmware region: offset 32768, length
-   67076096. Anything else, and it stops without writing;
-2. finds `install.wim`/`.esd` on any volume, lists the editions and asks which
-   index; refuses non-ARM64 images and builds newer than 25999;
-3. asks you to type `ERASE`, then deletes every partition after the first and
-   creates ESP (260 MB), MSR and an NTFS Windows partition;
-4. applies the image with `/Compact`, injects `woa-drivers\` with
-   `dism /Add-Driver`, runs `bcdboot`, turns testsigning on in the new BCD, and
-   sets `BypassNRO` so OOBE can finish without a network.
-
-Everything goes to `woa-deploy\deploy.log` on the stick.
-
-### 4. First boot
-
-Remove the stick and the SD card, reboot. The firmware tries the SD slot and
-USB before the eMMC, then boots `\EFI\Boot\bootaa64.efi` from the eMMC's ESP.
-`bcdboot` did not leave a "Windows Boot Manager" entry the firmware can see, so
-that fallback path is what boots it.
-
-The first boot runs Windows' specialize pass and then OOBE, which can finish
-offline. The desktop shows "Test Mode": the drivers are test-signed.
-
-## What it took to boot
-
-The first deployment ended in `INACCESSIBLE_BOOT_DEVICE` (0x7B, second
-parameter `0xC0000034`: the boot device's name did not exist). Three separate
-causes, each found with the kernel debugger on the serial port and by reading
-the installed system's registry from Linux:
-
-1. **`dwcsdhc` was demand-start.** Right for a data disk, and why it worked in
-   WinPE; but DISM only *installs* a driver offline (binary, service, device
-   binding) when the INF makes it boot-start, and only *stages* it otherwise.
-   Its INF is boot-start now.
-2. **`sdstor` was demand-start.** It is the inbox driver for the disk on the
-   eMMC; Setup would have made it boot-start because the system disk sits on
-   it, DISM does not. `deploy-windows.cmd` sets it.
-3. **`sdbus` took the eMMC controller and kept it.** The firmware publishes the
-   eMMC as `_CID PNP0D40`, sdbus matches that, and sdbus is loaded on SD-disk
-   boots. On the first boot, while `dwcsdhc` was still demand-start, PnP bound
-   the controller to sdbus and recorded it in `Enum\ACPI\RKCP0D40`; every later
-   boot reused that binding, and sdbus cannot drive this controller. Deleting
-   the instance and disabling sdbus fixed it. `deploy-windows.cmd` now disables
-   sdbus up front; nothing on this board needs it.
-
-Those crashed boots also interrupted the specialize pass, and the next boot
-said *"The computer restarted unexpectedly or encountered an unexpected
-error"*. The standard way past it: Shift+F10, `regedit`,
-`HKLM\SYSTEM\Setup\Status\ChildCompletion`, set `setup.exe` to 3, OK. A
-deployment that boots first time does not see this.
-
-`tools/woa-deploy/add-drivers.cmd` re-injects the drivers into an existing
+`tools/woa-deploy/add-drivers.cmd` adds or updates drivers in an existing
 installation from WinPE without erasing it.
+
+## If it does not boot
+
+`INACCESSIBLE_BOOT_DEVICE` (0x7B) with second parameter `0xC0000034` means
+Windows found no driver for its boot disk. The deploy script handles the three
+causes seen so far; if you installed some other way, check them:
+
+- `dwcsdhc` must be boot-start. DISM only installs a boot-start driver
+  offline; it merely stages the others.
+- `sdstor` must be boot-start. It ships demand-start, and DISM does not change
+  that the way Setup would.
+- `sdbus` must be disabled. The eMMC's `_CID` is `PNP0D40`, sdbus matches it,
+  and once PnP has bound the controller to sdbus it keeps that binding. If it
+  already has, delete `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0D40` and
+  its entry under the `{a0a588a4-...}` class key.
+
+If a crashed first boot interrupted the specialize pass, the next boot says
+"The computer restarted unexpectedly". Press Shift+F10, open `regedit`, set
+`HKLM\SYSTEM\Setup\Status\ChildCompletion\setup.exe` to 3, and click OK.
+
+If shutdown takes minutes, Fast Startup is on: it hibernates, and the
+hibernation path through the eMMC driver hits a WHEA error. Run
+`powercfg /h off`. The deploy script and `net-debug.cmd` already do this.

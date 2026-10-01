@@ -1,18 +1,16 @@
-# Audio bring-up — RK3576 (SAI + ES8388)
+# Audio
 
-Short version: **a Windows audio (WaveRT) driver cannot be written usefully yet**
-— the RK3576 audio block is not enumerated or clocked in the firmware/ACPI, so a
-driver would have nothing correct to bind to. This is the same class of blocker
-as the display path. This doc records the verified hardware facts and the
-firmware-side prerequisites, and notes a working stopgap.
+There is no on-board audio under Windows, and a driver cannot be written yet:
+the firmware does not describe or clock the audio block. A USB audio device
+works with Windows' inbox USB Audio Class driver.
 
-## What the hardware actually is
+## The hardware
 
-RK3576 audio is the Rockchip **SAI** (Serial Audio Interface) block — **not** the
-older I²S/TDM IP that the firmware's `I2s.asl` models. There are ten instances:
+RK3576 audio is the Rockchip SAI (Serial Audio Interface), not the older
+I²S/TDM block that RK3588's drivers and the firmware's `I2s.asl` model.
 
 | Node | Base | GIC SPI | ACPI GSIV |
-|------|------|---------|-----------|
+|---|---|---|---|
 | sai0 | 0x2A600000 | 187 | 219 |
 | sai1 | 0x2A610000 | 188 | 220 |
 | sai2 | 0x2A620000 | 189 | 221 |
@@ -24,59 +22,24 @@ older I²S/TDM IP that the firmware's `I2s.asl` models. There are ten instances:
 | sai8 | 0x27EE0000 | 195 | 227 |
 | sai9 | 0x27EF0000 | 196 | 228 |
 
-Each SAI needs: an `MCLK_SAIx` + `HCLK_SAIx` clock from the CRU (and an audio
-PLL), a power domain (`PD_VO0/VO1` or the bus domain), resets, and a **DMA**
-channel on `dmac2` (the PL330). All instances are `status = "disabled"` by
-default in the device tree.
+Each SAI needs `MCLK_SAIx` and `HCLK_SAIx` from the CRU, an audio PLL, a power
+domain, resets and a DMA channel on `dmac2` (PL330). The codec is an Everest
+ES8388 (the kernel's `es8328` driver) on I²C, with a GPIO jack-detect
+interrupt; the firmware has an `Es8388.asl` for it.
 
-The codec is the Everest **ES8388** (register-compatible with the kernel's
-`es8328` driver) on **I²C**, with a jack-detect **GPIO** interrupt — see the
-firmware `Es8388.asl` (`I2cSerialBusV2` + `GpioInt`, addressed by board macros).
+## What is missing in the firmware
 
-## Why it's blocked (firmware / ACPI prerequisites)
+- `I2s.asl` still has RK3588 addresses and CRU offsets, says so in its header,
+  and is included in no RK3576 DSDT.
+- It models I²S, not SAI, and its `_HID` is `RKCP3003`, which is already this
+  project's SPI. An SAI device needs its own ID.
+- Nothing sets up the audio PLL, the SAI clocks, the `dmac2` channel, the power
+  domain or the resets.
 
-1. **No correct ACPI.** The firmware's `I2s.asl` carries a file-header warning
-   that it contains **RK3588** MMIO addresses and CRU offsets throughout and
-   "must NOT be included in any RK3576 platform DSDT until all addresses have
-   been corrected." No RK3576 board DSDT includes it, and no `.dsc` sets
-   `PcdI2S0Supported`. So Windows sees **no** audio controller.
-2. **Wrong IP model.** Even with corrected addresses, `I2s.asl` models the old
-   I²S, while RK3576 is SAI — a different register block. The ACPI must describe
-   SAI (addresses above) with its DMA + interrupt.
-3. **No clock / PLL / DMA / power setup.** SAI needs the audio PLL, `MCLK/HCLK`,
-   the `dmac2` channel, the power domain and resets brought up. None of this is
-   established for RK3576 in firmware; the `I2s.asl` `_DSM` pokes RK3588 CRU/PLL
-   registers.
-4. **`_HID` collision.** `I2s.asl` uses `_HID "RKCP3003"`, which this project
-   already assigns to **SPI**. A distinct id (e.g. `RKCP3004`) is needed for the
-   SAI device.
+## What a driver would need after that
 
-A WaveRT miniport binds an ACPI device, programs the controller's audio DMA to
-move samples to/from the WaveRT cyclic buffer, and configures the codec over
-I²C. Without items 1–3 there is no device, no clock and no DMA to drive, so the
-driver has nothing to attach to.
-
-## What a real driver would need (later, large)
-
-- A **PortCls/WaveRT** miniport (wave + topology) — a C++ COM driver, the audio
-  equivalent in size/complexity to the storage/NIC class extensions.
-- SAI controller init + the **PL330 (dmac2)** audio DMA to/from the WaveRT buffer.
-- **ES8388 codec** init over I²C (port the `es8328.c` register sequence: power,
-  clocking, format, DAC/ADC routing, volume) — this driver depends on the
-  [I²C driver](../drivers/i2c/rk3xi2c) and the jack-detect [GPIO](../drivers/gpio/rk3xgpio).
-- Firmware ACPI exposing the SAI + codec with correct resources (items 1–4).
-
-## Stopgap that works today: USB Audio
-
-The USB host stack is the inbox xHCI driver (see [ARCHITECTURE.md](ARCHITECTURE.md)),
-and Windows has an **inbox USB Audio Class** driver. A USB DAC / headset / dock
-gives working audio **with no driver from this repo** — the practical path to
-sound on RK3576 WOA until the on-board SAI + ES8388 prerequisites are done in
-firmware.
-
-## Recommendation
-
-Do not write the WaveRT driver yet. Sequence the firmware-side work first
-(SAI ACPI enumeration + clocks/DMA/power), then port the codec sequence and build
-the WaveRT miniport. Use USB Audio in the meantime. The SAI addresses/IRQs above
-are the starting point for the firmware ACPI work.
+A PortCls/WaveRT miniport that moves samples between the WaveRT buffer and the
+SAI through `dmac2`, and an ES8388 init over I²C ported from `es8328.c`. It
+would use the [I²C](../drivers/i2c/rk3xi2c) and [GPIO](../drivers/gpio/rk3xgpio)
+drivers already here. The audio drivers imported from worproject target
+RK3588's I²S-TDM and are not built into the WinPE image.

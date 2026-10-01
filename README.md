@@ -2,150 +2,68 @@
 
 [![CI](https://github.com/gahingwoo/woa-rk3576/actions/workflows/ci.yml/badge.svg)](https://github.com/gahingwoo/woa-rk3576/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Target](https://img.shields.io/badge/target-Windows%20on%20ARM64-blue)]()
-[![SoC](https://img.shields.io/badge/SoC-RK3576-green)]()
 
-Windows-on-ARM (WOA) kernel drivers for Rockchip **RK3576** boards — Radxa
-ROCK 4D, ArmSoM CM5-IO and the other CM5 carriers.
+Windows on Arm drivers for Rockchip RK3576 boards, and the tools to install
+Windows on one. Tested on the ArmSoM CM5-IO.
 
-Windows on ARM discovers hardware through **ACPI**, not Device Tree. The boot
-firmware and ACPI tables live in the separate
-[EDK2 RK3576 port](https://github.com/gahingwoo/edk2-rk3576); **this repo is
-the Windows `.sys`/`.inf` driver packages** for the SoC peripherals Windows has
-no inbox driver for, plus docs for the peripherals that *do* use inbox drivers.
-
-## Windows 11 on the CM5-IO
+Windows finds hardware through ACPI. The firmware and its ACPI tables are in
+[edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576); this repo has the
+drivers for the controllers Windows has no inbox driver for.
 
 ![Windows 11 23H2 on the ArmSoM CM5-IO, booted from its eMMC](docs/imgs/cm5io-win11-desktop.jpg)
 
-**2026-10-01: Windows 11 23H2 Enterprise (build 22631.2428) boots to the
-desktop from the CM5-IO's eMMC.** Task Manager reports a Rockchip RK3576 with
-all eight cores, 3.7 GB of memory, the eMMC as C: (type SD), the NVMe, the SD
-card as a removable disk, and the Ethernet adapter. Test Mode, because the
-drivers are test-signed.
-
-It was installed with [`tools/woa-deploy`](tools/woa-deploy) from this repo's
-WinPE, not with Windows Setup, which refuses this board. The procedure and what
-it took to make it boot are in [docs/INSTALL.md](docs/INSTALL.md).
-
-## Where the drivers come from
-
-The drivers are ported from
-[worproject/Rockchip-Windows-Drivers](https://github.com/worproject/Rockchip-Windows-Drivers),
-the RK3588 set that runs on real silicon. Every one of them binds the same
-ACPI `_HID` the RK3576 firmware publishes for the same IP block. They were
-imported unmodified at `e00e70d`, and each RK3576 change is a separate commit
-on top, so `git log -- drivers/<class>/<name>` shows exactly what differs from
-RK3588 and why. Provenance and licences per driver:
-[THIRD_PARTY.md](THIRD_PARTY.md).
-
-The drivers this repo had before were written from scratch. They were
-replaced on 2026-10-01; they are in git history.
+Windows 11 23H2 boots to the desktop from the CM5-IO's eMMC with all eight
+cores, 3.7 GB of memory, the NVMe, the SD card, Ethernet and both USB
+controllers. It needs firmware 0.2.0 or later. How to install it:
+[docs/INSTALL.md](docs/INSTALL.md).
 
 ## Status
 
-| Peripheral | `_HID` | Driver | RK3576 changes | State |
-|---|---|---|---|---|
-| eMMC | `RKCP0D40` | [dwcsdhc](drivers/sd/dwcsdhc) (sdport) | card clock from the CRU instead of a BL31 SiP call; vendor bits restored after reset | **Windows 11 boots from it**; boot-start, see [INSTALL](docs/INSTALL.md) |
-| SD card | `RKCPFE2C` | [dwcmshc](drivers/sd/dwcmshc) (sdport) | clock from the CRU, phases in the controller's `TIMING_CON`, 3.3 V only | **The card is a disk** in WinPE and in the installed system; goes and comes back on eject/reinsert |
-| GPIO | `RKCP3002` | [rk3xgpio](drivers/gpio/rk3xgpio) (GpioClx) | accepts GPIO version `V2_2` | **Started**, all 5 banks¹ |
-| I²C | `RKCP3001` | [rk3xi2c](drivers/i2c/rk3xi2c) (SpbCx) | none; needs `rockchip,bclk` from the firmware² | **Started**, all 10 |
-| DMA | `ARMH0330` | [pl330dma](drivers/dma/pl330dma) | none | **Started**, all 3 |
-| Ethernet GMAC0 | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | DMA enhanced address mode (EAME) on, so buffers above 4 GB work³ | **Working**: the installed system gets a DHCP lease (2026-10-01, one boot) |
-| SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | ours; RK3588 has no SPI driver | **Started**, all 5; no SPI device exercised |
-| NVMe | — (PCIe) | **inbox** stornvme | | **Working** in a stock ADK WinPE |
-| USB (xHCI) | `PNP0D10` | **inbox** usbxhci | | **Working** on both controllers. The USB-C port (`XHC0`) runs at USB 2.0 and needs firmware `5edeab0` or later⁴ |
-| Display | — | **inbox** BasicDisplay | | UEFI GOP framebuffer ([display](docs/DISPLAY.md)) |
-| Audio | — | not ported | | RK3576 uses SAI, not RK3588's I²S-TDM ([audio](docs/AUDIO.md)) |
+| Peripheral | `_HID` | Driver | State |
+|---|---|---|---|
+| eMMC | `RKCP0D40` | [dwcsdhc](drivers/sd/dwcsdhc) (sdport) | works; Windows boots from it |
+| SD card | `RKCPFE2C` | [dwcmshc](drivers/sd/dwcmshc) (sdport) | works, including eject and reinsert |
+| GPIO | `RKCP3002` | [rk3xgpio](drivers/gpio/rk3xgpio) (GpioClx) | started, all 5 banks; SD card detect runs through it |
+| I²C | `RKCP3001` | [rk3xi2c](drivers/i2c/rk3xi2c) (SpbCx) | started, all 10; no I²C device exercised |
+| DMA | `ARMH0330` | [pl330dma](drivers/dma/pl330dma) | started, all 3 |
+| Ethernet | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | works, gets a DHCP lease |
+| SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | started, all 5; no SPI device exercised |
+| NVMe | PCIe | inbox stornvme | works |
+| USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
+| Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
+| Audio | none | none | not possible yet ([audio](docs/AUDIO.md)) |
 
-¹ The driver it replaced, written for this repo, had started on four of the
-  five banks.
-² The firmware did not publish it, and `rk3xi2c` refuses to start without it.
-  Added in firmware `de1d712`.
-³ The driver asked Windows for 40-bit DMA addresses but never set
-  `DMA_SysBus_Mode.EAME`, so the DMA used only the low 32 bits. RK3576 DRAM
-  starts at 0x40000000 and runs past 4 GB, so a buffer above 4 GB lands
-  outside DRAM and both DMA channels stopped with a Fatal Bus Error. RK3588,
-  whose DRAM starts at 0, truncates into DRAM instead and does not fault.
-  Mainline stmmac sets EAME whenever the DMA is wider than 32 bits. Ethernet
-  also needs firmware `4e3f7af` or later, which fixed the PHY's receive delay.
+Most of these were measured once, on 2026-10-01.
 
-⁴ `XHC0` was code 10 (`STATUS_INVALID_PARAMETER`) in every build before
-  that. Its U3 port starts disabled in the USB GRF, so the controller reported
-  one port while its USB3 protocol capability still described "ports from 2,
-  count 0"; usbxhci rejects that. The firmware now enables the port at
-  ExitBootServices. No USBDP PHY driver brings that port up, so USB 3.0 speeds
-  on the USB-C port are not available.
+## Where the drivers come from
 
-Measured 2026-10-01 on CM5-IO, in WinPE built from this tree, with firmware
-`de1d712`: every one of the 26 devices above Started, and the four devices
-Windows reports a problem with are the ones it always has (the RTC and a UART
-with Linux-only IDs, `XHC0`, one `PRP0001`). One boot, with an SD card in the
-slot. At boot the SD card was first identified with an all-zero CID; after
-reinsertion it read the real one. Both times the disk worked.
+They are ports of
+[worproject/Rockchip-Windows-Drivers](https://github.com/worproject/Rockchip-Windows-Drivers),
+the RK3588 drivers, which bind the same ACPI `_HID`s. The import at `e00e70d`
+is one unmodified commit, and each RK3576 change is its own commit after it,
+so `git log -- drivers/<class>/<name>` shows what differs from RK3588:
 
-WinPE carries every class extension these need (sdport, GpioClx, SpbCx,
-NetAdapterCx): all of them started there.
+- dwcsdhc: card clock from the CRU instead of a TF-A SiP call; Rockchip vendor
+  bits restored after each controller reset.
+- dwcmshc: clock from the CRU, phases in the controller's `TIMING_CON`, 3.3 V
+  only.
+- rk3xgpio: accepts GPIO version `V2_2`.
+- dwc_eqos: turns on the DMA's 40-bit addressing (EAME). RK3576's memory runs
+  past 4 GB, and without it every transfer to a buffer above 4 GB faulted.
+- rk3xspi is written for this repo; the RK3588 set has no SPI driver.
 
-### Before the port
-
-The from-scratch eMMC driver ran identification through EXT_CSD and stopped at
-the bus-width test; the SD driver never issued a command.
-
-**An SD card in the slot used to make Windows crawl or bugcheck**, because no
-UEFI driver quiesced the SD controller at ExitBootServices. Fixed in the
-firmware; four clean card-present boots since, which is not yet a number to
-trust. Record whether a card is in the slot on every run.
+Licences per driver: [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ## Build
 
-These are **ARM64 kernel drivers**. The ported set builds as one solution, the
-way worproject's own CI builds it:
-
 ```cmd
 msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64
-```
-
-Packages land in `build\ARM64\Release\Output\<driver>\`. SPI builds on its own:
-
-```cmd
 msbuild drivers\spi\rk3xspi\rk3xspi.vcxproj /p:Configuration=Release /p:Platform=ARM64
 ```
 
-CI builds both on every push and fails on any error
-([ci.yml](.github/workflows/ci.yml)). The WinPE image workflow
-([winpe.yml](.github/workflows/winpe.yml)) injects eMMC, SD, GPIO, I²C, DMA,
-GMAC and SPI, test-signed. It leaves the audio drivers out: there is no RK3576
-audio device in the DSDT, and `rk3xi2sbus` binds `RKCP3003`, which is our SPI.
-
-Toolchain, test-signing and install: [docs/BUILDING.md](docs/BUILDING.md).
-
-## Firmware (ACPI) changes
-
-The RK3576 EDK2 port is part of this project; the ACPI changes the drivers
-depend on are made there.
-
-In the firmware's `main`:
-
-- ACPI built into the image, with `PcdConfigTableModeDefault = 0x3` so one
-  image serves both FDT (Linux) and ACPI (Windows).
-- The RK3588 SCMI device removed: it rang a doorbell RK3576 does not have, and
-  it is what made Setup bugcheck.
-- The MCFG and MADT fixes that got NVMe working and all eight CPUs up.
-- The eMMC `_DSD` and `_DSM` corrected for RK3576.
-- Both SD/eMMC controllers quiesced at ExitBootServices.
-
-Added in `de1d712` for the ported drivers:
-
-- `rockchip,bclk` on every I²C controller.
-- The SD UHS modes off and `no-1-8-v` set: nothing Windows can reach switches
-  the card's signalling to 1.8 V on RK3576.
-
-Still open:
-
-- **Audio.** RK3576 has SAI blocks, not RK3588's I²S-TDM, so `rk3xi2sbus`
-  does not apply. The stale `I2s.asl` also reuses `RKCP3003`, our SPI's HID.
-  See [docs/AUDIO.md](docs/AUDIO.md).
+CI builds both on every push. The WinPE workflow also test-signs the drivers
+and puts them in a WinPE image. Details: [docs/BUILDING.md](docs/BUILDING.md).
+Debugging tools: [docs/DEBUGGING.md](docs/DEBUGGING.md).
 
 ## Layout
 
@@ -153,34 +71,32 @@ Still open:
 build/                  RockchipDrivers.sln, common.props (from worproject)
 drivers/
   sd/dwcsdhc/           eMMC host (DWCMSHC)        sdport miniport
-  sd/dwcmshc/           SD card host (dw_mmc)      sdport miniport
-  gpio/rk3xgpio/        GPIO controller            GpioClx
-  i2c/rk3xi2c/          I²C controller             SpbCx
-  dma/pl330dma/         PL330 DMA controller
-  net/dwc_eqos/         GMAC Ethernet (DWC EQoS)   NetAdapterCx
-  spi/rk3xspi/          SPI controller             SpbCx (ours)
-  audio/                I²S, codec, audio port (RK3588 only, not injected)
+  sd/dwcmshc/           SD host (dw_mmc)           sdport miniport
+  gpio/rk3xgpio/        GPIO                       GpioClx
+  i2c/rk3xi2c/          I²C                        SpbCx
+  dma/pl330dma/         PL330 DMA
+  net/dwc_eqos/         Ethernet (DWC EQoS)        NetAdapterCx
+  spi/rk3xspi/          SPI                        SpbCx (written here)
+  audio/                RK3588 I²S drivers, not built into the image
   lib/, shared/, include/, sd/rk_sip_sdmmc_lib/   shared code
-  inc/                  RK3576 SoC constants (ours)
-docs/                   bring-up plan, install, storage, display, audio
 tools/
-  make-woa-usb.sh       build a Windows install stick that boots without NVRAM
-  woa-debug/            collect.cmd: what to run inside WinPE, and why
+  woa-deploy/           install Windows to the eMMC from WinPE
+  woa-debug/            collect data in WinPE and in the installed system
+  make-woa-usb.sh       a Windows Setup stick that boots without NVRAM
+docs/
 .github/workflows/      CI and the WinPE image
 ```
 
 ## Acknowledgements
 
-Thanks to **[ArmSoM](https://www.armsom.org/)** for sponsoring the **CM5** module
-and the **CM5-IO** carrier board this project is developed on.
+Thanks to [ArmSoM](https://www.armsom.org/) for sponsoring the CM5 module and
+the CM5-IO carrier this project is developed on.
 
-The drivers are the work of the
-[worproject Rockchip-Windows-Drivers](https://github.com/worproject/Rockchip-Windows-Drivers)
-authors: Mario Bălănică (SD/eMMC), CoolStar (GPIO, I²C, DMA, audio) and
-Doug Cook (Ethernet), building on Microsoft's driver samples.
+The drivers are the work of the worproject Rockchip-Windows-Drivers authors:
+Mario Bălănică (SD/eMMC), CoolStar (GPIO, I²C, DMA, audio) and Doug Cook
+(Ethernet), building on Microsoft's driver samples.
 
 ## License
 
-Code written for this repository is MIT — see [LICENSE](LICENSE). The ported
-drivers keep their own licences (MIT, Apache-2.0, BSD); see
-[THIRD_PARTY.md](THIRD_PARTY.md).
+Code written for this repo is MIT ([LICENSE](LICENSE)). The ported drivers keep
+their own licences; see [THIRD_PARTY.md](THIRD_PARTY.md).
