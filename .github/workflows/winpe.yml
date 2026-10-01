@@ -353,6 +353,10 @@ jobs:
                     "$env:PE_ROOT\mount\Windows\System32\startnet.cmd" -Force
           New-Item -ItemType Directory -Force -Path "$env:PE_ROOT\media\woa-debug" | Out-Null
           Copy-Item tools\woa-debug\collect.cmd "$env:PE_ROOT\media\woa-debug\" -Force
+          # For the installed system, run from the stick: net-debug, net-update, usb-debug.
+          Copy-Item tools\woa-debug\*-debug.cmd, tools\woa-debug\*-debug.ps1, `
+                    tools\woa-debug\net-update.cmd, tools\woa-debug\net-update.ps1 `
+                    "$env:PE_ROOT\media\woa-debug\" -Force
 
           # The Windows deployment: the script, and the same test-signed driver
           # packages this image carries, as files it can inject offline.
