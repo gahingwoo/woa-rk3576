@@ -14,6 +14,7 @@ on:
   push:
     paths:
       - 'tools/woa-debug/**'
+      - 'tools/woa-deploy/**'
       - '.github/workflows/winpe.yml'
 
 permissions:
@@ -352,6 +353,16 @@ jobs:
                     "$env:PE_ROOT\mount\Windows\System32\startnet.cmd" -Force
           New-Item -ItemType Directory -Force -Path "$env:PE_ROOT\media\woa-debug" | Out-Null
           Copy-Item tools\woa-debug\collect.cmd "$env:PE_ROOT\media\woa-debug\" -Force
+
+          # The Windows deployment: the script, and the same test-signed driver
+          # packages this image carries, as files it can inject offline.
+          New-Item -ItemType Directory -Force -Path "$env:PE_ROOT\media\woa-deploy" | Out-Null
+          Copy-Item tools\woa-deploy\deploy-windows.cmd "$env:PE_ROOT\media\woa-deploy\" -Force
+          if (Test-Path $env:DRIVER_STAGE) {
+            Copy-Item $env:DRIVER_STAGE "$env:PE_ROOT\media\woa-drivers" -Recurse -Force
+            Get-ChildItem "$env:PE_ROOT\media\woa-drivers" -Recurse -Filter *.inf |
+              ForEach-Object { Write-Host "   media: $($_.FullName)" }
+          }
 
           & '${{ steps.dism.outputs.exe }}' /Unmount-Image /MountDir:"$env:PE_ROOT\mount" /Commit
           if ($LASTEXITCODE) { throw "unmount failed: $LASTEXITCODE" }

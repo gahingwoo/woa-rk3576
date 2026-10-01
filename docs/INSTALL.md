@@ -1,126 +1,88 @@
 # Installing Windows on ARM on the CM5-IO (RK3576)
 
-Status: **not yet completed on hardware.** EDK2 boots, ACPI installs correctly
-(verified with `acpiview` on the board), and all five drivers build — but no
-Windows install has run yet. This document is the procedure being followed, with
-the two constraints that shape it.
+Status: **the procedure below has not been run end to end yet.** Everything it
+depends on has been seen working on hardware on 2026-10-01: the WinPE this repo
+builds boots, all of this repo's drivers start in it, and the eMMC is a 29 GB
+disk there.
 
-## Constraint 1: the build you install matters
+## Which Windows
 
-RK3576 is 4× Cortex-A72 + 4× Cortex-A53 = **ARMv8.0-A**. Windows 11 24H2 and
-later are compiled with ARMv8.1 **LSE atomic** instructions (`CAS`, `LDADD`, …)
-inlined throughout the kernel and drivers. ARMv8.0 does not implement them, and
-there is no firmware-side fix: an undefined-instruction exception taken in EL1
-goes to EL1's own vector table — the Windows kernel's — so EL3/TF-A never sees it
-and cannot emulate.
+RK3576 is 4× Cortex-A72 + 4× Cortex-A53, **ARMv8.0-A**. Windows 11 24H2 and
+later use ARMv8.1 LSE atomics throughout the kernel and cannot run on it; there
+is no firmware workaround, because an undefined instruction taken at EL1 never
+reaches EL3.
 
 | Target | Build | Verdict |
 |---|---|---|
-| Windows 10 ARM64 22H2 | 19045 | works; consumer support ended 2025-10-14 |
-| Windows 11 23H2 | 22631 | works; Enterprise/Education serviced to 2026-11-10 |
-| Windows 11 24H2+ / **LTSC 2024** | 26100 | **expected not to boot** — ARMv8.1 required |
+| Windows 10 ARM64 22H2 | 19045 | works |
+| Windows 11 23H2 | 22631 | works; the target here |
+| Windows 11 24H2+ / LTSC 2024 | 26100+ | cannot boot |
 
-This is the same ceiling the Raspberry Pi 4 has, for the same reason (also
-Cortex-A72). RPi5 (Cortex-A76, ARMv8.2) is unaffected — as is RK3588
-(Cortex-A76/A55), which is why the RK3588 Windows port does not hit this.
+Check an image before spending time on it. `dism /Get-ImageInfo` shows the
+version, and the deploy script refuses anything newer than build 25999.
 
-Check what an ISO actually is before spending time on it — the media label lies,
-the WIM metadata does not:
+## Why not Windows Setup
 
-```bash
-python3 - /path/to/iso/sources/install.wim <<'PY'
-import struct, sys, re
-with open(sys.argv[1], "rb") as f:
-    hdr = f.read(0xD0)
-    size, off, _ = struct.unpack_from("<QqQ", hdr, 0x48)   # rhXmlData
-    f.seek(off); xml = f.read(size & 0x00FFFFFFFFFFFFFF).decode("utf-16-le", "replace")
-for t in ("BUILD", "ARCH", "DISPLAYNAME"):
-    print(t, sorted(set(re.findall(rf"<{t}>(.*?)</{t}>", xml))))
-PY
-```
+Windows 11 23H2 Setup refuses this board three ways: the eMMC is 29 GB against a
+64 GB minimum, and there is no TPM 2.0 and no Secure Boot. It would also leave
+the installed system without testsigning, which it needs from the first boot:
+Windows lives on the eMMC, so the eMMC driver (`dwcsdhc`, test-signed) is
+boot-critical.
 
-`ARCH 12` is ARM64. `BUILD 26100` is 24H2 — including "LTSC 2024", whose
-long support window does not help here.
+So the image is applied with DISM from this repo's WinPE instead, which already
+runs every driver here and sees the eMMC.
 
-## Constraint 2: UEFI variables do not persist
+## Where things live
 
-The CM5-IO carrier's SPI NOR is only 64 KB — too small for the UEFI image, so the
-firmware boots from SD/eMMC, and the variable store has nowhere durable to live:
-
-```
-FvbFindBootDiskDevice: WARNING: Variable store changes will NOT persist!
-```
-
-Two things cause it, both in the EDK2 port: `PcdFitImageFlashAddress` defaults to
-`0` and no platform overrides it, so `RkFvbDxe` looks for the FIT at disk offset 0
-and gets `FDT_ERR_BADMAGIC`; and the SD/eMMC FIT payload is the bare
-`BL33_AP_UEFI.Fv` with no NV region appended (the SPI layout has one at
-`0xFC0000`). Fixing that properly is tracked separately.
-
-Meanwhile the install works **without** NVRAM, because UEFI falls back to a fixed
-path on any ESP:
-
-- Windows ISOs already ship `\efi\boot\bootaa64.efi`, so **Setup boots from USB
-  with no NVRAM entry needed**.
-- The **installed** system does not: Setup writes its boot entry to NVRAM only.
-  So after the file-copy phase, `bootmgfw.efi` has to be copied to the fallback
-  path on the internal ESP — see step 4.
-
-## Where firmware and OS live
-
-Keep them on **different** devices:
-
-- **Firmware on SD.** The board boots this today (`Trying to boot from MMC2`).
-- **Windows on eMMC.** Setup will lay down its own GPT starting at sector 2048,
-  which overwrites anything at sector 64 — so do not leave firmware you care
-  about on the eMMC. That is fine: with no valid `RKNS` header on eMMC the
-  BootROM falls through to the SD card.
-
-Note the BootROM prefers eMMC over SD, so a bootable eMMC image wins. If SD
-firmware is being ignored, that is why.
+- **Firmware: eMMC partition 1**, sector 64, 64 MiB (`CM5IO-emmc.img` from the
+  firmware releases). The BootROM tries the eMMC first. Never touched below.
+- **Windows: the rest of the eMMC**, about 29 GB, applied compact.
+- **Fedora: the NVMe**, untouched.
 
 ## Procedure
 
-### 1. Build the install stick
+### 1. The stick
 
-```bash
-sudo bash tools/make-woa-usb.sh /dev/sdX /path/to/mounted/iso
-```
+Write the WinPE image from this repo's `winpe` workflow to a USB stick. It has
+one 515 MB FAT32 partition, `WINPE`, holding `woa-debug\` (the collector),
+`woa-deploy\deploy-windows.cmd` and `woa-drivers\` (the test-signed driver
+packages), and leaves the rest of the stick unallocated.
 
-The script refuses anything that is not a removable USB disk, requires typing
-`ERASE`, then makes one FAT32 ESP spanning the stick, copies the ISO, and splits
-`install.wim` only if it exceeds FAT32's 4 GiB per-file limit.
+In that unallocated space create one **exFAT or NTFS** partition and copy
+`sources\install.wim` (or `install.esd`) from the Windows 11 23H2 ARM64 ISO onto
+it. FAT32 will not do: the image is larger than 4 GB.
 
-### 2. Boot Setup
+### 2. Boot WinPE
 
-Plug the stick in, power on, and pick it from the EDK2 boot menu. This needs only
-inbox drivers — GOP display, xHCI for keyboard/mouse.
+**Take the SD card out of the slot.** The script stops if it sees more than one
+SD/eMMC disk, so it cannot pick the wrong one.
 
-### 3. Install to eMMC
+Boot the stick from the firmware's boot menu. The collector runs on its own;
+when it finishes, the prompt says how to start the installer.
 
-The eMMC is DWCMSHC and the firmware's `Emmc.asl` carries `_CID "PNP0D40"`, so the
-**inbox SDHCI driver** binds and Setup sees the disk with no driver injection.
-Let Setup partition the whole eMMC.
-
-### 4. Make the installed system bootable without NVRAM
-
-Do this **before** the first boot of the installed OS. At Setup's reboot, enter
-the UEFI Shell and copy the boot manager to the fallback path on the eMMC ESP:
+### 3. Run the installer
 
 ```
-Shell> map -r
-Shell> FS0:                       # the eMMC ESP
-FS0:\> cp EFI\Microsoft\Boot\bootmgfw.efi EFI\BOOT\BOOTAA64.EFI
+C:\woa-deploy\deploy-windows.cmd
 ```
 
-Adjust `FS0:` to whichever mapping is the eMMC ESP (`map -r` lists them; the ESP
-has `\EFI\Microsoft\Boot`). From then on the firmware finds Windows on every cold
-boot with no NVRAM involved.
+(the drive letter of the stick may differ; the collector prints it). It:
 
-### 5. Load the RK3576 drivers
+1. finds the eMMC (the one disk whose PNP id starts `SD\`, 28-33 GB) and checks
+   that its first partition is the firmware region: offset 32768, length
+   67076096. Anything else, and it stops without writing;
+2. finds `install.wim`/`.esd` on any volume, lists the editions and asks which
+   index; refuses non-ARM64 images and builds newer than 25999;
+3. asks you to type `ERASE`, then deletes every partition after the first and
+   creates ESP (260 MB), MSR and an NTFS Windows partition;
+4. applies the image with `/Compact`, injects `woa-drivers\` with
+   `dism /Add-Driver`, runs `bcdboot`, turns testsigning on in the new BCD, and
+   sets `BypassNRO` so OOBE can finish without a network.
 
-Enable test-signing first, then install in dependency order — GPIO → I²C → SD →
-GMAC → SPI. See [BUILDING.md](BUILDING.md) for signing and `pnputil`, and
-[BRINGUP-PLAN.md](BRINGUP-PLAN.md) for what each stage proves.
+Everything goes to `woa-deploy\deploy.log` on the stick.
 
-Keep a serial console attached throughout: **UART0 @ `0x2AD40000`, 1500000 8N1**.
+### 4. First boot
+
+Remove the stick, reboot. The firmware keeps UEFI variables on the eMMC, so
+`bcdboot`'s "Windows Boot Manager" entry survives; `\EFI\Boot\bootaa64.efi` is
+there as well if it does not.

@@ -201,6 +201,14 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Services\sdbus" /s >> "%OUT%\78-service
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\sdstor" /s >> "%OUT%\78-services.txt" 2>&1
 echo   %TIME%  78-services >> "%OUT%\00-index.txt"
 
+rem --- PROBE: the network -----------------------------------------------------
+rem dwc_eqos reads link state from the MAC's RGMII in-band status and never
+rem touches MDIO, so whether the GMAC shows a link depends on the PHY sending
+rem in-band status. With a cable plugged in, "Media disconnected" on the
+rem DesignWare adapter means it does not.
+ipconfig /all > "%OUT%\79a-ipconfig.txt" 2>&1
+echo   %TIME%  79a-ipconfig >> "%OUT%\00-index.txt"
+
 rem --- PROBE: the last bugcheck, if the firmware kept it -------------------
 rem WinPE has no crash dump, but a bugcheck that happened before a warm
 rem reboot can leave its code here. DRIVER_PNP_WATCHDOG is 0x1D5 and names
