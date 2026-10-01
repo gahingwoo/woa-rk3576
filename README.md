@@ -54,7 +54,7 @@ replaced on 2026-10-01; they are in git history.
 | Ethernet GMAC0 | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | DMA enhanced address mode (EAME) on, so buffers above 4 GB work³ | **Working**: the installed system gets a DHCP lease (2026-10-01, one boot) |
 | SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | ours; RK3588 has no SPI driver | **Started**, all 5; no SPI device exercised |
 | NVMe | — (PCIe) | **inbox** stornvme | | **Working** in a stock ADK WinPE |
-| USB (xHCI) | `PNP0D10` | **inbox** usbxhci | | working for input; `XHC0` (the USB-C DWC3) is code 10 |
+| USB (xHCI) | `PNP0D10` | **inbox** usbxhci | | **Working** on both controllers. The USB-C port (`XHC0`) runs at USB 2.0 and needs firmware `5edeab0` or later⁴ |
 | Display | — | **inbox** BasicDisplay | | UEFI GOP framebuffer ([display](docs/DISPLAY.md)) |
 | Audio | — | not ported | | RK3576 uses SAI, not RK3588's I²S-TDM ([audio](docs/AUDIO.md)) |
 
@@ -69,6 +69,13 @@ replaced on 2026-10-01; they are in git history.
   whose DRAM starts at 0, truncates into DRAM instead and does not fault.
   Mainline stmmac sets EAME whenever the DMA is wider than 32 bits. Ethernet
   also needs firmware `4e3f7af` or later, which fixed the PHY's receive delay.
+
+⁴ `XHC0` was code 10 (`STATUS_INVALID_PARAMETER`) in every build before
+  that. Its U3 port starts disabled in the USB GRF, so the controller reported
+  one port while its USB3 protocol capability still described "ports from 2,
+  count 0"; usbxhci rejects that. The firmware now enables the port at
+  ExitBootServices. No USBDP PHY driver brings that port up, so USB 3.0 speeds
+  on the USB-C port are not available.
 
 Measured 2026-10-01 on CM5-IO, in WinPE built from this tree, with firmware
 `de1d712`: every one of the 26 devices above Started, and the four devices
