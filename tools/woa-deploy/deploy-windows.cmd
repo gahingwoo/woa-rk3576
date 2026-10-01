@@ -235,6 +235,17 @@ rem it on every later boot, and sdbus cannot drive this controller: seen
 rem 2026-10-01 as INACCESSIBLE_BOOT_DEVICE with Enum\ACPI\RKCP0D40 on sdbus.
 rem Nothing on this board needs it; the SD slot is dwcmshc.
 reg add HKLM\WOASYS\ControlSet00!CS!\Services\sdbus /v Start /t REG_DWORD /d 4 /f >> "%LOG%" 2>&1
+rem No hibernation and no Fast Startup. A Fast Startup shutdown hibernates
+rem through the dump stack (hiber_dwcsdhc, which cannot reprogram the eMMC
+rem clock in dump mode) and ended in WHEA_INTERNAL_ERROR 0x122 on 2026-10-01;
+rem it also leaves NTFS marked hibernated, so nothing can write the volume
+rem from Linux afterwards. PowerSimulateHiberBugcheck=0x40 is worproject's
+rem workaround for the same WHEA shutdown crash on RK3588
+rem (drivers/whea_shutdown_fix).
+reg add HKLM\WOASYS\ControlSet00!CS!\Control\Power /v HibernateEnabled /t REG_DWORD /d 0 /f >> "%LOG%" 2>&1
+reg add HKLM\WOASYS\ControlSet00!CS!\Control\Power /v HibernateEnabledDefault /t REG_DWORD /d 0 /f >> "%LOG%" 2>&1
+reg add "HKLM\WOASYS\ControlSet00!CS!\Control\Session Manager\Power" /v HiberbootEnabled /t REG_DWORD /d 0 /f >> "%LOG%" 2>&1
+reg add "HKLM\WOASYS\ControlSet00!CS!\Control\Session Manager" /v PowerSimulateHiberBugcheck /t REG_DWORD /d 0x40 /f >> "%LOG%" 2>&1
 reg unload HKLM\WOASYS >> "%LOG%" 2>&1
 
 echo Letting OOBE finish without a network.
