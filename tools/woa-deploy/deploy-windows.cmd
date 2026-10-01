@@ -220,6 +220,16 @@ if not exist S:\EFI\Boot\bootaa64.efi (
   copy /y S:\EFI\Microsoft\Boot\bootmgfw.efi S:\EFI\Boot\bootaa64.efi >> "%LOG%" 2>&1
 )
 
+echo Making the eMMC's disk driver boot-start.
+rem The system disk is an SD-class device, served by the inbox sdstor, which
+rem the image ships demand-start. Setup would make it boot-start; DISM does
+rem not, and without it the first boot ends in INACCESSIBLE_BOOT_DEVICE.
+reg load HKLM\WOASYS W:\Windows\System32\config\SYSTEM >> "%LOG%" 2>&1 || goto :faillog
+set CS=1
+for /f "tokens=3" %%v in ('reg query HKLM\WOASYS\Select /v Current ^| find "Current"') do set /a CS=%%v
+reg add HKLM\WOASYS\ControlSet00!CS!\Services\sdstor /v Start /t REG_DWORD /d 0 /f >> "%LOG%" 2>&1
+reg unload HKLM\WOASYS >> "%LOG%" 2>&1
+
 echo Letting OOBE finish without a network.
 reg load HKLM\WOAOFF W:\Windows\System32\config\SOFTWARE >> "%LOG%" 2>&1 || goto :faillog
 reg add HKLM\WOAOFF\Microsoft\Windows\CurrentVersion\OOBE /v BypassNRO /t REG_DWORD /d 1 /f >> "%LOG%" 2>&1

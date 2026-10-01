@@ -50,6 +50,11 @@ if defined START if not "%START%"=="0x0" (
   reg add %SVC%\dwcsdhc /v Start /t REG_DWORD /d 0 /f >> "%LOG%" 2>&1
 )
 
+rem sdstor, the inbox driver for the disk on the eMMC, is demand-start in the
+rem image. Setup would have made it boot-start because the system disk sits on
+rem it; DISM does not. Seen 0x3 on 2026-10-01.
+reg add %SVC%\sdstor /v Start /t REG_DWORD /d 0 /f >> "%LOG%" 2>&1
+
 echo.
 echo Start type in the installed system ^(0x0 = boot start^):
 for %%s in (dwcsdhc sdstor sdport) do (
@@ -61,7 +66,8 @@ for %%s in (dwcsdhc sdstor sdport) do (
 reg unload HKLM\WOASYS >> "%LOG%" 2>&1
 
 echo.
-echo Done. dwcsdhc and sdstor should both read 0x0. Take the sticks out and
+echo Done. dwcsdhc and sdstor should both read 0x0 ^(sdport is a library and
+echo has no service entry^). Take the sticks out and
 echo reboot into Windows. Log: %LOG%
 goto :end
 
