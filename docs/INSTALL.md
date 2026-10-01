@@ -1,9 +1,11 @@
 # Installing Windows on ARM on the CM5-IO (RK3576)
 
-Status: **the procedure below has not been run end to end yet.** Everything it
-depends on has been seen working on hardware on 2026-10-01: the WinPE this repo
-builds boots, all of this repo's drivers start in it, and the eMMC is a 29 GB
-disk there.
+Status: **done on hardware, 2026-10-01.** Windows 11 23H2 Enterprise (build
+22631.2428) installed this way boots to the desktop from the CM5-IO's eMMC.
+The first attempt did not; what it took is under
+[What it took to boot](#what-it-took-to-boot). The scripts now cover all of it,
+but that installation was repaired in place: a fresh deployment with the
+current scripts has not been run yet.
 
 ## Which Windows
 
@@ -83,6 +85,41 @@ Everything goes to `woa-deploy\deploy.log` on the stick.
 
 ### 4. First boot
 
-Remove the stick, reboot. The firmware keeps UEFI variables on the eMMC, so
-`bcdboot`'s "Windows Boot Manager" entry survives; `\EFI\Boot\bootaa64.efi` is
-there as well if it does not.
+Remove the stick and the SD card, reboot. The firmware tries the SD slot and
+USB before the eMMC, then boots `\EFI\Boot\bootaa64.efi` from the eMMC's ESP.
+`bcdboot` did not leave a "Windows Boot Manager" entry the firmware can see, so
+that fallback path is what boots it.
+
+The first boot runs Windows' specialize pass and then OOBE, which can finish
+offline. The desktop shows "Test Mode": the drivers are test-signed.
+
+## What it took to boot
+
+The first deployment ended in `INACCESSIBLE_BOOT_DEVICE` (0x7B, second
+parameter `0xC0000034`: the boot device's name did not exist). Three separate
+causes, each found with the kernel debugger on the serial port and by reading
+the installed system's registry from Linux:
+
+1. **`dwcsdhc` was demand-start.** Right for a data disk, and why it worked in
+   WinPE; but DISM only *installs* a driver offline (binary, service, device
+   binding) when the INF makes it boot-start, and only *stages* it otherwise.
+   Its INF is boot-start now.
+2. **`sdstor` was demand-start.** It is the inbox driver for the disk on the
+   eMMC; Setup would have made it boot-start because the system disk sits on
+   it, DISM does not. `deploy-windows.cmd` sets it.
+3. **`sdbus` took the eMMC controller and kept it.** The firmware publishes the
+   eMMC as `_CID PNP0D40`, sdbus matches that, and sdbus is loaded on SD-disk
+   boots. On the first boot, while `dwcsdhc` was still demand-start, PnP bound
+   the controller to sdbus and recorded it in `Enum\ACPI\RKCP0D40`; every later
+   boot reused that binding, and sdbus cannot drive this controller. Deleting
+   the instance and disabling sdbus fixed it. `deploy-windows.cmd` now disables
+   sdbus up front; nothing on this board needs it.
+
+Those crashed boots also interrupted the specialize pass, and the next boot
+said *"The computer restarted unexpectedly or encountered an unexpected
+error"*. The standard way past it: Shift+F10, `regedit`,
+`HKLM\SYSTEM\Setup\Status\ChildCompletion`, set `setup.exe` to 3, OK. A
+deployment that boots first time does not see this.
+
+`tools/woa-deploy/add-drivers.cmd` re-injects the drivers into an existing
+installation from WinPE without erasing it.

@@ -14,6 +14,20 @@ firmware and ACPI tables live in the separate
 the Windows `.sys`/`.inf` driver packages** for the SoC peripherals Windows has
 no inbox driver for, plus docs for the peripherals that *do* use inbox drivers.
 
+## Windows 11 on the CM5-IO
+
+![Windows 11 23H2 on the ArmSoM CM5-IO, booted from its eMMC](docs/imgs/cm5io-win11-desktop.jpg)
+
+**2026-10-01: Windows 11 23H2 Enterprise (build 22631.2428) boots to the
+desktop from the CM5-IO's eMMC.** Task Manager reports a Rockchip RK3576 with
+all eight cores, 3.7 GB of memory, the eMMC as C: (type SD), the NVMe, the SD
+card as a removable disk, and the Ethernet adapter. Test Mode, because the
+drivers are test-signed.
+
+It was installed with [`tools/woa-deploy`](tools/woa-deploy) from this repo's
+WinPE, not with Windows Setup, which refuses this board. The procedure and what
+it took to make it boot are in [docs/INSTALL.md](docs/INSTALL.md).
+
 ## Where the drivers come from
 
 The drivers are ported from
@@ -32,12 +46,12 @@ replaced on 2026-10-01; they are in git history.
 
 | Peripheral | `_HID` | Driver | RK3576 changes | State |
 |---|---|---|---|---|
-| eMMC | `RKCP0D40` | [dwcsdhc](drivers/sd/dwcsdhc) (sdport) | card clock from the CRU instead of a BL31 SiP call; vendor bits restored after reset | **Started; the eMMC is a disk** (29 GB), first time under Windows |
-| SD card | `RKCPFE2C` | [dwcmshc](drivers/sd/dwcmshc) (sdport) | clock from the CRU, phases in the controller's `TIMING_CON`, 3.3 V only | **Started; the card is a disk**, and it goes and comes back on eject/reinsert |
+| eMMC | `RKCP0D40` | [dwcsdhc](drivers/sd/dwcsdhc) (sdport) | card clock from the CRU instead of a BL31 SiP call; vendor bits restored after reset | **Windows 11 boots from it**; boot-start, see [INSTALL](docs/INSTALL.md) |
+| SD card | `RKCPFE2C` | [dwcmshc](drivers/sd/dwcmshc) (sdport) | clock from the CRU, phases in the controller's `TIMING_CON`, 3.3 V only | **The card is a disk** in WinPE and in the installed system; goes and comes back on eject/reinsert |
 | GPIO | `RKCP3002` | [rk3xgpio](drivers/gpio/rk3xgpio) (GpioClx) | accepts GPIO version `V2_2` | **Started**, all 5 banks¹ |
 | I²C | `RKCP3001` | [rk3xi2c](drivers/i2c/rk3xi2c) (SpbCx) | none; needs `rockchip,bclk` from the firmware² | **Started**, all 10 |
 | DMA | `ARMH0330` | [pl330dma](drivers/dma/pl330dma) | none | **Started**, all 3 |
-| Ethernet GMAC0 | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | none | **Started**; link not checked yet³ |
+| Ethernet GMAC0 | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | none | **Started**; adapter present in the installed system, link not checked yet³ |
 | SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | ours; RK3588 has no SPI driver | **Started**, all 5; no SPI device exercised |
 | NVMe | — (PCIe) | **inbox** stornvme | | **Working** in a stock ADK WinPE |
 | USB (xHCI) | `PNP0D10` | **inbox** usbxhci | | working for input; `XHC0` (the USB-C DWC3) is code 10 |
@@ -62,18 +76,15 @@ reinsertion it read the real one. Both times the disk worked.
 WinPE carries every class extension these need (sdport, GpioClx, SpbCx,
 NetAdapterCx): all of them started there.
 
-### What the board had shown before the port
+### Before the port
 
-WinPE boots and runs. All 8 CPUs come up at 1608 MHz, and the NVMe works on the
-inbox driver. The from-scratch eMMC driver ran identification through EXT_CSD
-and stopped at the bus-width test; the SD driver never issued a command.
+The from-scratch eMMC driver ran identification through EXT_CSD and stopped at
+the bus-width test; the SD driver never issued a command.
 
 **An SD card in the slot used to make Windows crawl or bugcheck**, because no
 UEFI driver quiesced the SD controller at ExitBootServices. Fixed in the
 firmware; four clean card-present boots since, which is not yet a number to
 trust. Record whether a card is in the slot on every run.
-
-![Windows 10 21H2 ARM64 Setup on ArmSoM CM5-IO](docs/imgs/cm5io-windows.png)
 
 ## Build
 

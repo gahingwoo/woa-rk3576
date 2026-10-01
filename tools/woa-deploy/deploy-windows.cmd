@@ -220,7 +220,7 @@ if not exist S:\EFI\Boot\bootaa64.efi (
   copy /y S:\EFI\Microsoft\Boot\bootmgfw.efi S:\EFI\Boot\bootaa64.efi >> "%LOG%" 2>&1
 )
 
-echo Making the eMMC's disk driver boot-start.
+echo Making the eMMC's disk driver boot-start, and keeping sdbus off the eMMC.
 rem The system disk is an SD-class device, served by the inbox sdstor, which
 rem the image ships demand-start. Setup would make it boot-start; DISM does
 rem not, and without it the first boot ends in INACCESSIBLE_BOOT_DEVICE.
@@ -228,6 +228,13 @@ reg load HKLM\WOASYS W:\Windows\System32\config\SYSTEM >> "%LOG%" 2>&1 || goto :
 set CS=1
 for /f "tokens=3" %%v in ('reg query HKLM\WOASYS\Select /v Current ^| find "Current"') do set /a CS=%%v
 reg add HKLM\WOASYS\ControlSet00!CS!\Services\sdstor /v Start /t REG_DWORD /d 0 /f >> "%LOG%" 2>&1
+rem Disable the inbox sdbus. Firmware publishes the eMMC as _CID PNP0D40, so
+rem sdbus matches it, and sdbus has BootFlags for SD-disk boots. If it ever
+rem wins the eMMC controller during a boot, PnP records that binding and keeps
+rem it on every later boot, and sdbus cannot drive this controller: seen
+rem 2026-10-01 as INACCESSIBLE_BOOT_DEVICE with Enum\ACPI\RKCP0D40 on sdbus.
+rem Nothing on this board needs it; the SD slot is dwcmshc.
+reg add HKLM\WOASYS\ControlSet00!CS!\Services\sdbus /v Start /t REG_DWORD /d 4 /f >> "%LOG%" 2>&1
 reg unload HKLM\WOASYS >> "%LOG%" 2>&1
 
 echo Letting OOBE finish without a network.
