@@ -11,7 +11,7 @@ rem this WinPE already runs the eMMC driver, so the disk is visible.
 rem
 rem What it does, in order, stopping at the first thing that is not as
 rem expected:
-rem   1. find the eMMC: exactly one disk whose PNP id starts SD\, 28-33 GB,
+rem   1. find the eMMC: exactly one disk whose PNP id starts SD\, 28-33 or 57-63 GB,
 rem      whose first partition is the firmware region: starts at sector 64,
 rem      64 MiB long (the layout CM5IO-emmc.img ships). That partition holds
 rem      the idblock and the UEFI firmware and is never touched.
@@ -60,12 +60,16 @@ if not "%NDISK%"=="1" (
 
 set SIZE=
 for /f "tokens=2 delims==" %%a in ('wmic diskdrive where "Index=%DISK%" get Size /value ^| find "="') do for %%b in (%%a) do set SIZE=%%b
-rem 11 digits, 28..33 GB. set /a is 32-bit, so compare the leading digits.
+rem 11 digits, and one of the eMMC sizes this has been written for: 28..33 GB
+rem (the CM5-IO's 32 GB part) or 57..63 GB (the TaishanPi 3M's 64 GB part,
+rem 62008590336 bytes). set /a is 32-bit, so compare the leading digits.
 if "!SIZE:~10,1!"=="" goto :badsize
 if not "!SIZE:~11,1!"=="" goto :badsize
 set /a GB=1!SIZE:~0,2!-100
-if %GB% LSS 28 goto :badsize
-if %GB% GTR 33 goto :badsize
+set SIZEOK=
+if %GB% GEQ 28 if %GB% LEQ 33 set SIZEOK=1
+if %GB% GEQ 57 if %GB% LEQ 63 set SIZEOK=1
+if not defined SIZEOK goto :badsize
 
 set P0OFF=
 set P0SIZE=
@@ -260,7 +264,7 @@ echo menu should offer "Windows Boot Manager"; if it does not, pick the eMMC.
 goto :end
 
 :badsize
-echo Disk %DISK% is %SIZE% bytes, not the 28-33 GB eMMC this is written for.
+echo Disk %DISK% is %SIZE% bytes, not a 28-33 GB or 57-63 GB eMMC this is written for.
 goto :fail
 :badfw
 echo Disk %DISK% partition 1 starts at %P0OFF% and is %P0SIZE% bytes long.
