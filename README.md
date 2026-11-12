@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Windows on Arm drivers for Rockchip RK3576 boards, and the tools to install
-Windows on one. Tested on the ArmSoM CM5-IO.
+Windows on one. Tested on the ArmSoM CM5-IO and the LCKFB TaishanPi 3M.
 
 Windows finds hardware through ACPI. The firmware and its ACPI tables are in
 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576); this repo has the
@@ -34,6 +34,25 @@ controllers. It needs firmware 0.2.0 or later. How to install it:
 | Audio | none | none | not possible yet ([audio](docs/AUDIO.md)) |
 
 Most of these were measured once, on 2026-10-01.
+
+## LCKFB TaishanPi 3M
+
+The same drivers, unchanged, on a second board. On 13 November 2026 Windows
+11 23H2 (22631.2428) was deployed to the TaishanPi 3M's 64 GB eMMC with the
+WinPE and the script from this repo, and boots to the desktop from it. It
+needs the TaishanPi firmware from the
+[0.3.0-tspi3m.1 pre-release](https://github.com/gahingwoo/edk2-rk3576/releases/tag/0.3.0-tspi3m.1)
+of edk2-rk3576, with the firmware on the eMMC.
+
+Seen on that one installation: eight cores, 3.8 GB of memory, the eMMC as the
+boot disk, Ethernet at 1 Gbps with a DHCP lease and a 5 MB download, USB
+keyboard, mouse and storage on the USB-A ports. The SD controller, GPIO, I2C,
+DMA and SPI drivers all start; none of them was exercised beyond that, and no
+SD card was tried. The board was provided by LCKFB.
+
+Not available: the USB-C port (left out of the board's ACPI tables), WiFi and
+Bluetooth, audio, the RTC (so the clock is wrong until it syncs) and the EC20
+modem.
 
 ## Where the drivers come from
 

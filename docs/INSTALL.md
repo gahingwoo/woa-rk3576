@@ -1,5 +1,8 @@
 # Installing Windows on the CM5-IO
 
+The same procedure installed Windows on the LCKFB TaishanPi 3M; what differs
+there is in [its own section](#lckfb-taishanpi-3m) at the end.
+
 Windows 11 23H2 Enterprise (22631.2428) installed this way boots to the
 desktop from the CM5-IO's eMMC. That installation was repaired in place after
 its first boots; a fresh run of the scripts as they are now has not been done.
@@ -56,7 +59,7 @@ rest of the eMMC, and the NVMe untouched.
 
 The script:
 
-1. finds the eMMC (the one `SD\` disk of 28 to 33 GB) and checks that its first
+1. finds the eMMC (the one `SD\` disk of 28 to 33 GB, or 57 to 63 GB) and checks that its first
    partition is the firmware (offset 32768, length 67076096). Anything else and
    it stops without writing.
 2. finds the image, lists its editions, and refuses non-ARM64 images and builds
@@ -102,3 +105,25 @@ If a crashed first boot interrupted the specialize pass, the next boot says
 If shutdown takes minutes, Fast Startup is on: it hibernates, and the
 hibernation path through the eMMC driver hits a WHEA error. Run
 `powercfg /h off`. The deploy script and `net-debug.cmd` already do this.
+
+## LCKFB TaishanPi 3M
+
+Done once, on 13 November 2026, with Windows 11 Enterprise 23H2 (22631.2428).
+
+- Firmware: the TaishanPi images from the
+  [0.3.0-tspi3m.1 pre-release](https://github.com/gahingwoo/edk2-rk3576/releases/tag/0.3.0-tspi3m.1)
+  of edk2-rk3576, written to the eMMC ("Option A" there). That gives the same
+  firmware partition the script checks for. With the firmware on an SD card
+  instead the script stops, because it then sees two SD/eMMC disks.
+- The eMMC is 62008590336 bytes. The script accepts 57 to 63 GB since
+  `5c671a3`; the WinPE image in release 0.1.0 predates that, so replace
+  `woa-deploy\deploy-windows.cmd` on the stick with the one from this repo.
+- Windows Setup from a plain install stick starts on this board but does not
+  see the eMMC, for the reason given above: the driver is not inbox.
+- The stick has to be on a USB-A port. The USB-C port is not in the board's
+  ACPI tables.
+- Do not make the stick with Ventoy. Its UDF driver stops with a synchronous
+  exception on RK3576.
+
+Everything else is as for the CM5-IO.
+
