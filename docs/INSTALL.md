@@ -116,8 +116,9 @@ Done once, on 13 November 2026, with Windows 11 Enterprise 23H2 (22631.2428).
   firmware partition the script checks for. With the firmware on an SD card
   instead the script stops, because it then sees two SD/eMMC disks.
 - The eMMC is 62008590336 bytes. The script accepts 57 to 63 GB since
-  `5c671a3`; the WinPE image in release 0.1.0 predates that, so replace
-  `woa-deploy\deploy-windows.cmd` on the stick with the one from this repo.
+  `5c671a3`, which is in the WinPE image from release 0.1.1 on. With the
+  0.1.0 image, replace `woa-deploy\deploy-windows.cmd` on the stick with
+  the one from this repo.
 - Windows Setup from a plain install stick starts on this board but does not
   see the eMMC, for the reason given above: the driver is not inbox.
 - The stick has to be on a USB-A port. The USB-C port is not in the board's
