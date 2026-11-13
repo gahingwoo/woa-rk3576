@@ -103,15 +103,25 @@ Environment:
 // this board ships does not implement that service.
 //
 // CRU_CLKSEL_CON(89): [15:14] mux, [13:8] divider - 1, upper half is the
-// write mask. The same values as the firmware's own Emmc.asl _DSM.
+// write mask.
+//
+// The mux parents are the full PLL outputs: 0 = GPLL, 1 = CPLL, 2 = xin24m
+// (RK3576 TRM clk_gpll_mux / clk_cpll_mux / xin_osc0_func; mainline Linux
+// clk-rk3576.c lists gpll, cpll, xin24m). GPLL runs at 1188 MHz and CPLL at
+// 1000 MHz, as rk3576.dtsi and U-Boot SPL set them. GPLL was read back on a
+// TaishanPi 3M on 2026-11-13: GPLL_CON0 0xC6, CON1 0x42, 24 MHz * 198 / 4.
+//
+// This file used to treat mux 0 as a 400 MHz tap. A 52 MHz request became
+// GPLL / 8 = 148.5 MHz, and files written to the eMMC came back different.
 //
 
 #define RK3576_CRU_CLKSEL_CON89         0x27200464
 #define RK3576_CRU_EMMC_WRITE_MASK      0xFF000000
-#define RK3576_CRU_EMMC_MUX_GPLL_400M   (0u << 14)
-#define RK3576_CRU_EMMC_MUX_XIN_24M     (2u << 14)
+#define RK3576_CRU_EMMC_MUX(_m)         (((ULONG)(_m)) << 14)
 #define RK3576_CRU_EMMC_DIV(_n)         ((((ULONG)(_n)) - 1) << 8)
-#define RK3576_CRU_EMMC_PARENT_400M     400000000UL
+#define RK3576_CRU_EMMC_DIV_MAX         64
+#define RK3576_CRU_EMMC_PARENT_GPLL     1188000000UL
+#define RK3576_CRU_EMMC_PARENT_CPLL     1000000000UL
 #define RK3576_CRU_EMMC_PARENT_24M      24000000UL
 
 //

@@ -1299,26 +1299,46 @@ DwcSdhcRkSetClock(
     if (s_CruClkSel != NULL) {
 
         //
-        // 400 MHz from GPLL for anything the crystal cannot reach, 24 MHz
-        // from the crystal below that (the 400 kHz identification clock is
-        // only reachable from there). Round the divider up so the card is
-        // never clocked faster than asked.
+        // Take the parent that gets closest to the requested rate without
+        // going over it, rounding each divider up so the card is never
+        // clocked faster than asked. 52 MHz gives GPLL / 23 = 51.65 MHz,
+        // 200 MHz gives CPLL / 5, and 400 kHz gives xin24m / 60.
         //
 
-        if (FrequencyHz >= RK3576_CRU_EMMC_PARENT_24M) {
-            Divider = (RK3576_CRU_EMMC_PARENT_400M + FrequencyHz - 1) / FrequencyHz;
-            Value = RK3576_CRU_EMMC_MUX_GPLL_400M;
-        } else {
-            Divider = (RK3576_CRU_EMMC_PARENT_24M + FrequencyHz - 1) / FrequencyHz;
-            Value = RK3576_CRU_EMMC_MUX_XIN_24M;
+        static const ULONG ParentHz[] = {
+            RK3576_CRU_EMMC_PARENT_GPLL,
+            RK3576_CRU_EMMC_PARENT_CPLL,
+            RK3576_CRU_EMMC_PARENT_24M
+        };
+        ULONG BestHz = 0;
+        ULONG BestMux = 2;
+        ULONG Mux;
+
+        Divider = RK3576_CRU_EMMC_DIV_MAX;
+        for (Mux = 0; Mux < ARRAYSIZE(ParentHz); Mux++) {
+            ULONG Div = (ParentHz[Mux] + FrequencyHz - 1) / FrequencyHz;
+            ULONG Hz;
+
+            if (Div < 1) {
+                Div = 1;
+            }
+            if (Div > RK3576_CRU_EMMC_DIV_MAX) {
+                continue;
+            }
+
+            Hz = ParentHz[Mux] / Div;
+            if ((Hz <= FrequencyHz) && (Hz > BestHz)) {
+                BestHz = Hz;
+                BestMux = Mux;
+                Divider = Div;
+            }
         }
 
-        if (Divider < 1) {
-            Divider = 1;
-        } else if (Divider > 64) {
-            Divider = 64;
-        }
+        //
+        // Nothing reaches a rate this low: the slowest clock there is.
+        //
 
+        Value = RK3576_CRU_EMMC_MUX(BestMux);
         Value |= RK3576_CRU_EMMC_WRITE_MASK | RK3576_CRU_EMMC_DIV(Divider);
         WRITE_REGISTER_ULONG((volatile ULONG *)s_CruClkSel, Value);
     }
