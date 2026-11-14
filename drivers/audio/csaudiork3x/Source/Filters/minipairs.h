@@ -21,6 +21,7 @@ Abstract:
 #include "hdmitoptable.h"
 #include "speakertoptable.h"
 #include "speakerwavtable.h"
+#include "hdmiwavtable.h"
 
 #include "micjacktopo.h"
 #include "micarraytopo.h"
@@ -135,12 +136,12 @@ ENDPOINT_MINIPAIR HdmiMiniports =
     L"WaveHdmi",                                         // make sure this or the template name matches with KSNAME_WaveSpeaker in the inf's [Strings] section
     NULL,                                                   // optional template name
     CreateMiniportWaveRTCsAudioRk3x,
-    &SpeakerWaveMiniportFilterDescriptor,
+    &HdmiWaveMiniportFilterDescriptor,                      // 24 in 32-bit, see hdmiwavtable.h
     0,                                                      // Interface properties
     NULL,
-    SPEAKER_DEVICE_MAX_CHANNELS,
-    SpeakerPinDeviceFormatsAndModes,
-    SIZEOF_ARRAY(SpeakerPinDeviceFormatsAndModes),
+    HDMI_DEVICE_MAX_CHANNELS,
+    HdmiPinDeviceFormatsAndModes,
+    SIZEOF_ARRAY(HdmiPinDeviceFormatsAndModes),
     SpeakerTopologyPhysicalConnections,
     SIZEOF_ARRAY(SpeakerTopologyPhysicalConnections),
     ENDPOINT_NO_FLAGS,

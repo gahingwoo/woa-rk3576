@@ -96,6 +96,7 @@
     <ClInclude Include="speakertopo.h" />
     <ClInclude Include="speakertoptable.h" />
     <ClInclude Include="speakerwavtable.h" />
+    <ClInclude Include="hdmiwavtable.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

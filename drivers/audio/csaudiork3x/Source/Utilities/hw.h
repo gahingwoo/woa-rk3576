@@ -52,6 +52,7 @@ typedef struct CSAUDIOARG {
 
 #if USERKHW
 #include "rk3x.h"
+#include "sai.h"
 #include <pl330dma.h>
 
 union baseaddr {
@@ -126,6 +127,7 @@ protected:
 public:
     RK_TPLG rkTPLG;
     BOOLEAN isJack;
+    BOOLEAN isSai;      // RK3576 SAI instead of the RK3588 I2S/TDM block
 
 protected:
     struct rk_stream outputStream;
@@ -136,6 +138,14 @@ protected:
     void i2s_update32(UINT32 reg, UINT32 mask, UINT32 val);
 
     NTSTATUS connectDMA();
+
+    // SAI (RK3576), hw.cpp
+    BOOLEAN sai_poll(UINT32 reg, UINT32 mask, UINT32 want);
+    NTSTATUS sai_init();
+    void sai_deinit();
+    void sai_play();
+    void sai_stop();
+    BOOLEAN sai_irq();
 #endif
 
 public:
