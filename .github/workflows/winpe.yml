@@ -71,8 +71,9 @@ jobs:
           # rather than the controller's CDETECT.
           #
           # Injected from the solution: eMMC, SD, GPIO, I2C, DMA, GMAC. Not the
-          # audio drivers: the RK3576 DSDT publishes no audio device, and
-          # rk3xi2sbus binds RKCP3003, which is the HID our SPI controllers use.
+          # audio drivers: only firmware built with PcdHdmiAudioPreset
+          # publishes the SAI6 device they bind (RKCP3004), and they have not
+          # run on hardware.
           $solutionDrivers = @('dwcsdhc', 'dwcmshc', 'rk3xgpio', 'rk3xi2c', 'pl330dma', 'dwc_eqos')
           $projects = @(
             'drivers/spi/rk3xspi/rk3xspi.vcxproj'

@@ -1,8 +1,8 @@
 # Audio
 
-There is no on-board audio under Windows, and a driver cannot be written yet:
-the firmware does not describe or clock the audio block. A USB audio device
-works with Windows' inbox USB Audio Class driver.
+There is no on-board audio under Windows yet. A USB audio device works with
+Windows' inbox USB Audio Class driver. HDMI audio is written but has not run
+on hardware; see [HDMI audio](#hdmi-audio-not-run-on-hardware) below.
 
 ## The hardware
 
@@ -43,3 +43,30 @@ SAI through `dmac2`, and an ES8388 init over I²C ported from `es8328.c`. It
 would use the [I²C](../drivers/i2c/rk3xi2c) and [GPIO](../drivers/gpio/rk3xgpio)
 drivers already here. The audio drivers imported from worproject target
 RK3588's I²S-TDM and are not built into the WinPE image.
+
+## HDMI audio (not run on hardware)
+
+Branch `sai-hdmi-audio` here and branch `acpi-hdmi-audio` of edk2-rk3576
+add one fixed-format HDMI render endpoint: 48 kHz, stereo, 24 valid bits in
+32-bit samples. Nothing of it has run on a board.
+
+The path, from mainline `rk3576.dtsi` (`hdmi_sound`): SAI6 (0x27D50000,
+GSIV 225, TX on `dmac2` request 4) is the I²S master and feeds the
+DW-HDMI-QP inside the SoC. Windows has no driver for the HDMI controller, so
+the firmware sets it up once, at ExitBootServices, with
+`PcdHdmiAudioPreset`: `mclk_sai6` = 12.288 MHz from `clk_audio_frac_0`, and
+the controller's audio path for 48 kHz 2-channel L-PCM (N 6144, CTS the TMDS
+rate / 1000, channel status, audio InfoFrame, ACR/AUDI/AUDS packets). It
+then publishes `\_SB.SAI6`, `RKCP3004`, with `"rockchip,tplg" = "hdmi"`
+and `"rockchip,sai" = 1`.
+
+On the driver side, `rk3xi2sbus` binds `RKCP3004` (not `RKCP3003`, which is
+the SPI here) and `csaudiork3x` programs the SAI when `"rockchip,sai"` is
+set: bit-clock master, two 32-bit slots, sclk = 64 fs, kept running between
+streams. The HDMI topology installs no capture endpoint.
+
+Neither audio driver is in the WinPE image or added by the deploy script.
+To try it: flash a firmware image with the preset on (the branch's TaishanPi
+3M build has it on), install `rk3xi2sbus`, `csaudiork3x` and `pl330dma`
+from the CI artifact with test signing on, and look for "Rockchip SAI Bus"
+and a digital output in Sound settings.
