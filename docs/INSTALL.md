@@ -30,11 +30,21 @@ driver. So the image is applied with DISM from this repo's WinPE.
 
 ## What you need
 
-- Firmware 0.2.0 or later from
-  [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/releases), on eMMC
-  partition 1. Earlier builds have no working Ethernet or USB-C under Windows.
-- The WinPE image from this repo's release, on a USB stick.
+- The latest firmware from
+  [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/releases/latest), on
+  eMMC partition 1. It can be written from the browser at
+  [flash.gahingwoo.com](https://flash.gahingwoo.com/).
+- The WinPE image from this repo's
+  [release 0.1.1](https://github.com/gahingwoo/woa-rk3576/releases/latest)
+  or later, on a USB stick.
 - `install.wim` or `install.esd` from a Windows 11 23H2 ARM64 ISO.
+
+Do not mix in older parts. Firmware before 0.3.0 and the drivers of 0.1.0
+both ran the eMMC at 148.5 MHz instead of 52 MHz, and files written under
+Windows could come back different with no error reported. Firmware before
+0.2.0 also has no working Ethernet or USB-C under Windows. For the CM5-IO
+the first firmware images with the clock fix are those of 0.4.0, and no
+installation has been done with them yet.
 
 The finished layout: firmware in eMMC partition 1 (untouched), Windows on the
 rest of the eMMC, and the NVMe untouched.
@@ -108,23 +118,41 @@ hibernation path through the eMMC driver hits a WHEA error. Run
 
 ## LCKFB TaishanPi 3M
 
-Done once, on 13 November 2026, with Windows 11 Enterprise 23H2 (22631.2428).
+Installed once, on 13 November 2026, with Windows 11 Enterprise 23H2
+(22631.2428) and firmware 0.3.0. That installation has since booted with
+firmware 0.4.0 and 0.4.1.
 
-- Firmware: the TaishanPi images from the
-  [0.3.0-tspi3m.1 pre-release](https://github.com/gahingwoo/edk2-rk3576/releases/tag/0.3.0-tspi3m.1)
-  of edk2-rk3576, written to the eMMC ("Option A" there). That gives the same
-  firmware partition the script checks for. With the firmware on an SD card
-  instead the script stops, because it then sees two SD/eMMC disks.
-- The eMMC is 62008590336 bytes. The script accepts 57 to 63 GB since
-  `5c671a3`, which is in the WinPE image from release 0.1.1 on. With the
-  0.1.0 image, replace `woa-deploy\deploy-windows.cmd` on the stick with
-  the one from this repo.
+- Firmware: the TaishanPi 3M image from the
+  [latest edk2-rk3576 release](https://github.com/gahingwoo/edk2-rk3576/releases/latest),
+  written to the eMMC as the whole image: "UEFI firmware, whole image" at
+  [flash.gahingwoo.com](https://flash.gahingwoo.com/), or
+  `rkdeveloptool wl 0` with the `emmc` file. That creates the firmware
+  partition the script checks for. It also replaces what the eMMC boots
+  today: LCKFB's stock system will not start again until the stock firmware
+  is flashed back.
+- To update the firmware later, under an installed Windows, use "UEFI
+  firmware, keep the partitions". The whole image would erase the partition
+  table.
+- The firmware has to be on the eMMC. With the firmware on an SD card the
+  script stops, because it then sees two SD/eMMC disks.
+- The eMMC is 62008590336 bytes. The script accepts 57 to 63 GB from the
+  WinPE image of release 0.1.1 on.
+- The stick has to be on a USB-A port. The firmware does not use the USB-C
+  port, and it is not in the board's ACPI tables.
+- Use a USB keyboard and mouse. Touch works in the firmware's menus and not
+  in WinPE or Windows.
+- With LCKFB's 800x1280 DSI screen attached, the firmware uses it instead of
+  HDMI, and Windows shows its picture there in portrait and cannot rotate it
+  yet. An installed Windows has been seen booting that way. The installation
+  itself was done over HDMI and has not been repeated on the screen. To
+  install over HDMI, unplug the screen's ribbon with the power off.
 - Windows Setup from a plain install stick starts on this board but does not
   see the eMMC, for the reason given above: the driver is not inbox.
-- The stick has to be on a USB-A port. The USB-C port is not in the board's
-  ACPI tables.
-- Do not make the stick with Ventoy. Its UDF driver stops with a synchronous
-  exception on RK3576.
+- Do not make the stick with Ventoy. With this WinPE image its UDF driver
+  stopped with a synchronous exception.
+
+Not available under Windows on this board: WiFi and Bluetooth, audio, touch,
+the RTC (the clock is wrong until it syncs) and the EC20 modem's network
+interface.
 
 Everything else is as for the CM5-IO.
-

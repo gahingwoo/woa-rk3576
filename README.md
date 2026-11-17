@@ -40,9 +40,10 @@ Most of these were measured once, on 2026-10-01.
 The same drivers, unchanged, on a second board. On 13 November 2026 Windows
 11 23H2 (22631.2428) was deployed to the TaishanPi 3M's 64 GB eMMC with the
 WinPE and the script from this repo, and boots to the desktop from it. It
-needs the TaishanPi firmware from the
-[0.3.0-tspi3m.1 pre-release](https://github.com/gahingwoo/edk2-rk3576/releases/tag/0.3.0-tspi3m.1)
-of edk2-rk3576, with the firmware on the eMMC.
+needs the TaishanPi firmware from edk2-rk3576
+[0.3.0 or later](https://github.com/gahingwoo/edk2-rk3576/releases/latest),
+with the firmware on the eMMC. From firmware 0.4.0 on, the board's DSI
+screen shows Windows too, in portrait.
 
 Seen on that one installation: eight cores, 3.8 GB of memory, the eMMC as the
 boot disk, Ethernet at 1 Gbps with a DHCP lease and a 5 MB download, USB
@@ -51,8 +52,8 @@ DMA and SPI drivers all start; none of them was exercised beyond that, and no
 SD card was tried. The board was provided by LCKFB.
 
 Not available: the USB-C port (left out of the board's ACPI tables), WiFi and
-Bluetooth, audio, the RTC (so the clock is wrong until it syncs) and the EC20
-modem.
+Bluetooth, audio, touch on the DSI screen, the RTC (so the clock is wrong
+until it syncs) and the EC20 modem.
 
 ## Where the drivers come from
 
