@@ -28,7 +28,7 @@ controllers. It needs firmware 0.2.0 or later. How to install it:
 | DMA | `ARMH0330` | [pl330dma](drivers/dma/pl330dma) | started, all 3 |
 | Ethernet | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | works, gets a DHCP lease |
 | SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | started, all 5; no SPI device exercised |
-| Touch (TaishanPi 3M DSI screen) | `RKCP9271` | [gt9271](drivers/input/gt9271) (VHF) | built by CI, not run on a board yet; needs firmware that declares it |
+| Touch (TaishanPi 3M DSI screen) | `RKCP9271` | [gt9271](drivers/input/gt9271) (VHF) | works on the TaishanPi 3M, 10 touch points; needs edk2-rk3576 built from `main` after 0.4.1 |
 | NVMe | PCIe | inbox stornvme | works |
 | USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
 | Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
@@ -54,9 +54,16 @@ SD card was tried. The board was provided by LCKFB.
 
 Not available: the USB-C port (left out of the board's ACPI tables), WiFi and
 Bluetooth, audio, the RTC (so the clock is wrong until it syncs) and the EC20
-modem. Touch on the DSI screen has a driver,
-[gt9271](drivers/input/gt9271), which has not been run on the board yet; it
-needs firmware whose ACPI tables declare the touch controller.
+modem.
+
+Touch on the DSI screen works through
+[gt9271](drivers/input/gt9271): Windows reports touch support with 10
+touch points. It needs edk2-rk3576 firmware built from `main` after 0.4.1,
+whose ACPI tables declare the touch controller only when the screen is
+attached. With [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)'s
+rotation (its `next` branch) the desktop can be turned to landscape:
+
+![Windows 11 on the TaishanPi 3M's DSI screen in landscape, reporting 10 touch points](docs/imgs/tspi3m-win11-touch-landscape.png)
 
 ## Where the drivers come from
 

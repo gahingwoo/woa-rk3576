@@ -139,15 +139,27 @@ firmware 0.4.0 and 0.4.1.
   WinPE image of release 0.1.1 on.
 - The stick has to be on a USB-A port. The firmware does not use the USB-C
   port, and it is not in the board's ACPI tables.
-- Use a USB keyboard and mouse. Touch works in the firmware's menus. For
-  Windows there is a driver, [gt9271](../drivers/input/gt9271), that has not
-  been run on the board yet. It needs firmware whose DSDT declares the touch
-  controller (`\_SB.I2C0.TCH0`, `RKCP9271`); no release has that yet. With
-  no screen attached the firmware hides the device and nothing appears in
-  Device Manager.
+- Touch works in the firmware's menus and, with the
+  [gt9271](../drivers/input/gt9271) driver, in Windows (10 touch points). It
+  needs firmware whose DSDT declares the touch controller
+  (`\_SB.I2C0.TCH0`, `RKCP9271`): edk2-rk3576 built from `main` after
+  0.4.1; no release has it yet. With no screen attached the firmware hides
+  the device and nothing appears in Device Manager. Keep a USB keyboard at
+  hand for WinPE and the first setup.
+- To add a driver to an installed Windows with `pnputil` instead of
+  `add-drivers.cmd`, take it from the WinPE artifact's `woa-drivers\`, not
+  from the CI build artifact: only the WinPE workflow signs the catalogs. Each
+  run signs with a new test certificate, so trust that certificate first.
+  It can be taken out of the catalog itself (on Linux:
+  `openssl pkcs7 -inform DER -in gt9271.cat -print_certs -out signer.pem`,
+  then `openssl x509 -in signer.pem -outform DER -out signer.cer`), then on
+  the board from an administrator prompt:
+  `certutil -addstore -f Root signer.cer`,
+  `certutil -addstore -f TrustedPublisher signer.cer`,
+  `pnputil /add-driver gt9271.inf /install`.
 - With LCKFB's 800x1280 DSI screen attached, the firmware uses it instead of
-  HDMI, and Windows shows its picture there in portrait and cannot rotate it
-  yet. An installed Windows has been seen booting that way. The installation
+  HDMI, and Windows shows its picture there in portrait; wddm-mali-g52's
+  rotation (`next` branch) lets Settings turn it to landscape. An installed Windows has been seen booting that way. The installation
   itself was done over HDMI and has not been repeated on the screen. To
   install over HDMI, unplug the screen's ribbon with the power off.
 - Windows Setup from a plain install stick starts on this board but does not
