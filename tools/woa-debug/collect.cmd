@@ -158,13 +158,13 @@ del "%OUT%\dp2.txt" 2>nul
 rem --- PROBE: every device one of our drivers binds -------------------------
 rem One file with the status of each: bound or not, which driver, started or
 rem the problem code. The drivers are the ones ported from worproject's RK3588
-rem set, plus our SPI:
+rem set, plus our SPI and the TaishanPi 3M touch screen:
 rem   RKCP0D40 eMMC dwcsdhc   RKCPFE2C SD  dwcmshc   RKCP3002 GPIO rk3xgpio
 rem   RKCP3001 I2C  rk3xi2c   ARMH0330 DMA pl330dma  RKCP6543 GMAC dwc_eqos
-rem   RKCP3003 SPI  rk3xspi
+rem   RKCP3003 SPI  rk3xspi   RKCP9271 touch gt9271 (with vhf below it)
 rem They keep no registry diagnostics; what they log goes to WPP and the
 rem in-flight recorder, which WinPE cannot read back.
-for %%H in (RKCP0D40 RKCPFE2C RKCP3002 RKCP3001 ARMH0330 RKCP6543 RKCP3003) do (
+for %%H in (RKCP0D40 RKCPFE2C RKCP3002 RKCP3001 ARMH0330 RKCP6543 RKCP3003 RKCP9271) do (
   echo ===== ACPI\%%H >> "%OUT%\74-our-devices.txt"
   pnputil /enum-devices /deviceid "ACPI\%%H" /drivers >> "%OUT%\74-our-devices.txt" 2>&1
 )
@@ -194,7 +194,7 @@ rem sc.exe is not in every WinPE (it is absent from the ADK 22621 image), so
 rem read the service keys instead. Start and ErrorControl say how the driver
 rem was meant to load; a driver that never loaded has no Enum subkey.
 type nul > "%OUT%\78-services.txt"
-for %%S in (dwcsdhc dwcmshc rk3xgpio rk3xi2c pl330dma dwc_eqos rk3xspi) do (
+for %%S in (dwcsdhc dwcmshc rk3xgpio rk3xi2c pl330dma dwc_eqos rk3xspi gt9271 vhf) do (
   reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%S" /s >> "%OUT%\78-services.txt" 2>&1
 )
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\sdbus" /s >> "%OUT%\78-services.txt" 2>&1

@@ -139,8 +139,12 @@ firmware 0.4.0 and 0.4.1.
   WinPE image of release 0.1.1 on.
 - The stick has to be on a USB-A port. The firmware does not use the USB-C
   port, and it is not in the board's ACPI tables.
-- Use a USB keyboard and mouse. Touch works in the firmware's menus and not
-  in WinPE or Windows.
+- Use a USB keyboard and mouse. Touch works in the firmware's menus. For
+  Windows there is a driver, [gt9271](../drivers/input/gt9271), that has not
+  been run on the board yet. It needs firmware whose DSDT declares the touch
+  controller (`\_SB.I2C0.TCH0`, `RKCP9271`); no release has that yet. With
+  no screen attached the firmware hides the device and nothing appears in
+  Device Manager.
 - With LCKFB's 800x1280 DSI screen attached, the firmware uses it instead of
   HDMI, and Windows shows its picture there in portrait and cannot rotate it
   yet. An installed Windows has been seen booting that way. The installation
@@ -151,8 +155,7 @@ firmware 0.4.0 and 0.4.1.
 - Do not make the stick with Ventoy. With this WinPE image its UDF driver
   stopped with a synchronous exception.
 
-Not available under Windows on this board: WiFi and Bluetooth, audio, touch,
-the RTC (the clock is wrong until it syncs) and the EC20 modem's network
+Not available under Windows on this board: WiFi and Bluetooth, audio, the RTC (the clock is wrong until it syncs) and the EC20 modem's network
 interface.
 
 Everything else is as for the CM5-IO.

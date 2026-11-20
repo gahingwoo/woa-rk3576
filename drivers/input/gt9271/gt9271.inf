@@ -1,0 +1,72 @@
+;
+; gt9271.inf - Goodix GT9271 touch screen (LCKFB 800x1280 MIPI DSI screen)
+;
+; Target: Windows on ARM64. Binds ACPI\RKCP9271, which the TaishanPi 3M
+; firmware (edk2-rk3576) publishes under \_SB.I2C0 only when it found the
+; controller at boot. The driver reads the controller over I2C (rk3xi2c) and
+; takes its interrupt through GpioClx (rk3xgpio); vhf.sys, the in-box Virtual
+; HID Framework, is its lower filter and enumerates the HID touch screen
+; child, which the in-box HID stack drives.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: MIT
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = HIDClass
+ClassGuid   = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = gt9271.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+gt9271.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%GT9271.DeviceDesc% = GT9271_Inst,ACPI\RKCP9271
+
+[GT9271_Inst.NT]
+CopyFiles = GT9271_CopyFiles
+
+[GT9271_CopyFiles]
+gt9271.sys
+
+[GT9271_Inst.NT.HW]
+AddReg = GT9271_Inst.NT.HW.AddReg
+
+[GT9271_Inst.NT.HW.AddReg]
+; vhf.sys under this driver, as the VHF documentation requires.
+HKR,,"LowerFilters",0x00010000,"vhf"
+
+[GT9271_Inst.NT.Services]
+AddService = gt9271,0x00000002,GT9271_Service
+
+[GT9271_Service]
+DisplayName   = %GT9271.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\gt9271.sys
+
+[GT9271_Inst.NT.Wdf]
+KmdfService = gt9271, GT9271_wdfsect
+
+[GT9271_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName       = "woa-rk3576"
+DiskName           = "GT9271 Touch Screen Installation Disk"
+GT9271.DeviceDesc  = "Goodix GT9271 Touch Screen Controller"
+GT9271.SvcDesc     = "Goodix GT9271 Touch Screen Driver"

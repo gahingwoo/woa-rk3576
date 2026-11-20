@@ -66,6 +66,7 @@ jobs:
       matrix:
         include:
           - { name: spi,  proj: drivers/spi/rk3xspi/rk3xspi.vcxproj }
+          - { name: touch, proj: drivers/input/gt9271/gt9271.vcxproj }
     steps:
       - uses: actions/checkout@v4
 

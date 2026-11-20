@@ -5,9 +5,9 @@ in CI, not on Linux.
 
 ## From CI
 
-- [ci.yml](../.github/workflows/ci.yml) builds `build/RockchipDrivers.sln` and
-  `rk3xspi` on every push with WDK 10.0.26100 and fails on any error. Its
-  packages are not signed.
+- [ci.yml](../.github/workflows/ci.yml) builds `build/RockchipDrivers.sln`,
+  `rk3xspi` and `gt9271` on every push with WDK 10.0.26100 and fails on any
+  error. Its packages are not signed.
 - [winpe.yml](../.github/workflows/winpe.yml) builds the same drivers,
   test-signs them with a throwaway certificate, injects them into an ADK 22621
   WinPE and uploads the image. The signed packages are in its `woa-drivers\`
@@ -21,6 +21,7 @@ ARM64 build tools and Spectre-mitigated ARM64 libraries, and WDK 10.0.26100.
 ```cmd
 msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64
 msbuild drivers\spi\rk3xspi\rk3xspi.vcxproj /p:Configuration=Release /p:Platform=ARM64
+msbuild drivers\input\gt9271\gt9271.vcxproj /p:Configuration=Release /p:Platform=ARM64
 ```
 
 Packages land in `build\ARM64\Release\Output\<driver>\`. Sign them the way
