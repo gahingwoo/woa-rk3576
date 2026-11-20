@@ -66,7 +66,8 @@ jobs:
           # the image and the drivers in it from drifting apart.
           #
           # The drivers imported from worproject build as one solution; SPI is
-          # ours and builds on its own. The SD driver needs the GPIO one,
+          # ours and builds on its own, and so is the GT9271 touch screen
+          # driver (TaishanPi 3M DSI screen; binds nothing on the CM5-IO). The SD driver needs the GPIO one,
           # because Sdhc.asl routes card detect through GpioInt on \_SB.GPI0
           # rather than the controller's CDETECT.
           #
@@ -76,7 +77,8 @@ jobs:
           # run on hardware.
           $solutionDrivers = @('dwcsdhc', 'dwcmshc', 'rk3xgpio', 'rk3xi2c', 'pl330dma', 'dwc_eqos')
           $projects = @(
-            'drivers/spi/rk3xspi/rk3xspi.vcxproj'
+            'drivers/spi/rk3xspi/rk3xspi.vcxproj',
+            'drivers/input/gt9271/gt9271.vcxproj'
           )
           # Record the sdport miniport API surface into the log.
           #
