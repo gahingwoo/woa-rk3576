@@ -28,6 +28,7 @@ controllers. It needs firmware 0.2.0 or later. How to install it:
 | DMA | `ARMH0330` | [pl330dma](drivers/dma/pl330dma) | started, all 3 |
 | Ethernet | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | works, gets a DHCP lease |
 | SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | started, all 5; no SPI device exercised |
+| Touch (TaishanPi 3M DSI screen) | `RKCP9271` | [gt9271](drivers/input/gt9271) (VHF) | built by CI, not run on a board yet; needs firmware that declares it |
 | NVMe | PCIe | inbox stornvme | works |
 | USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
 | Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
@@ -52,8 +53,10 @@ DMA and SPI drivers all start; none of them was exercised beyond that, and no
 SD card was tried. The board was provided by LCKFB.
 
 Not available: the USB-C port (left out of the board's ACPI tables), WiFi and
-Bluetooth, audio, touch on the DSI screen, the RTC (so the clock is wrong
-until it syncs) and the EC20 modem.
+Bluetooth, audio, the RTC (so the clock is wrong until it syncs) and the EC20
+modem. Touch on the DSI screen has a driver,
+[gt9271](drivers/input/gt9271), which has not been run on the board yet; it
+needs firmware whose ACPI tables declare the touch controller.
 
 ## Where the drivers come from
 
@@ -71,6 +74,7 @@ so `git log -- drivers/<class>/<name>` shows what differs from RK3588:
 - dwc_eqos: turns on the DMA's 40-bit addressing (EAME). RK3576's memory runs
   past 4 GB, and without it every transfer to a buffer above 4 GB faulted.
 - rk3xspi is written for this repo; the RK3588 set has no SPI driver.
+- gt9271, the TaishanPi 3M touch screen driver, is written for this repo.
 
 Licences per driver: [THIRD_PARTY.md](THIRD_PARTY.md).
 
@@ -79,9 +83,10 @@ Licences per driver: [THIRD_PARTY.md](THIRD_PARTY.md).
 ```cmd
 msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64
 msbuild drivers\spi\rk3xspi\rk3xspi.vcxproj /p:Configuration=Release /p:Platform=ARM64
+msbuild drivers\input\gt9271\gt9271.vcxproj /p:Configuration=Release /p:Platform=ARM64
 ```
 
-CI builds both on every push. The WinPE workflow also test-signs the drivers
+CI builds all three on every push. The WinPE workflow also test-signs the drivers
 and puts them in a WinPE image. Details: [docs/BUILDING.md](docs/BUILDING.md).
 Debugging tools: [docs/DEBUGGING.md](docs/DEBUGGING.md).
 
@@ -97,6 +102,7 @@ drivers/
   dma/pl330dma/         PL330 DMA
   net/dwc_eqos/         Ethernet (DWC EQoS)        NetAdapterCx
   spi/rk3xspi/          SPI                        SpbCx (written here)
+  input/gt9271/         GT9271 touch screen        VHF (written here)
   audio/                RK3588 I²S drivers, not built into the image
   lib/, shared/, include/, sd/rk_sip_sdmmc_lib/   shared code
 tools/
