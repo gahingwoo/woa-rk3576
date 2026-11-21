@@ -457,9 +457,13 @@ InstallAllRenderFilters(
     NTSTATUS            ntStatus;
     PENDPOINT_MINIPAIR* ppAeMiniports   = g_RenderEndpoints;
 
-    char *topologyName = _pAdapterCommon->GetTopology(NULL);
+    BOOLEAN isJack = FALSE;
+    char *topologyName = _pAdapterCommon->GetTopology(&isJack);
     if (strcmp(topologyName, "hdmi") == 0) {
         ppAeMiniports = g_RenderHDMIEndpoints;
+    } else if (isJack && _pAdapterCommon->IsSai()) {
+        // RK3576: 24 in 32-bit, as the SAI is run (hdmiwavtable.h).
+        ppAeMiniports = g_RenderSaiJackEndpoints;
     }
     
     PAGED_CODE();
@@ -514,6 +518,10 @@ InstallAllCaptureFilters(
     PENDPOINT_MINIPAIR* ppAeMiniports = g_CaptureEndpoints;
 
     PAGED_CODE();
+
+    if (_pAdapterCommon->IsSai()) {
+        ppAeMiniports = g_CaptureSaiJackEndpoints;
+    }
 
     for (ULONG i = 0; i < g_cCaptureEndpoints; ++i, ++ppAeMiniports)
     {

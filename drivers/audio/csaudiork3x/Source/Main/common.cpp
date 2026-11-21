@@ -93,6 +93,7 @@ private:
     STDMETHODIMP_(char*) GetTopology(
         _Out_ BOOLEAN* isJack
     );
+    STDMETHODIMP_(BOOLEAN) IsSai();
 
     STDMETHODIMP_(BOOL)     bDevSpecificRead();
 
@@ -887,6 +888,14 @@ CAdapterCommon::GetTopology(
         return m_pHW->rkTPLG.audio_tplg;
     }
     return "";
+}
+
+//=============================================================================
+#pragma code_seg()
+STDMETHODIMP_(BOOLEAN)
+CAdapterCommon::IsSai()
+{
+    return m_pHW ? m_pHW->isSai : FALSE;
 }
 
 //=============================================================================

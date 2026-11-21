@@ -237,7 +237,14 @@ Arguments:
         //Set ResultantFormat to be the only supported format for the MicArray endpoint. 
         PKSDATAFORMAT_WAVEFORMATEXTENSIBLE resultantFormat;
         resultantFormat = (PKSDATAFORMAT_WAVEFORMATEXTENSIBLE)ResultantFormat;
-        *resultantFormat = *MicArrayPinSupportedDeviceFormats;
+        // The endpoint's own format: the SAI jack microphone is 24 in
+        // 32-bit (micjacksaiwavtable.h), the RK3588 ones 16-bit.
+        KSDATAFORMAT_WAVEFORMATEXTENSIBLE *pinFormats = NULL;
+        if (GetPinSupportedDeviceFormats(PinId, &pinFormats) > 0 && pinFormats != NULL) {
+            *resultantFormat = pinFormats[0];
+        } else {
+            *resultantFormat = *MicArrayPinSupportedDeviceFormats;
+        }
         *ResultantFormatLength = requiredSize;
 
         return STATUS_SUCCESS;

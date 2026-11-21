@@ -143,8 +143,9 @@ protected:
     BOOLEAN sai_poll(UINT32 reg, UINT32 mask, UINT32 want);
     NTSTATUS sai_init();
     void sai_deinit();
-    void sai_play();
-    void sai_stop();
+    void sai_set_paths();
+    void sai_play(eDeviceType deviceType);
+    void sai_stop(eDeviceType deviceType);
     BOOLEAN sai_irq();
 #endif
 

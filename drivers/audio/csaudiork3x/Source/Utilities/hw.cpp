@@ -300,12 +300,12 @@ NTSTATUS CCsAudioRk3xHW::rk3x_program_dma(eDeviceType deviceType, PMDL mdl, IPor
         deviceReg = this->isSai ? SAI_TXDR : I2S_TXDR;
         break;
     case eInputDevice:
-        if (this->isSai) {
+        if (this->isSai && !this->isJack) {
             return STATUS_NOT_SUPPORTED;    // the HDMI topology has no capture
         }
         dmaIndex = this->rkTPLG.rx;
         i2sStream->recording = TRUE;
-        deviceReg = I2S_RXDR;
+        deviceReg = this->isSai ? SAI_RXDR : I2S_RXDR;
         break;
     default:
         return STATUS_INVALID_PARAMETER;
@@ -376,13 +376,17 @@ NTSTATUS CCsAudioRk3xHW::rk3x_play(eDeviceType deviceType) {
     switch (deviceType) {
     case eOutputDevice:
         if (this->isSai) {
-            sai_play();
+            sai_play(eOutputDevice);
             break;
         }
         i2s_update32(I2S_DMACR, I2S_DMACR_TDE_MASK, I2S_DMACR_TDE(1));
         i2s_update32(I2S_XFER, I2S_XFER_TXS_MASK, I2S_XFER_TXS_START);
         break;
     case eInputDevice:
+        if (this->isSai) {
+            sai_play(eInputDevice);
+            break;
+        }
         i2s_update32(I2S_DMACR, I2S_DMACR_RDE_MASK, I2S_DMACR_RDE(1));
         i2s_update32(I2S_XFER, I2S_XFER_RXS_MASK, I2S_XFER_RXS_START);
         break;
@@ -431,13 +435,17 @@ NTSTATUS CCsAudioRk3xHW::rk3x_stop(eDeviceType deviceType) {
     switch (deviceType) {
     case eOutputDevice:
         if (this->isSai) {
-            sai_stop();
+            sai_stop(eOutputDevice);
             break;
         }
         i2s_update32(I2S_DMACR, I2S_DMACR_TDE_MASK, I2S_DMACR_TDE(0));
         i2s_update32(I2S_XFER, I2S_XFER_TXS_MASK, I2S_XFER_TXS_STOP);
         break;
     case eInputDevice:
+        if (this->isSai) {
+            sai_stop(eInputDevice);
+            break;
+        }
         i2s_update32(I2S_DMACR, I2S_DMACR_RDE_MASK, I2S_DMACR_RDE(0));
         i2s_update32(I2S_XFER, I2S_XFER_RXS_MASK, I2S_XFER_RXS_STOP);
         break;
@@ -452,7 +460,7 @@ NTSTATUS CCsAudioRk3xHW::rk3x_stop(eDeviceType deviceType) {
     this->m_DMAInterface.FreeChannel(dmaContext, dmaThread);
 
     if (this->isSai) {
-        // sai_stop() already cleared the TX logic.
+        // sai_stop() already cleared the TX or RX logic.
         i2sStream->dmaThread = NULL;
         i2sStream->bufferBytes = 0;
         i2sStream->isActive = FALSE;
@@ -503,20 +511,27 @@ NTSTATUS CCsAudioRk3xHW::rk3x_stop(eDeviceType deviceType) {
 // set_fmt, hw_params and prepare in sai_init, trigger start and stop in
 // sai_play and sai_stop.
 //
-// The one stream this supports is the HDMI one: SAI6 as I2S bit-clock and
-// frame-sync master, 2 channels in 32-bit slots on lane 0, 48 kHz, fed by
-// DMA with one 32-bit FIFO word per sample.  The endpoint's format is 24
-// valid bits in a 32-bit container, so the word is sent as it is.
+// Two uses, both with the SAI as I2S bit-clock and frame-sync master,
+// 2 channels in 32-bit slots on lane 0, 48 kHz, one 32-bit FIFO word per
+// sample (24 valid bits in a 32-bit container):
 //
-// The firmware sets mclk_sai6 and the HDMI controller's audio path at
-// ExitBootServices (edk2-rk3576 DwHdmiQpAudio.c) and tells us the mclk as
-// "rockchip,mclk-fs".  Nothing here touches the CRU or the HDMI controller.
+//   "hdmi"      SAI6 into the HDMI controller.  TX only.
+//   "i2s-jack"  a codec on the SAI's pins (TaishanPi 3M: ES8388 on SAI1).
+//               TX and RX, the codec slave on the same sclk and LRCK.
+//
+// The firmware sets mclk and, for HDMI, the HDMI controller's audio path at
+// boot (edk2-rk3576 DwHdmiQpAudio.c and the board's audio preset) and tells
+// us the mclk as "rockchip,mclk-fs".  Nothing here touches the CRU or the
+// HDMI controller.  Which SDO and SDI carry lane 0 comes from
+// "rockchip,sai-tx-route" and "rockchip,sai-rx-route", packed the way the
+// RK3588 I2S routes are (one nibble per lane, lane 0 in bits 15:12).
 //=============================================================================
 
 #define SAI_SLOT_BITS       32
 #define SAI_SLOTS           2
 #define SAI_FRAME_BITS      (SAI_SLOT_BITS * SAI_SLOTS)    // sclk per frame
 #define SAI_TX_DMA_LEVEL    16                              // half the 32-entry FIFO
+#define SAI_RX_DMA_LEVEL    8                               // one PL330 burst (8 words)
 
 BOOLEAN CCsAudioRk3xHW::sai_poll(UINT32 reg, UINT32 mask, UINT32 want) {
     for (int i = 0; i < 100; i++) {
@@ -528,16 +543,42 @@ BOOLEAN CCsAudioRk3xHW::sai_poll(UINT32 reg, UINT32 mask, UINT32 want) {
     return FALSE;
 }
 
+void CCsAudioRk3xHW::sai_set_paths() {
+    UINT32 val = i2s_read32(SAI_PATH_SEL);
+
+    // Lane n of rockchip,sai-tx-route = rockchip's sdo[n]: SDO n sends
+    // path sdo[n] (rockchip_sai_path_config), as mainline does.
+    if (this->rkTPLG.i2s_tx_route) {
+        val &= ~SAI_PATH_SEL_TX_MASK;
+        for (UINT32 n = 0; n < 4; n++) {
+            UINT32 path = (this->rkTPLG.i2s_tx_route >> (12 - n * 4)) & 0x3;
+            val |= SAI_PATH_SEL_TX(n, path);
+        }
+    }
+
+    if (this->rkTPLG.i2s_rx_route) {
+        val &= ~SAI_PATH_SEL_RX_MASK;
+        for (UINT32 n = 0; n < 4; n++) {
+            UINT32 sdi = (this->rkTPLG.i2s_rx_route >> (12 - n * 4)) & 0x3;
+            val |= SAI_PATH_SEL_RX(n, sdi);
+        }
+    }
+
+    i2s_write32(SAI_PATH_SEL, val);
+}
+
 NTSTATUS CCsAudioRk3xHW::sai_init() {
     UINT32 mclkFs = this->rkTPLG.mclk_fs ? this->rkTPLG.mclk_fs : 256;
+    UINT32 xcr;
 
     if (mclkFs < SAI_FRAME_BITS || (mclkFs % SAI_FRAME_BITS) != 0) {
         DbgPrint("csaudiork3x: SAI mclk-fs %u is not a multiple of %u\n", mclkFs, SAI_FRAME_BITS);
         return STATUS_INVALID_PARAMETER;
     }
 
-    DbgPrint("csaudiork3x: SAI version 0x%08x, mclk-fs %u, sclk = mclk / %u\n",
-        i2s_read32(SAI_VERSION), mclkFs, mclkFs / SAI_FRAME_BITS);
+    DbgPrint("csaudiork3x: SAI version 0x%08x, mclk-fs %u, sclk = mclk / %u, %s\n",
+        i2s_read32(SAI_VERSION), mclkFs, mclkFs / SAI_FRAME_BITS,
+        this->isJack ? "codec, TX and RX" : "TX only");
 
     // Format and clock registers can only be written with XFER.CLK clear.
     i2s_write32(SAI_XFER, 0);
@@ -546,25 +587,30 @@ NTSTATUS CCsAudioRk3xHW::sai_init() {
     }
 
     i2s_write32(SAI_DMACR, 0);
-    i2s_update32(SAI_INTCR, SAI_INTCR_TXUIE | SAI_INTCR_TXUIC, SAI_INTCR_TXUIC);
+    i2s_write32(SAI_INTCR, SAI_INTCR_TXUIC | SAI_INTCR_RXOIC);
 
-    i2s_write32(SAI_CLR, SAI_CLR_TXC);
-    if (!sai_poll(SAI_CLR, SAI_CLR_TXC, 0)) {
-        DbgPrint("csaudiork3x: SAI TX clear did not complete\n");
+    i2s_write32(SAI_CLR, SAI_CLR_TXC | SAI_CLR_RXC);
+    if (!sai_poll(SAI_CLR, SAI_CLR_TXC | SAI_CLR_RXC, 0)) {
+        DbgPrint("csaudiork3x: SAI TX/RX clear did not complete\n");
     }
 
     // Master, normal sclk and frame sync polarity, sclk = 64 fs.
     i2s_write32(SAI_CKR, SAI_CKR_MDIV(mclkFs / SAI_FRAME_BITS));
 
     // I2S: data left justified in the slot, one sclk after the FS edge.
-    i2s_write32(SAI_TXCR,
-        SAI_XCR_EDGE_SHIFT_1 |
-        SAI_XCR_CSR(1) |
-        SAI_XCR_SNB(SAI_SLOTS) |
-        SAI_XCR_VDJ_L |
-        SAI_XCR_SBW(SAI_SLOT_BITS) |
-        SAI_XCR_VDW(32));
+    // RXCR has the same layout as TXCR.
+    xcr = SAI_XCR_EDGE_SHIFT_1 |
+          SAI_XCR_CSR(1) |
+          SAI_XCR_SNB(SAI_SLOTS) |
+          SAI_XCR_VDJ_L |
+          SAI_XCR_SBW(SAI_SLOT_BITS) |
+          SAI_XCR_VDW(32);
+    i2s_write32(SAI_TXCR, xcr);
     i2s_write32(SAI_TX_SHIFT, SAI_XSHIFT_RIGHT(2));
+    if (this->isJack) {
+        i2s_write32(SAI_RXCR, xcr);
+        i2s_write32(SAI_RX_SHIFT, SAI_XSHIFT_RIGHT(2));
+    }
 
     // LRCK: 64 sclk per frame, high and low for half of it each.
     i2s_write32(SAI_FSCR,
@@ -573,11 +619,15 @@ NTSTATUS CCsAudioRk3xHW::sai_init() {
         SAI_FSCR_FW(SAI_FRAME_BITS));
 
     i2s_write32(SAI_MONO_CR, 0);
-    i2s_write32(SAI_DMACR, SAI_DMACR_TDL(SAI_TX_DMA_LEVEL));
+    sai_set_paths();
 
-    // Keep sclk and LRCK running from here on, also between streams, so the
-    // HDMI controller always has an I2S clock; with TXS clear the SAI sends
-    // nothing and the sink hears silence.
+    i2s_write32(SAI_DMACR, SAI_DMACR_TDL(SAI_TX_DMA_LEVEL) |
+        (this->isJack ? SAI_DMACR_RDL(SAI_RX_DMA_LEVEL) : 0));
+
+    // Keep sclk and LRCK running from here on, also between streams: the
+    // HDMI controller always has an I2S clock, and the codec, the I2S slave,
+    // keeps its DAC and ADC clocked.  With TXS and RXS clear the SAI sends
+    // nothing (the sink and the codec hear silence) and ignores its input.
     KeStallExecutionProcessor(20);
     i2s_write32(SAI_XFER, SAI_XFER_CLK | SAI_XFER_FSS);
 
@@ -590,25 +640,52 @@ void CCsAudioRk3xHW::sai_deinit() {
     sai_poll(SAI_STATUS, SAI_STATUS_FS_IDLE, SAI_STATUS_FS_IDLE);
 }
 
-void CCsAudioRk3xHW::sai_play() {
-    // Underrun reporting on, then DMA, then transmit.
-    i2s_update32(SAI_INTCR, SAI_INTCR_TXUIC, SAI_INTCR_TXUIC);
-    i2s_update32(SAI_INTCR, SAI_INTCR_TXUIE, SAI_INTCR_TXUIE);
+void CCsAudioRk3xHW::sai_play(eDeviceType deviceType) {
+    if (deviceType == eInputDevice) {
+        // Overrun reporting on, then DMA, then receive.
+        i2s_update32(SAI_INTCR, SAI_INTCR_RXOIC | SAI_INTCR_TXUIC, SAI_INTCR_RXOIC);
+        i2s_update32(SAI_INTCR, SAI_INTCR_RXOIE | SAI_INTCR_TXUIC, SAI_INTCR_RXOIE);
+        i2s_update32(SAI_DMACR, SAI_DMACR_RDE, SAI_DMACR_RDE);
+        i2s_update32(SAI_XFER,
+            SAI_XFER_CLK | SAI_XFER_FSS | SAI_XFER_RXS,
+            SAI_XFER_CLK | SAI_XFER_FSS | SAI_XFER_RXS);
+        return;
+    }
+
+    // Underrun reporting on, then DMA, then transmit.  INTCR's clear bits are
+    // write-one, so the masks keep the other direction's clear bit at 0.
+    i2s_update32(SAI_INTCR, SAI_INTCR_TXUIC | SAI_INTCR_RXOIC, SAI_INTCR_TXUIC);
+    i2s_update32(SAI_INTCR, SAI_INTCR_TXUIE | SAI_INTCR_RXOIC, SAI_INTCR_TXUIE);
     i2s_update32(SAI_DMACR, SAI_DMACR_TDE, SAI_DMACR_TDE);
     i2s_update32(SAI_XFER,
         SAI_XFER_CLK | SAI_XFER_FSS | SAI_XFER_TXS,
         SAI_XFER_CLK | SAI_XFER_FSS | SAI_XFER_TXS);
 }
 
-void CCsAudioRk3xHW::sai_stop() {
-    i2s_update32(SAI_INTCR, SAI_INTCR_TXUIE | SAI_INTCR_TXUIC, SAI_INTCR_TXUIC);
+void CCsAudioRk3xHW::sai_stop(eDeviceType deviceType) {
+    if (deviceType == eInputDevice) {
+        i2s_update32(SAI_INTCR, SAI_INTCR_RXOIE | SAI_INTCR_RXOIC | SAI_INTCR_TXUIC, SAI_INTCR_RXOIC);
+        i2s_update32(SAI_DMACR, SAI_DMACR_RDE, 0);
+        i2s_update32(SAI_XFER, SAI_XFER_RXS, 0);
+        if (!sai_poll(SAI_STATUS, SAI_STATUS_RX_IDLE, SAI_STATUS_RX_IDLE)) {
+            DbgPrint("csaudiork3x: SAI RX did not go idle\n");
+        }
+
+        i2s_update32(SAI_CLR, SAI_CLR_RXC | SAI_CLR_TXC, SAI_CLR_RXC);
+        if (!sai_poll(SAI_CLR, SAI_CLR_RXC, 0)) {
+            DbgPrint("csaudiork3x: SAI RX clear did not complete\n");
+        }
+        return;
+    }
+
+    i2s_update32(SAI_INTCR, SAI_INTCR_TXUIE | SAI_INTCR_TXUIC | SAI_INTCR_RXOIC, SAI_INTCR_TXUIC);
     i2s_update32(SAI_DMACR, SAI_DMACR_TDE, 0);
     i2s_update32(SAI_XFER, SAI_XFER_TXS, 0);
     if (!sai_poll(SAI_STATUS, SAI_STATUS_TX_IDLE, SAI_STATUS_TX_IDLE)) {
         DbgPrint("csaudiork3x: SAI TX did not go idle\n");
     }
 
-    i2s_update32(SAI_CLR, SAI_CLR_TXC, SAI_CLR_TXC);
+    i2s_update32(SAI_CLR, SAI_CLR_TXC | SAI_CLR_RXC, SAI_CLR_TXC);
     if (!sai_poll(SAI_CLR, SAI_CLR_TXC, 0)) {
         DbgPrint("csaudiork3x: SAI TX clear did not complete\n");
     }
@@ -616,14 +693,21 @@ void CCsAudioRk3xHW::sai_stop() {
 
 BOOLEAN CCsAudioRk3xHW::sai_irq() {
     UINT32 val = i2s_read32(SAI_INTSR);
+    BOOLEAN handled = FALSE;
 
-    if ((val & SAI_INTSR_TXUI_ACT) == 0) {
-        return FALSE;
+    if (val & SAI_INTSR_TXUI_ACT) {
+        DbgPrint("csaudiork3x: SAI TX FIFO underrun\n");
+        i2s_update32(SAI_INTCR, SAI_INTCR_TXUIE | SAI_INTCR_TXUIC | SAI_INTCR_RXOIC, SAI_INTCR_TXUIC);
+        handled = TRUE;
     }
 
-    DbgPrint("csaudiork3x: SAI TX FIFO underrun\n");
-    i2s_update32(SAI_INTCR, SAI_INTCR_TXUIE | SAI_INTCR_TXUIC, SAI_INTCR_TXUIC);
-    return TRUE;
+    if (val & SAI_INTSR_RXOI_ACT) {
+        DbgPrint("csaudiork3x: SAI RX FIFO overrun\n");
+        i2s_update32(SAI_INTCR, SAI_INTCR_RXOIE | SAI_INTCR_RXOIC | SAI_INTCR_TXUIC, SAI_INTCR_RXOIC);
+        handled = TRUE;
+    }
+
+    return handled;
 }
 #endif
 

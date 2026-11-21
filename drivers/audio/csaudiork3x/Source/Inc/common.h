@@ -306,6 +306,11 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
             THIS_
             _Out_ BOOLEAN *isJack
         ) PURE;
+    // TRUE when the interface is the RK3576 SAI ("rockchip,sai").
+    STDMETHOD_(BOOLEAN, IsSai)
+        (
+            THIS
+        ) PURE;
 
     STDMETHOD_(BOOL,            bDevSpecificRead)
     (
