@@ -1,7 +1,9 @@
 # Installing Windows on the CM5-IO
 
 The same procedure installed Windows on the LCKFB TaishanPi 3M; what differs
-there is in [its own section](#lckfb-taishanpi-3m) at the end.
+there is in [its own section](#lckfb-taishanpi-3m) at the end. The Radxa ROCK
+4D has no eMMC and installs to an NVMe drive instead; that has not been run,
+see [Radxa ROCK 4D](#radxa-rock-4d).
 
 Windows 11 23H2 Enterprise (22631.2428) installed this way boots to the
 desktop from the CM5-IO's eMMC. That installation was repaired in place after
@@ -171,3 +173,57 @@ Not available under Windows on this board: WiFi and Bluetooth, audio, the RTC (t
 interface.
 
 Everything else is as for the CM5-IO.
+
+## Radxa ROCK 4D
+
+**Not run.** No ROCK 4D has booted this WinPE or been deployed to. This
+section says what the firmware and the script are written to do.
+
+- The ROCK 4D has no eMMC. Its storage is UFS (no Windows driver here), a
+  microSD slot and PCIe. Windows goes on an NVMe drive, on an M.2 adapter on
+  the board's 16-pin PCIe FPC connector. The script needs at least 32 GB and
+  erases the whole drive.
+- Firmware: a ROCK 4D image with ACPI tables, in the 16 MB SPI NOR. Until
+  edk2-rk3576 `main` after 0.4.1 the ROCK 4D image was device tree only, and
+  with such firmware WinPE starts and then shows no picture: Windows has no
+  ACPI tables to run on. No release has the ACPI image yet; it is the
+  `ROCK4D-spi.img` artifact of a CI build from edk2-rk3576's branch
+  `rock4d-acpi`. Write it with "Flash Custom Image" at
+  [flash.gahingwoo.com](https://flash.gahingwoo.com/) or with
+  `rkdeveloptool wl 0` (edk2-rk3576's
+  [Flashing](https://github.com/gahingwoo/edk2-rk3576/blob/main/docs/FLASHING.md#rock-4d)).
+  Nothing goes on the NVMe drive or the SD card for the firmware.
+- To tell whether the firmware has ACPI: in the UEFI Shell, `acpiview -l`
+  lists the tables (DSDT, FACP, APIC, GTDT, MCFG, SPCR, DBG2, PPTT); an image
+  without them has none to list. In the front page, RK3576 Platform
+  Configuration, ACPI / Device Tree, Config Table Mode must be "Both" (the
+  default) or "ACPI". If a variable store from an older image says "Device
+  Tree", change it there.
+- The script tells the board by its SMBIOS name, which the firmware sets:
+  it prints `Board: vendor "Radxa", product "ROCK4D". Target: NVME.` Any
+  other name takes the eMMC path above, unchanged. On the NVMe target it:
+  1. picks the one disk on bus type NVMe (17), and stops if there is not
+     exactly one, if it is not fixed media, if it is a USB disk, or if it is
+     smaller than 32 GB. It prints the model and size.
+  2. finds and checks the image as above, and stops if this stick or the
+     image is on the NVMe drive.
+  3. lists the drive's volumes, asks you to type `ERASE`, checks the disk is
+     still the NVMe drive, cleans it, and creates a new GPT with an ESP, an
+     MSR and an NTFS partition. There is no firmware partition on it to keep.
+  4. applies the image, adds the drivers, runs `bcdboot`, turns on test
+     signing (the GPIO, I2C, Ethernet and other drivers are test-signed),
+     disables `sdbus`, turns off hibernation and Fast Startup and sets
+     `BypassNRO`. It does not make `sdstor` boot-start: the boot disk is on
+     the inbox `stornvme`, which starts at boot already, and `dwcsdhc` has no
+     device on this board.
+- Put `install.wim` on the stick's second partition, not on the NVMe drive.
+- The stick goes on a USB-A port. The board's USB-C connector is power input
+  only.
+- Take the SD card out. It is not needed (the firmware is in SPI NOR), and on
+  the CM5-IO a card in the slot made WinPE freeze.
+- First boot: the firmware boots `\EFI\Boot\bootaa64.efi` from the NVMe
+  drive's ESP.
+- Not described to Windows on this board: UFS, the fan header, analog audio.
+  The WiFi is a USB device behind the board's hub, and the ROCK 4D's
+  Ethernet PHY is a Realtek RTL8211F, not the CM5-IO's Motorcomm; Windows
+  runs it with the delays its straps and the firmware leave.

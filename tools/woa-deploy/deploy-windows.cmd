@@ -1,6 +1,7 @@
 @echo off
 rem ---------------------------------------------------------------------------
-rem deploy-windows.cmd - put Windows onto the CM5-IO eMMC from this WinPE.
+rem deploy-windows.cmd - put Windows onto the CM5-IO or TaishanPi 3M eMMC,
+rem or the Radxa ROCK 4D's NVMe drive, from this WinPE.
 rem
 rem Why not Windows Setup: Windows 11 23H2 Setup refuses a 29 GB disk and a
 rem board with no TPM 2.0 or Secure Boot, and Setup would give the installed
@@ -11,6 +12,10 @@ rem this WinPE already runs the eMMC driver, so the disk is visible.
 rem
 rem What it does, in order, stopping at the first thing that is not as
 rem expected:
+rem   0. read the board from SMBIOS (the firmware's product name). "ROCK 4D"
+rem      from vendor "Radxa" selects the NVMe target described below; every
+rem      other board, or no answer at all, takes the eMMC path exactly as
+rem      before.
 rem   1. find the eMMC: exactly one disk whose PNP id starts SD\, 28-33 or 57-63 GB,
 rem      whose first partition is the firmware region: starts at sector 64,
 rem      64 MiB long (the layout CM5IO-emmc.img ships). That partition holds
@@ -22,6 +27,17 @@ rem      first and create ESP + MSR + Windows in the space they leave.
 rem   4. dism /apply-image (compact), dism /add-driver with the drivers on
 rem      this stick, bcdboot, testsigning on in the new BCD, and BypassNRO
 rem      so OOBE does not insist on a network.
+rem
+rem NVMe target (ROCK 4D, which has no eMMC; its firmware is in SPI NOR):
+rem   1. exactly one disk on BusType NVMe (17), fixed media, not on USB, at
+rem      least 32 GB; its model and size are printed.
+rem   2. the image as above, and neither the image nor this stick may be on
+rem      that disk.
+rem   3. the same typed ERASE confirmation, then the whole disk is cleaned
+rem      and gets a fresh GPT with ESP + MSR + Windows. There is no firmware
+rem      partition to keep.
+rem   4. as above, except sdstor is left alone: the boot disk is served by
+rem      the inbox stornvme, not by the SD stack.
 rem
 rem Usage: from the WinPE command prompt, run this file from the stick.
 rem ---------------------------------------------------------------------------
@@ -42,6 +58,21 @@ if not exist "%DRIVERS%\dwcsdhc\dwcsdhc.inf" (
   echo No driver packages at %DRIVERS%. This stick was not built with them.
   goto :fail
 )
+
+rem --- 0. the board ------------------------------------------------------------
+rem SMBIOS type 1, as the firmware reports it: Manufacturer "Radxa", Product
+rem Name "ROCK 4D" (PcdPlatformVendorName / PcdPlatformName in edk2-rk3576).
+rem The value comes back with a trailing CR and may hold spaces, so its words
+rem are glued together: "ROCK 4D" reads as ROCK4D.
+set PRODUCT=
+set VENDOR=
+for /f "tokens=2 delims==" %%a in ('wmic csproduct get Name /value 2^>nul ^| find "="') do for %%b in (%%a) do set PRODUCT=!PRODUCT!%%b
+for /f "tokens=2 delims==" %%a in ('wmic csproduct get Vendor /value 2^>nul ^| find "="') do for %%b in (%%a) do set VENDOR=!VENDOR!%%b
+set TARGET=EMMC
+if /i "%VENDOR%"=="Radxa" if /i "%PRODUCT%"=="ROCK4D" set TARGET=NVME
+echo Board: vendor "%VENDOR%", product "%PRODUCT%". Target: %TARGET%.
+echo vendor=%VENDOR% product=%PRODUCT% target=%TARGET% >> "%LOG%"
+if "%TARGET%"=="NVME" goto :nvme1
 
 rem --- 1. the eMMC ----------------------------------------------------------
 set DISK=
@@ -86,8 +117,65 @@ echo.
 echo eMMC: disk %DISK%, about %GB% GB. Firmware partition found at sector 64,
 echo 64 MiB. It will be kept.
 echo disk=%DISK% size=%SIZE% p0=%P0OFF%/%P0SIZE% >> "%LOG%"
+goto :image
+
+rem --- 1. the NVMe drive (ROCK 4D) -----------------------------------------
+:nvme1
+rem MSFT_Disk (WinPE-StorageWMI) reports the bus type; 17 is NVMe. A drive in
+rem a USB enclosure reports 7 (USB) and is not picked, and neither is the
+rem stick. Number is the disk number diskpart uses.
+set DISK=
+set NDISK=0
+for /f "tokens=2 delims==" %%a in ('wmic /namespace:\\root\Microsoft\Windows\Storage path MSFT_Disk where "BusType=17" get Number /value 2^>nul ^| find "="') do (
+  for %%b in (%%a) do (
+    set DISK=%%b
+    set /a NDISK+=1
+  )
+)
+if not "%NDISK%"=="1" (
+  echo Expected exactly one NVMe disk, found %NDISK%. Stopping.
+  echo The ROCK 4D's NVMe drive sits on an M.2 adapter on the PCIe FPC
+  echo connector. If it is there and this still says 0, the firmware did not
+  echo train the link, or it is not a firmware with ACPI PCIe.
+  goto :fail
+)
+
+set SIZE=
+for /f "tokens=2 delims==" %%a in ('wmic /namespace:\\root\Microsoft\Windows\Storage path MSFT_Disk where "Number=%DISK%" get Size /value ^| find "="') do for %%b in (%%a) do set SIZE=%%b
+set MODEL=
+set MEDIA=
+set PNP=
+for /f "tokens=1,* delims==" %%a in ('wmic diskdrive where "Index=%DISK%" get Model^,MediaType^,PNPDeviceID /value ^| find "="') do (
+  if /i "%%a"=="Model" for %%c in (%%b) do set MODEL=!MODEL! %%c
+  if /i "%%a"=="MediaType" for %%c in (%%b) do set MEDIA=!MEDIA! %%c
+  if /i "%%a"=="PNPDeviceID" for %%c in (%%b) do set PNP=!PNP!%%c
+)
+if defined MODEL set MODEL=!MODEL:~1!
+if defined MEDIA set MEDIA=!MEDIA:~1!
+rem Fixed media only: "Removable Media" and "External hard disk media" are not
+rem the drive Windows is meant to live on.
+if /i not "!MEDIA:~0,5!"=="Fixed" (
+  echo Disk %DISK% reports media type "!MEDIA!", not fixed. Stopping.
+  goto :fail
+)
+if /i "!PNP:~0,7!"=="USBSTOR" (
+  echo Disk %DISK% is a USB disk ^(!PNP!^). Stopping.
+  goto :fail
+)
+rem Whole decimal gigabytes: drop the last nine digits. set /a is 32-bit, so
+rem only the shortened number goes through it.
+if not defined SIZE goto :badnvme
+if "!SIZE:~9,1!"=="" goto :badnvme
+set /a GB=!SIZE:~0,-9!
+if %GB% LSS 32 goto :badnvme
+
+echo.
+echo NVMe: disk %DISK%, !MODEL!, %GB% GB ^(%SIZE% bytes^).
+echo The whole disk will be erased; there is no firmware on it to keep.
+echo disk=%DISK% size=%SIZE% model=!MODEL! media=!MEDIA! pnp=!PNP! >> "%LOG%"
 
 rem --- 2. the Windows image --------------------------------------------------
+:image
 set WIM=
 for %%d in (C D E F G H I J K L M N O P Q R T U V Y Z) do (
   if not defined WIM (
@@ -147,6 +235,7 @@ if %BNUM% GTR 25999 (
 )
 echo Build %BNUM%, %ARCH%.
 type "%TEMP%\img.txt" >> "%LOG%"
+if "%TARGET%"=="NVME" goto :nvme3
 
 rem --- 3. confirm, then partition --------------------------------------------
 echo.
@@ -207,10 +296,77 @@ if not "%P0OFF%"=="32768" (
   echo The firmware partition is not where it was. Stopping before writing.
   goto :faillog
 )
+goto :apply
+
+rem --- 3. NVMe: check, confirm, then partition the whole disk --------------
+:nvme3
+rem The volumes on the target, as diskpart sees them. Neither this stick nor
+rem the volume holding the image may be among them: the whole disk is erased.
+> "%TEMP%\dp.txt" (
+  echo select disk %DISK%
+  echo detail disk
+)
+diskpart /s "%TEMP%\dp.txt" > "%TEMP%\detail.txt"
+type "%TEMP%\detail.txt" >> "%LOG%"
+set STICKL=%~d0
+set STICKL=%STICKL:~0,1%
+set WIML=%WIM:~0,1%
+set ONTGT=
+for /f "tokens=2,3" %%a in ('type "%TEMP%\detail.txt" ^| find "Volume "') do (
+  if /i "%%b"=="%STICKL%" set ONTGT=this stick ^(%STICKL%:^)
+  if /i "%%b"=="%WIML%" set ONTGT=the Windows image ^(%WIML%:^)
+)
+if defined ONTGT (
+  echo Disk %DISK% holds !ONTGT!. It is the disk that would be erased. Stopping.
+  goto :fail
+)
+
+echo.
+echo What is on disk %DISK% now:
+type "%TEMP%\detail.txt" | find "Volume "
+echo.
+echo ======================================================================
+echo  About to ERASE ALL of disk %DISK%: !MODEL!, %GB% GB, NVMe.
+echo  Every partition on it is deleted, it gets a new GPT, and Windows is
+echo  installed on it. Everything on this drive is lost.
+echo ======================================================================
+set /p OK=Type ERASE to continue, anything else to stop:
+if not "%OK%"=="ERASE" (
+  echo Stopped. Nothing was changed.
+  goto :end
+)
+
+rem Disk numbers can move if a device comes or goes; check it is still the
+rem NVMe drive before diskpart is given it.
+set BUS=
+for /f "tokens=2 delims==" %%a in ('wmic /namespace:\\root\Microsoft\Windows\Storage path MSFT_Disk where "Number=%DISK%" get BusType /value ^| find "="') do for %%b in (%%a) do set BUS=%%b
+if not "%BUS%"=="17" (
+  echo Disk %DISK% is no longer the NVMe drive ^(bus type "%BUS%"^). Stopping before writing.
+  goto :fail
+)
+
+> "%TEMP%\dp.txt" (
+  echo select disk %DISK%
+  echo clean
+  echo convert gpt
+  echo create partition efi size=260
+  echo format quick fs=fat32 label=System
+  echo assign letter=S
+  echo create partition msr size=16
+  echo create partition primary
+  echo format quick fs=ntfs label=Windows
+  echo assign letter=W
+  echo list partition
+)
+type "%TEMP%\dp.txt" >> "%LOG%"
+diskpart /s "%TEMP%\dp.txt" >> "%LOG%" 2>&1 || goto :faillog
+if not exist S:\ goto :faillog
+if not exist W:\ goto :faillog
 
 rem --- 4. apply, drivers, boot ------------------------------------------------
+:apply
 echo.
-echo Applying the image. This takes a while on eMMC.
+echo Applying the image. This takes a while.
 dism /English /Apply-Image /ImageFile:"%WIM%" /Index:%IDX% /ApplyDir:W:\ /Compact >> "%LOG%" 2>&1 || goto :faillog
 
 echo Adding the RK3576 drivers.
@@ -224,20 +380,27 @@ if not exist S:\EFI\Boot\bootaa64.efi (
   copy /y S:\EFI\Microsoft\Boot\bootmgfw.efi S:\EFI\Boot\bootaa64.efi >> "%LOG%" 2>&1
 )
 
-echo Making the eMMC's disk driver boot-start, and keeping sdbus off the eMMC.
+if "%TARGET%"=="EMMC" echo Making the eMMC's disk driver boot-start, and keeping sdbus off the eMMC.
+if "%TARGET%"=="NVME" echo Keeping sdbus off, and hibernation off.
 rem The system disk is an SD-class device, served by the inbox sdstor, which
 rem the image ships demand-start. Setup would make it boot-start; DISM does
 rem not, and without it the first boot ends in INACCESSIBLE_BOOT_DEVICE.
+rem On the NVMe target the boot disk is the inbox stornvme's, which the
+rem image already starts at boot, so sdstor is left as it is.
 reg load HKLM\WOASYS W:\Windows\System32\config\SYSTEM >> "%LOG%" 2>&1 || goto :faillog
 set CS=1
 for /f "tokens=3" %%v in ('reg query HKLM\WOASYS\Select /v Current ^| find "Current"') do set /a CS=%%v
-reg add HKLM\WOASYS\ControlSet00!CS!\Services\sdstor /v Start /t REG_DWORD /d 0 /f >> "%LOG%" 2>&1
+if "%TARGET%"=="EMMC" reg add HKLM\WOASYS\ControlSet00!CS!\Services\sdstor /v Start /t REG_DWORD /d 0 /f >> "%LOG%" 2>&1
 rem Disable the inbox sdbus. Firmware publishes the eMMC as _CID PNP0D40, so
 rem sdbus matches it, and sdbus has BootFlags for SD-disk boots. If it ever
 rem wins the eMMC controller during a boot, PnP records that binding and keeps
 rem it on every later boot, and sdbus cannot drive this controller: seen
 rem 2026-10-01 as INACCESSIBLE_BOOT_DEVICE with Enum\ACPI\RKCP0D40 on sdbus.
 rem Nothing on this board needs it; the SD slot is dwcmshc.
+rem Also on the NVMe target: the ROCK 4D's ACPI tables declare no eMMC and
+rem nothing else with a PNP0D40 _CID, so there it binds nothing either way,
+rem and keeping it off means a later DSDT with an eMMC cannot bring the
+rem binding back.
 reg add HKLM\WOASYS\ControlSet00!CS!\Services\sdbus /v Start /t REG_DWORD /d 4 /f >> "%LOG%" 2>&1
 rem No hibernation and no Fast Startup. A Fast Startup shutdown hibernates
 rem through the dump stack (hiber_dwcsdhc, which cannot reprogram the eMMC
@@ -259,12 +422,21 @@ reg unload HKLM\WOAOFF >> "%LOG%" 2>&1
 
 echo.
 echo Done. Log: %LOG%
+if "%TARGET%"=="NVME" goto :donenvme
 echo Take the stick out and the SD card out, then reboot. The firmware's boot
 echo menu should offer "Windows Boot Manager"; if it does not, pick the eMMC.
+goto :end
+:donenvme
+echo Take the stick out and the SD card out, then reboot. The firmware boots
+echo \EFI\Boot\bootaa64.efi from the NVMe drive's ESP; if it does not, pick
+echo the NVMe drive in its boot menu.
 goto :end
 
 :badsize
 echo Disk %DISK% is %SIZE% bytes, not a 28-33 GB or 57-63 GB eMMC this is written for.
+goto :fail
+:badnvme
+echo Disk %DISK% is %SIZE% bytes. Windows needs at least 32 GB here.
 goto :fail
 :badfw
 echo Disk %DISK% partition 1 starts at %P0OFF% and is %P0SIZE% bytes long.
