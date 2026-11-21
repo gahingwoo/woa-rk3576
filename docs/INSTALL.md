@@ -157,6 +157,18 @@ firmware 0.4.0 and 0.4.1.
   `certutil -addstore -f Root signer.cer`,
   `certutil -addstore -f TrustedPublisher signer.cer`,
   `pnputil /add-driver gt9271.inf /install`.
+  Sync the clock before that (`w32tm /resync /force`): the board's RTC holds
+  no valid time, and pnputil refuses a catalog signed "in the future" with
+  "a required certificate is not within its validity period". Setting
+  `HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation\RealTimeIsUniversal`
+  to 1 keeps the clock sane across reboots.
+- Replacing a driver of the same version: pnputil keeps the old binary
+  when DriverVer has not changed. Do not use `pnputil /delete-driver
+  /uninstall` to force it: on es8323 that set the service to disabled and
+  removed the .sys. Install a build with a newer DriverVer instead.
+- After reinstalling an audio driver, check the default playback device in
+  the taskbar's sound menu. Windows can keep pointing at the endpoint of the
+  previous install, which is gone, and then plays to nothing.
 - With LCKFB's 800x1280 DSI screen attached, the firmware uses it instead of
   HDMI, and Windows shows its picture there in portrait; wddm-mali-g52's
   rotation (`next` branch) lets Settings turn it to landscape. An installed Windows has been seen booting that way. The installation
@@ -167,7 +179,7 @@ firmware 0.4.0 and 0.4.1.
 - Do not make the stick with Ventoy. With this WinPE image its UDF driver
   stopped with a synchronous exception.
 
-Not available under Windows on this board: WiFi and Bluetooth, audio, the RTC (the clock is wrong until it syncs) and the EC20 modem's network
+Not available under Windows on this board: WiFi and Bluetooth, sound, a valid RTC time (see above) and the EC20 modem's network
 interface.
 
 Everything else is as for the CM5-IO.

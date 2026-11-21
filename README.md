@@ -32,7 +32,7 @@ controllers. It needs firmware 0.2.0 or later. How to install it:
 | NVMe | PCIe | inbox stornvme | works |
 | USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
 | Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
-| Audio | none | none | not possible yet ([audio](docs/AUDIO.md)) |
+| Audio (TaishanPi 3M headphones) | `RKCP3004`, `RKCP8388` | rk3xi2sbus, csaudiork3x, es8323, on the `audio` branch | drivers load and the endpoints appear; no sound yet ([audio](docs/AUDIO.md)) |
 
 Most of these were measured once, on 2026-10-01.
 
@@ -53,8 +53,16 @@ DMA and SPI drivers all start; none of them was exercised beyond that, and no
 SD card was tried. The board was sponsored by JLC (嘉立创).
 
 Not available: the USB-C port (left out of the board's ACPI tables), WiFi and
-Bluetooth, audio, the RTC (so the clock is wrong until it syncs) and the EC20
+Bluetooth, sound (the audio drivers load but nothing plays yet) and the EC20
 modem.
+
+The board's RTC chip holds no valid time, so the clock is wrong after every
+boot until Windows syncs it over the network. Set
+`HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation\RealTimeIsUniversal`
+to 1 (REG_DWORD) so Windows reads the firmware's clock as UTC, and set the
+Windows Time service to start automatically. Until the clock is right,
+`pnputil` refuses a driver signed after the time the board believes it is
+("not within its validity period"); run `w32tm /resync /force` first.
 
 Touch on the DSI screen works through
 [gt9271](drivers/input/gt9271): Windows reports touch support with 10
