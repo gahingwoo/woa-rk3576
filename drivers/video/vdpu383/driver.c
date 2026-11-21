@@ -75,9 +75,37 @@ V383MmuPagingOff(
     V383_LOG("IOMMU at +0x%x: status now 0x%08x", Base, V383Rd(Ctx, Base + RK_MMU_STATUS));
 }
 
+/* ------------------------------------------------------------ cache */
+
+/* rkvdec_vdpu383_config_cache() in mainline: cacheable, read-allocate,
+ * 64-byte lines, and the vendor driver's read limit. The registers lose
+ * their configuration when the decoder powers down; mainline programs them
+ * at every runtime resume. Here: at D0 entry, and after every IP reset,
+ * because whether the reset clears them is not known. */
+static VOID
+V383CacheConfig(
+    _In_ PDEVICE_CONTEXT Ctx
+    )
+{
+    V383Wr(Ctx, V383_CACHE_OFFSET + V383_CACHE_CACHE0_CFG,
+           V383_CACHE_CFG_CACHEABLE | V383_CACHE_CFG_READ_ALLOCATE | V383_CACHE_CFG_LINE_64B);
+    V383Wr(Ctx, V383_CACHE_OFFSET + V383_CACHE_MAX_READS, V383_CACHE_MAX_READS_DEFAULT);
+}
+
+/* rkvdec_vdpu383_clear_cache(): reference buffers are rewritten between
+ * frames, so the cache is cleared before every frame. */
+static VOID
+V383CacheClear(
+    _In_ PDEVICE_CONTEXT Ctx
+    )
+{
+    V383Wr(Ctx, V383_CACHE_OFFSET + V383_CACHE_CLR_CACHE0, 1);
+}
+
 /* ------------------------------------------------------------ reset */
 
-/* rkvdec_vdpu383_reset() in the vendor kernel: IP reset through the link
+/* vdpu383_stop() in mainline ("Stop the VDPU383 core on timeout") and
+ * rkvdec_vdpu383_reset() in the vendor kernel: IP reset through the link
  * block, which resets the core and the IOMMU. Returns link status. */
 static ULONG
 V383IpReset(
@@ -86,7 +114,8 @@ V383IpReset(
 {
     ULONG st = 0, i;
 
-    V383Wr(Ctx, V383_LINK_IP_ENABLE, 0x00008000);          /* irq off */
+    V383Wr(Ctx, V383_LINK_IRQ, LINK_IRQ_CLEAR);             /* irq, line irq off (mainline) */
+    V383Wr(Ctx, V383_LINK_IP_ENABLE, 0x00008000);          /* irq_dis (vendor) */
     V383Wr(Ctx, V383_LINK_IP_RESET, 1);
     for (i = 0; i < 200; i++) {
         st = V383Rd(Ctx, V383_LINK_STATUS);
@@ -98,9 +127,13 @@ V383IpReset(
     V383Wr(Ctx, V383_LINK_IRQ, 0xFFFF0000);
     V383Wr(Ctx, V383_LINK_STATUS, 0xFFFF0000);
     V383Wr(Ctx, V383_LINK_IP_ENABLE, 0);
-    V383_LOG("IP reset: status 0x%08x after %u polls", st, i);
+    V383_LOG("IP reset: status 0x%08x after %u polls%s", st, i,
+             (st & V383_STA_IP_RST_RDY) ? "" : " (not ready)");
 
-    /* An IP reset resets the IOMMU too; it comes back with paging off. */
+    /* An IP reset resets the IOMMU too; it comes back with paging off,
+     * which is how this driver runs it. Mainline reprograms its page
+     * table here (rkvdec_iommu_restore()); there is none to restore. */
+    V383CacheConfig(Ctx);
     return st;
 }
 
@@ -263,6 +296,11 @@ V383EvtD0Entry(
     /* stale interrupt state from the firmware or a previous OS */
     V383Wr(ctx, V383_LINK_IRQ, 0xFFFF0000);
     V383Wr(ctx, V383_LINK_STATUS, 0xFFFF0000);
+
+    V383_LOG("D0 entry: cache cfg 0x%08x max reads 0x%08x (power-on values)",
+             V383Rd(ctx, V383_CACHE_OFFSET + V383_CACHE_CACHE0_CFG),
+             V383Rd(ctx, V383_CACHE_OFFSET + V383_CACHE_MAX_READS));
+    V383CacheConfig(ctx);
 
     /* rk3576_workaround_run(): probe and resume; interrupts are not yet
      * connected here */
@@ -509,6 +547,7 @@ V383Run(
     WDFFILEOBJECT fo = WdfRequestGetFileObject(Request);
     LARGE_INTEGER timeout, t0, t1, freq;
     NTSTATUS status, wait;
+    BOOLEAN timedOut;
     ULONG r;
 
     *Info = 0;
@@ -561,6 +600,7 @@ V383Run(
     KeMemoryBarrier();
     __dsb(_ARM64_BARRIER_SY);
 
+    V383CacheClear(Ctx);
     InterlockedExchange(&Ctx->RunPending, 1);
     t0 = KeQueryPerformanceCounter(&freq);
     /* rkvdec_h264_run(): timeout, IP enable, DEC_E */
@@ -574,8 +614,10 @@ V383Run(
     __dsb(_ARM64_BARRIER_SY);
 
     out->elapsed_us = (ULONG)((t1.QuadPart - t0.QuadPart) * 1000000 / freq.QuadPart);
-    if (wait == STATUS_TIMEOUT) {
-        InterlockedExchange(&Ctx->RunPending, 0);
+    /* The DPC may have taken RunPending between the wait timing out and
+     * here: then the decode did finish. */
+    timedOut = (wait == STATUS_TIMEOUT && InterlockedExchange(&Ctx->RunPending, 0)) ? TRUE : FALSE;
+    if (timedOut) {
         Ctx->Timeouts++;
         out->result = VDPU383_RUN_TIMEOUT;
         out->irq = V383Rd(Ctx, V383_LINK_IRQ);
@@ -595,11 +637,25 @@ V383Run(
         for (r = 0; r < V383_NUM_REGS; r++)
             out->regs[r] = V383Rd(Ctx, V383_FUNC_OFFSET + 4 * r);
 
-    if (out->result != VDPU383_RUN_OK && (in->flags & VDPU383_RUN_RESET_ON_ERROR)) {
+    /*
+     * A timed-out core is stopped whatever the caller asked: left running,
+     * it keeps writing to buffers the caller may free next (mainline
+     * "Stop the VDPU383 core on timeout"; before it, a timed-out core kept
+     * running there too). An error status resets only when asked.
+     */
+    if (timedOut || (out->result != VDPU383_RUN_OK && (in->flags & VDPU383_RUN_RESET_ON_ERROR))) {
         WdfInterruptAcquireLock(Ctx->DecInterrupt);
         out->reset_status = V383IpReset(Ctx);
         WdfInterruptReleaseLock(Ctx->DecInterrupt);
     }
+    /*
+     * An interrupt taken just before the reset may still have its DPC
+     * queued; drained here, it cannot complete the next run (mainline
+     * "Handle interrupts without a current context" closes the same race
+     * between its watchdog and its interrupt thread).
+     */
+    if (timedOut)
+        KeFlushQueuedDpcs();
     return STATUS_SUCCESS;
 }
 

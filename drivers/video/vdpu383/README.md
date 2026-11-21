@@ -37,6 +37,8 @@ SSDT with the device.
 |---|---|---|
 | Registers at 0x27B00000 (link +0, function +0x100, cache +0x600, IOMMU +0x800/+0x900), GSIV 340/341, PD_VDEC bits, CRU bits, SRAM 0x3FF88000 480 KiB | mainline rk3576.dtsi, pm-domains.c, clk-rk3576.c, rst-rk3576.c | read from source, not measured |
 | Start: link 0x54 = timeout, 0x58 = 0, 0x40 = 1; interrupt: read 0x48/0x4C, write 0x03FF0000 to 0x4C and 0x00030000 to 0x48 | mainline rkvdec-vdpu383-h264.c, rkvdec.c | read from source |
+| Reference read cache at +0x600: CACHE0_CFG = 0x13, MAX_READS = 0x1C at D0 entry and after every IP reset; CLR_CACHE0 = 1 before every decode | mainline "configure the reference read cache" (v3, merged) | ported; mainline measured a 2688x1520 stream at 22.5 or 65.4 ms per frame with the power-on values and 3.6 ms with these. Reprogramming after a reset is ours: mainline left open whether the reset clears them |
+| A timed-out decode always gets an IP reset (link 0x48 irq off, 0x44 = 1, wait for status bit 11, clear status), then queued DPCs are drained | mainline "Stop the VDPU383 core on timeout" (posted, compile-tested there) and "Handle interrupts without a current context" | ported; an error status still resets only with `VDPU383_RUN_RESET_ON_ERROR` |
 | Warm-up decode at D0 entry | vendor kernel mpp_hack_rk3576.c (GPL-2.0+ OR MIT) | ported unchanged; mainline does not do it, so it may be unnecessary |
 | Register values, SPS/PPS/RPS bit layouts, RCB sizes, CABAC table | MPP hal_h264d_vdpu383.c and friends | ported; RCB arithmetic changed from float to integer (same values, checked in `selftest`) |
 | SPS/PPS record written both at offset 0 (MPP) and at pps_id * 176 (mainline) | the two disagree | whichever the hardware reads is covered |

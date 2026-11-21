@@ -60,6 +60,18 @@ extern "C" {
 #define V383_LINK_IP_TIMEOUT    0x54
 #define V383_LINK_IP_ENABLE     0x58        /* bit 15 irq_dis, [25:24] clk_cru_mode */
 
+/* Reference read cache, the "cache" region at +0x600 (mainline
+ * rkvdec-vdpu383-regs.h, "configure the reference read cache"). Its power-on
+ * values vary between power-ups and make decoding up to 18 times slower. */
+#define V383_CACHE_OFFSET       0x600
+#define V383_CACHE_CLR_CACHE0   0x10        /* write 1: clear */
+#define V383_CACHE_MAX_READS    0x18
+#define V383_CACHE_CACHE0_CFG   0x1C
+#define V383_CACHE_CFG_CACHEABLE        0x01
+#define V383_CACHE_CFG_READ_ALLOCATE    0x02
+#define V383_CACHE_CFG_LINE_64B         0x10
+#define V383_CACHE_MAX_READS_DEFAULT    0x1C    /* the vendor driver's */
+
 #define V383_STA_FRAME_RDY      0x0001
 #define V383_STA_ERROR_MASK     0x03FE      /* MPP's err_mask */
 #define V383_STA_IP_RST_RDY     0x0800
