@@ -33,6 +33,10 @@
 
 #include "bcm4345bt.h"
 
+/* Packet types BthMini may write and may ask to read. */
+#define BT_VALID_WRITE_TYPE(t)  ((ULONG)(t) == (ULONG)HciPacketCommand || (ULONG)(t) == (ULONG)HciPacketAclData)
+#define BT_VALID_READ_TYPE(t)   ((ULONG)(t) == (ULONG)HciPacketEvent || (ULONG)(t) == (ULONG)HciPacketAclData)
+
 /* btbcm.c's BDADDR_BCM4345C5, 43:45:C5:00:1F:AC, in HCI byte order. */
 static const UCHAR BtPlaceholderAddr[6] = { 0xac, 0x1f, 0x00, 0xc5, 0x45, 0x43 };
 
@@ -222,7 +226,7 @@ TryWrite(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ WDFREQUEST Request)
     if (!NT_SUCCESS(WdfRequestRetrieveInputBuffer(Request, hdr, (PVOID *)&in, &inLen)) ||
         !NT_SUCCESS(WdfRequestRetrieveOutputBuffer(Request, sizeof(ULONG), (PVOID *)&out, &outLen)) ||
         inLen < hdr + (size_t)in->DataLen || in->DataLen > BT_MAX_FRAME ||
-        !BTHX_VALID_WRITE_PACKET_TYPE(in->Type)) {
+        !BT_VALID_WRITE_TYPE(in->Type)) {
         WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
         return TRUE;
     }
@@ -314,12 +318,12 @@ BtEvtIoDeviceControl(_In_ WDFQUEUE Queue, _In_ WDFREQUEST Request, _In_ size_t O
             break;
         }
         type = *(ULONG *)buf;
-        if (!BTHX_VALID_READ_PACKET_TYPE(type)) {
+        if (!BT_VALID_READ_TYPE(type)) {
             status = STATUS_INVALID_PARAMETER;
             break;
         }
         status = WdfRequestForwardToIoQueue(Request,
-                     type == HciPacketEvent ? ctx->EventReadQueue : ctx->AclReadQueue);
+                     type == (ULONG)HciPacketEvent ? ctx->EventReadQueue : ctx->AclReadQueue);
         if (NT_SUCCESS(status)) {
             BtServiceReads(ctx);
             return;
@@ -591,10 +595,17 @@ FixAddress(_In_ PBT_DEVICE_CONTEXT Ctx)
     }
     if (!have) {
         LARGE_INTEGER t = KeQueryPerformanceCounter(NULL);
-        ULONG seed = t.LowPart ^ (ULONG)KeQueryInterruptTime() ^ (ULONG)(ULONG_PTR)Ctx;
+        ULONG64 x = (ULONG64)t.QuadPart ^ KeQueryInterruptTime() ^ (ULONG64)(ULONG_PTR)Ctx;
         ULONG i;
+        if (x == 0) {
+            x = 0x9E3779B97F4A7C15ULL;
+        }
+        /* Not for secrets: only so two boards do not share an address. */
         for (i = 0; i < sizeof(addr); i++) {
-            addr[i] = (UCHAR)RtlRandomEx(&seed);
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            addr[i] = (UCHAR)(x >> 24);
         }
         /* Stay clear of the reserved LAPs 0x9E8B00..0x9E8B3F. */
         if (addr[2] == 0x9E && addr[1] == 0x8B && addr[0] <= 0x3F) {
