@@ -32,7 +32,7 @@ controllers. It needs firmware 0.2.0 or later. How to install it:
 | NVMe | PCIe | inbox stornvme | works |
 | USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
 | Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
-| Audio | none | none | not possible yet ([audio](docs/AUDIO.md)) |
+| Audio | none | none | written, not run: HDMI on both, headphones on the TaishanPi 3M ([audio](docs/AUDIO.md)) |
 
 Most of these were measured once, on 2026-10-01.
 
@@ -110,7 +110,7 @@ drivers/
   net/dwc_eqos/         Ethernet (DWC EQoS)        NetAdapterCx
   spi/rk3xspi/          SPI                        SpbCx (written here)
   input/gt9271/         GT9271 touch screen        VHF (written here)
-  audio/                RK3588 I²S drivers, not built into the image
+  audio/                SAI/I²S audio and the ES8388 codec, not in the image
   lib/, shared/, include/, sd/rk_sip_sdmmc_lib/   shared code
 tools/
   woa-deploy/           install Windows to the eMMC from WinPE

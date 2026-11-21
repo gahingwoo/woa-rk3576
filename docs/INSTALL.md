@@ -167,7 +167,8 @@ firmware 0.4.0 and 0.4.1.
 - Do not make the stick with Ventoy. With this WinPE image its UDF driver
   stopped with a synchronous exception.
 
-Not available under Windows on this board: WiFi and Bluetooth, audio, the RTC (the clock is wrong until it syncs) and the EC20 modem's network
+Not available under Windows on this board: WiFi and Bluetooth, audio (HDMI
+and headphone audio are written and not run, see [audio](AUDIO.md)), the RTC (the clock is wrong until it syncs) and the EC20 modem's network
 interface.
 
 Everything else is as for the CM5-IO.
