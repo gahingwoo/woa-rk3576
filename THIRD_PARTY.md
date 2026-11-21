@@ -17,8 +17,8 @@ Each driver keeps its own licence and copyright lines.
 | `drivers/audio/rk3xi2sbus` | CoolStar | Apache-2.0 (`LICENSE.txt`) |
 | `drivers/audio/codecs/es8323` | CoolStar | Apache-2.0 (`LICENSE.txt`) |
 | `drivers/audio/csaudiork3x` | Microsoft sample, CoolStar | No licence file in the source repository |
-| `drivers/net/dwc_eqos` | Doug Cook | MIT (`LICENSE`) |
-| `drivers/sd/dwcmshc` | Mario Bălănică, Microsoft sample | MIT (SPDX headers) |
+| `drivers/net/dwc_eqos` | Doug Cook | MIT upstream (`LICENSE`); distributed here as GPL-2.0-only (`LICENSING.md`) |
+| `drivers/sd/dwcmshc` | Mario Bălănică, Microsoft sample | MIT upstream (SPDX headers); distributed here as GPL-2.0-only (`LICENSING.md`) |
 | `drivers/sd/dwcsdhc` | Microsoft sdhc sample, Greg Garbern, Mario Bălănică | Copyright lines only; no licence statement. The upstream samples it derives from are MIT. |
 | `drivers/sd/rk_sip_sdmmc_lib` | Mario Bălănică | MIT (SPDX headers) |
 | `drivers/lib/arm_smc_lib` | ARM Limited, Microsoft | BSD (file headers) |
@@ -27,11 +27,23 @@ Each driver keeps its own licence and copyright lines.
 Two entries have no explicit licence: `dwcsdhc` and `csaudiork3x`.
 
 Code written for this repository is GPL-2.0-only (see [LICENSE](LICENSE)).
-The files above stay under their own licences, and changes made here to a
-ported driver are made under that driver's licence. This matters most for the
-Apache-2.0 drivers: Apache-2.0 code cannot be combined with GPL-2.0 code, so
-those drivers and every change to them stay Apache-2.0. Each driver is built
-as its own binary, so the repository only distributes them side by side.
+Where a ported driver's licence allows it, the driver is distributed here
+under GPL-2.0-only: `dwc_eqos` and `dwcmshc`, both MIT upstream. Their
+upstream notices are kept, and each has a `LICENSING.md` saying so.
+
+The rest stay under their own licences, and changes made here to them are
+made under that licence:
+
+- **The Apache-2.0 drivers.** Apache-2.0 code cannot be combined with GPL-2.0
+  code, so those drivers and every change to them stay Apache-2.0.
+- **The shared libraries and headers** (`drivers/shared`, `drivers/include`,
+  `drivers/lib`, `rk_sip_sdmmc_lib`). They stay permissive because the
+  Apache-2.0 drivers build against them too.
+- **`dwcsdhc` and `csaudiork3x`.** Their upstream licence is unclear, so they
+  are left as they are.
+
+Each driver is built as its own binary, so the repository only distributes
+them side by side.
 
 ## Not imported
 
