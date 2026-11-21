@@ -66,6 +66,20 @@ typedef struct _ES8323_CONTEXT
 	LARGE_INTEGER AmpGpioResHubId;
 	WDFIOTARGET AmpGpioTarget;
 
+	//
+	// Diagnostics (es8388_diag.c): results of the last power-up, and a
+	// periodic dump of the codec and SoC registers into the device's
+	// "Device Parameters" key.
+	//
+	NTSTATUS InitStatus;
+	ULONG InitFailedReg;
+	NTSTATUS AmpOpenStatus;
+	NTSTATUS AmpWriteStatus;
+	ULONG AmpWriteValue;
+	WDFTIMER DiagTimer;
+	WDFWORKITEM DiagWorkItem;
+	ULONG DiagCount;
+
 } ES8323_CONTEXT, *PES8323_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(ES8323_CONTEXT, GetDeviceContext)
@@ -79,6 +93,10 @@ NTSTATUS Es8388SaiOpenAmpGpio(_In_ PES8323_CONTEXT pDevice);
 VOID Es8388SaiCloseAmpGpio(_In_ PES8323_CONTEXT pDevice);
 NTSTATUS Es8388SaiPowerUp(_In_ PES8323_CONTEXT pDevice);
 VOID Es8388SaiPowerDown(_In_ PES8323_CONTEXT pDevice);
+NTSTATUS Es8388DiagCreate(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388DiagStart(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388DiagStop(_In_ PES8323_CONTEXT pDevice);
+NTSTATUS es8323_reg_read(_In_ PES8323_CONTEXT pDevice, UINT8 reg, UINT8* data);
 NTSTATUS es8323_reg_write(_In_ PES8323_CONTEXT pDevice, UINT8 reg, UINT8 data);
 
 DRIVER_INITIALIZE DriverEntry;

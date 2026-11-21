@@ -590,7 +590,9 @@ Status
 	if (pDevice->Rk3576Sai)
 	{
 		// A missing amplifier GPIO only costs the headphone output.
+		pDevice->AmpOpenStatus = STATUS_NOT_FOUND;
 		Es8388SaiOpenAmpGpio(pDevice);
+		Es8388DiagCreate(pDevice);
 	}
 
 	return status;
@@ -662,6 +664,7 @@ Status
 		{
 			DbgPrint("es8323: ES8388 power-up failed 0x%x\n", status);
 		}
+		Es8388DiagStart(pDevice);
 		// As BOOTCODEC: an I2C failure does not fail D0, so the audio
 		// endpoints still come up and the failure shows in the debug log.
 		return STATUS_SUCCESS;
@@ -700,6 +703,7 @@ Status
 
 	if (pDevice->Rk3576Sai)
 	{
+		Es8388DiagStop(pDevice);
 		Es8388SaiPowerDown(pDevice);
 		pDevice->ConnectInterrupt = false;
 		return STATUS_SUCCESS;

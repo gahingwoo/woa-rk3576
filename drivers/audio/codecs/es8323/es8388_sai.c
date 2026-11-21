@@ -109,6 +109,7 @@ static NTSTATUS Es8388SaiWriteTable(
 		if (!NT_SUCCESS(status)) {
 			DbgPrint("es8323: ES8388 write reg 0x%02x = 0x%02x failed 0x%x\n",
 				table[i].Reg, table[i].Val, status);
+			pDevice->InitFailedReg = table[i].Reg;
 			return status;
 		}
 		if (table[i].DelayMs) {
@@ -190,9 +191,11 @@ NTSTATUS Es8388SaiOpenAmpGpio(_In_ PES8323_CONTEXT pDevice) {
 	if (!NT_SUCCESS(status)) {
 		goto fail;
 	}
+	pDevice->AmpOpenStatus = STATUS_SUCCESS;
 	return STATUS_SUCCESS;
 
 fail:
+	pDevice->AmpOpenStatus = status;
 	DbgPrint("es8323: cannot open the amplifier GPIO: 0x%x\n", status);
 	WdfObjectDelete(pDevice->AmpGpioTarget);
 	pDevice->AmpGpioTarget = NULL;
@@ -225,11 +228,15 @@ static NTSTATUS Es8388SaiSetAmp(_In_ PES8323_CONTEXT pDevice, BOOLEAN on) {
 	if (!NT_SUCCESS(status)) {
 		DbgPrint("es8323: amplifier GPIO write %u failed 0x%x\n", value, status);
 	}
+	pDevice->AmpWriteStatus = status;
+	pDevice->AmpWriteValue = value;
 	return status;
 }
 
 NTSTATUS Es8388SaiPowerUp(_In_ PES8323_CONTEXT pDevice) {
+	pDevice->InitFailedReg = 0xFFFFFFFF;
 	NTSTATUS status = Es8388SaiWriteTable(pDevice, Es8388SaiStartUp, ARRAYSIZE(Es8388SaiStartUp));
+	pDevice->InitStatus = status;
 	if (!NT_SUCCESS(status)) {
 		return status;
 	}
