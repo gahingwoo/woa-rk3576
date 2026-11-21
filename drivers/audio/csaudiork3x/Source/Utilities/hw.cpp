@@ -61,6 +61,7 @@ Return Value:
     RtlZeroMemory(&this->outputDiag, sizeof(this->outputDiag));
     RtlZeroMemory(&this->inputDiag, sizeof(this->inputDiag));
     this->initCalls = 0;
+    this->diagPdo = NULL;
 
     m_rkdspInterface = *RKdspInterface;
     m_wdfDevice = wdfDevice;
@@ -771,20 +772,27 @@ BOOLEAN CCsAudioRk3xHW::sai_irq() {
 // Parameters key (HKLM\SYSTEM\CurrentControlSet\Enum\CSAUDIO\RK&CLTR\<n>).
 // Only at PASSIVE_LEVEL; the STOP path runs under a spin lock and skips it.
 //
-static void diag_put(WDFKEY key, PCWSTR name, ULONG value) {
+//
+// Not WdfDeviceOpenRegistryKey: m_wdfDevice is a WDF *miniport* device,
+// created without a PDO (CAdapterCommon::Init), and the framework has no
+// device key to open for it.  The 1.0.0.83 build did that and the board
+// bugchecked as soon as the audio device started.  The PDO comes from
+// PcGetPhysicalDeviceObject instead.
+//
+static void diag_put(HANDLE key, PCWSTR name, ULONG value) {
     UNICODE_STRING us;
     RtlInitUnicodeString(&us, name);
-    WdfRegistryAssignULong(key, &us, value);
+    ZwSetValueKey(key, &us, 0, REG_DWORD, &value, sizeof(value));
 }
 
 void CCsAudioRk3xHW::diag_save() {
-    WDFKEY key;
+    HANDLE key = NULL;
 
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL || !m_wdfDevice) {
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || this->diagPdo == NULL) {
         return;
     }
-    if (!NT_SUCCESS(WdfDeviceOpenRegistryKey(m_wdfDevice, PLUGPLAY_REGKEY_DEVICE,
-            KEY_WRITE, WDF_NO_OBJECT_ATTRIBUTES, &key))) {
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(this->diagPdo, PLUGPLAY_REGKEY_DEVICE,
+            KEY_WRITE, &key))) {
         return;
     }
 
@@ -817,7 +825,7 @@ void CCsAudioRk3xHW::diag_save() {
     diag_put(key, L"SaiXfer", i2s_read32(this->isSai ? SAI_XFER : I2S_XFER));
     diag_put(key, L"SaiDmacr", i2s_read32(this->isSai ? SAI_DMACR : I2S_DMACR));
 
-    WdfRegistryClose(key);
+    ZwClose(key);
 }
 #endif
 

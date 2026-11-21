@@ -584,6 +584,8 @@ Return Value:
     }
     IF_FAILED_JUMP(ntStatus, Done);
 
+    m_pHW->diagPdo = m_pPhysicalDeviceObject;
+
     if (!m_pHW->ResourcesValidated())
     {
         DPF(D_TERSE, ("Insufficient resources for Rockchip I2S HW"));

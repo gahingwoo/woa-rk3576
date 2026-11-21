@@ -145,6 +145,7 @@ public:
     RK_TPLG rkTPLG;
     BOOLEAN isJack;
     BOOLEAN isSai;      // RK3576 SAI instead of the RK3588 I2S/TDM block
+    PDEVICE_OBJECT diagPdo;     // set by CAdapterCommon::Init; NULL = no diag
 
 protected:
     struct rk_stream outputStream;
