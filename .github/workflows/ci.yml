@@ -60,6 +60,28 @@ jobs:
           # a truncated file must be refused
           head -c 1000 ampak.hcd > trunc.hcd
           if ./hcdcheck trunc.hcd; then exit 1; fi
+  harness:
+    name: vdpu383 builder and parser (Linux, gcc)
+    # The register builder (drivers/video/vdpu383/lib) and the test tool's
+    # H.264 parser are plain C and build on any host; the tool's --null
+    # device runs them without the decoder. -Werror here keeps the library
+    # clean for a kernel-mode build later.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and self-test
+        run: |
+          set -eux
+          L=drivers/video/vdpu383/lib
+          T=tools/vdpu383test
+          gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Werror \
+              -o vdpu383test $T/main.c $T/h264parse.c $T/dev.c $T/md5.c $T/dxva_check.c \
+              $L/vdpu383_h264.c $L/vdpu383_cabac.c
+          ./vdpu383test selftest
+          # the library alone, freestanding: no libc headers, no floats
+          gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -mgeneral-regs-only -Wall -Wextra -Werror \
+              -c $L/vdpu383_h264.c -o /dev/null
+          gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -c $L/vdpu383_cabac.c -o /dev/null
 
   solution:
     name: WDK build (build/RockchipDrivers.sln)
@@ -104,6 +126,8 @@ jobs:
           - { name: spi,  proj: drivers/spi/rk3xspi/rk3xspi.vcxproj }
           - { name: touch, proj: drivers/input/gt9271/gt9271.vcxproj }
           - { name: bluetooth, proj: drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj }
+          - { name: vdpu383, proj: drivers/video/vdpu383/vdpu383.vcxproj }
+          - { name: vdpu383test, proj: tools/vdpu383test/vdpu383test.vcxproj }
     steps:
       - uses: actions/checkout@v4
 
@@ -218,4 +242,5 @@ jobs:
             **/ARM64/Release/**/*.inf
             **/ARM64/Release/**/*.cat
             **/ARM64/Release/**/*.pdb
+            **/ARM64/Release/*.exe
           if-no-files-found: warn

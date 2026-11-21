@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  vdpu383test.exe: the user-mode side of the RK3576 video decoder bring-up
+  (Windows on ARM64). Console program; needs drivers\video\vdpu383 installed.
+
+      msbuild tools\vdpu383test\vdpu383test.vcxproj /p:Configuration=Release /p:Platform=ARM64
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{5C1E7A92-0383-4F3B-8D64-2A9E1B7C0383}</ProjectGuid>
+    <RootNamespace>vdpu383test</RootNamespace>
+    <Keyword>Win32Proj</Keyword>
+    <Platform Condition="'$(Platform)' == ''">ARM64</Platform>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\obj\</IntDir>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <!-- C4201: anonymous unions in dxva.h; C4996: fopen and friends -->
+      <DisableSpecificWarnings>4201;4996</DisableSpecificWarnings>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreaded</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="main.c" />
+    <ClCompile Include="h264parse.c" />
+    <ClCompile Include="dev.c" />
+    <ClCompile Include="md5.c" />
+    <ClCompile Include="dxva_check.c" />
+    <ClCompile Include="..\..\drivers\video\vdpu383\lib\vdpu383_h264.c" />
+    <ClCompile Include="..\..\drivers\video\vdpu383\lib\vdpu383_cabac.c" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="h264parse.h" />
+    <ClInclude Include="dev.h" />
+    <ClInclude Include="md5.h" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
