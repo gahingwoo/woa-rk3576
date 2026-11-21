@@ -24,6 +24,14 @@ Each driver keeps its own licence and copyright lines.
 | `drivers/lib/arm_smc_lib` | ARM Limited, Microsoft | BSD (file headers) |
 | `drivers/shared`, `drivers/include` | Mario Bălănică, Microsoft, NXP, DataCore | MIT / BSD-3-Clause (file headers) |
 
+Not from worproject. The vendor code is dual licensed; the option used is named:
+
+| Path | Author | Licence |
+|---|---|---|
+| `drivers/video/vdpu383/lib/vdpu383_cabac.c` | Rockchip Electronics (MPP) | Apache-2.0 OR MIT (file header) |
+| `drivers/video/vdpu383/lib/vdpu383_h264.c`, register layouts | ported from Rockchip MPP, mpp/hal/rkdec | Apache-2.0 OR MIT, used as MIT; the file as a whole, with the changes made here, is GPL-2.0-only (file header) |
+| `drivers/video/vdpu383/warmup.c`, warm-up data and sequence | Rockchip Electronics, vendor kernel mpp_hack_rk3576.c | GPL-2.0+ OR MIT, used as GPL-2.0; the file is GPL-2.0-only (file header) |
+
 Two entries have no explicit licence: `dwcsdhc` and `csaudiork3x`.
 
 Code written for this repository is GPL-2.0-only (see [LICENSE](LICENSE)).
