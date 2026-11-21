@@ -1053,7 +1053,7 @@ static void build_dxva(H264Parser *p, const H264Sps *s, H264Pps *q, const SliceH
             pp->FrameNumList[n] = (unsigned short)(k == 2 ? f->long_term_frame_idx : f->frame_num);
             pp->UsedForReferenceFlags |= 3u << (2 * n);
             if (f->non_existing)
-                pp->NonExistingFrameFlags |= (unsigned short)(1u << n);
+                pp->NonExistingFrameFlags = (unsigned short)(pp->NonExistingFrameFlags | (1u << n));
             n++;
         }
     }

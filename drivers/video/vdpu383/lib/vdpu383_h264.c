@@ -89,7 +89,7 @@ static void bp_put(BitPut *bp, unsigned int value, unsigned int bits)
         if ((bp->pos >> 3) >= bp->size)
             return;
         if ((value >> i) & 1)
-            bp->buf[bp->pos >> 3] |= (unsigned char)(1u << (bp->pos & 7));
+            bp->buf[bp->pos >> 3] = (unsigned char)(bp->buf[bp->pos >> 3] | (1u << (bp->pos & 7)));
     }
 }
 

@@ -8,7 +8,7 @@
 #ifndef VDPU383_DRV_H
 #define VDPU383_DRV_H
 
-#include <ntddk.h>
+#include <ntifs.h>     /* KeStackAttachProcess; includes ntddk.h */
 #include <wdf.h>
 #include <intrin.h>
 

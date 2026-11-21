@@ -29,8 +29,8 @@ typedef struct V383_DXVA_PicEntry_H264 {
     unsigned char bPicEntry;            /* Index7Bits | AssociatedFlag << 7; 0xFF = unused */
 } V383_DXVA_PicEntry_H264;
 
-#define V383_PIC_INDEX(e)       ((e).bPicEntry & 0x7F)
-#define V383_PIC_FLAG(e)        (((e).bPicEntry >> 7) & 1)
+#define V383_PIC_INDEX(e)       ((unsigned)((e).bPicEntry & 0x7F))
+#define V383_PIC_FLAG(e)        ((unsigned)(((e).bPicEntry >> 7) & 1))
 #define V383_PIC_UNUSED(e)      ((e).bPicEntry == 0xFF)
 #define V383_PIC_ENTRY(i, f)    ((unsigned char)(((i) & 0x7F) | (((f) & 1) << 7)))
 
