@@ -538,7 +538,16 @@ Status
 			//
 			Class = pDescriptor->u.Connection.Class;
 			Type = pDescriptor->u.Connection.Type;
-			if (Class == CM_RESOURCE_CONNECTION_CLASS_SERIAL &&
+			if (Class == CM_RESOURCE_CONNECTION_CLASS_GPIO &&
+				Type == CM_RESOURCE_CONNECTION_TYPE_GPIO_IO &&
+				!pDevice->HasAmpGpio)
+			{
+				// The first GpioIo is the amplifier enable (es8388_sai.c).
+				pDevice->AmpGpioResHubId.LowPart = pDescriptor->u.Connection.IdLowPart;
+				pDevice->AmpGpioResHubId.HighPart = pDescriptor->u.Connection.IdHighPart;
+				pDevice->HasAmpGpio = TRUE;
+			}
+			else if (Class == CM_RESOURCE_CONNECTION_CLASS_SERIAL &&
 				Type == CM_RESOURCE_CONNECTION_TYPE_SERIAL_I2C)
 			{
 				if (fSpbResourceFound == FALSE)
@@ -577,6 +586,13 @@ Status
 		return status;
 	}
 
+	pDevice->Rk3576Sai = Es8388SaiIsBound(FxDevice);
+	if (pDevice->Rk3576Sai)
+	{
+		// A missing amplifier GPIO only costs the headphone output.
+		Es8388SaiOpenAmpGpio(pDevice);
+	}
+
 	return status;
 }
 
@@ -606,6 +622,7 @@ Status
 
 	UNREFERENCED_PARAMETER(FxResourcesTranslated);
 
+	Es8388SaiCloseAmpGpio(pDevice);
 	SpbTargetDeinitialize(FxDevice, &pDevice->I2CContext);
 
 	return status;
@@ -638,6 +655,18 @@ Status
 	PES8323_CONTEXT pDevice = GetDeviceContext(FxDevice);
 	NTSTATUS status = STATUS_SUCCESS;
 
+	if (pDevice->Rk3576Sai)
+	{
+		status = Es8388SaiPowerUp(pDevice);
+		if (!NT_SUCCESS(status))
+		{
+			DbgPrint("es8323: ES8388 power-up failed 0x%x\n", status);
+		}
+		// As BOOTCODEC: an I2C failure does not fail D0, so the audio
+		// endpoints still come up and the failure shows in the debug log.
+		return STATUS_SUCCESS;
+	}
+
 	BOOTCODEC(pDevice);
 
 	return status;
@@ -668,6 +697,13 @@ Status
 	UNREFERENCED_PARAMETER(FxPreviousState);
 
 	PES8323_CONTEXT pDevice = GetDeviceContext(FxDevice);
+
+	if (pDevice->Rk3576Sai)
+	{
+		Es8388SaiPowerDown(pDevice);
+		pDevice->ConnectInterrupt = false;
+		return STATUS_SUCCESS;
+	}
 
 	es8323_reg_write(pDevice, ES8323_DACCONTROL3, 0x06);
 	es8323_reg_write(pDevice, ES8323_DACCONTROL26, 0x00);

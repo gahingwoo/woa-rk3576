@@ -30,6 +30,9 @@
     <ClCompile Include="es8323.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="es8388_sai.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="driver.h">
