@@ -480,7 +480,7 @@ LoadFirmware(_In_ PBT_DEVICE_CONTEXT Ctx, _Out_ WDFMEMORY *Memory, _Out_ ULONG *
     FILE_STANDARD_INFORMATION info;
     HANDLE file = NULL;
     WDF_OBJECT_ATTRIBUTES attr;
-    PVOID buf;
+    PVOID buf = NULL;
     NTSTATUS status;
 
     *Memory = NULL;
