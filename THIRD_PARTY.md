@@ -24,9 +24,14 @@ Each driver keeps its own licence and copyright lines.
 | `drivers/lib/arm_smc_lib` | ARM Limited, Microsoft | BSD (file headers) |
 | `drivers/shared`, `drivers/include` | Mario Bălănică, Microsoft, NXP, DataCore | MIT / BSD-3-Clause (file headers) |
 
-Two entries have no explicit licence: `dwcsdhc` and `csaudiork3x`. Code
-written for this repository is MIT (see [LICENSE](LICENSE)); the files above
-stay under their own licences.
+Two entries have no explicit licence: `dwcsdhc` and `csaudiork3x`.
+
+Code written for this repository is GPL-2.0-only (see [LICENSE](LICENSE)).
+The files above stay under their own licences, and changes made here to a
+ported driver are made under that driver's licence. This matters most for the
+Apache-2.0 drivers: Apache-2.0 code cannot be combined with GPL-2.0 code, so
+those drivers and every change to them stay Apache-2.0. Each driver is built
+as its own binary, so the repository only distributes them side by side.
 
 ## Not imported
 

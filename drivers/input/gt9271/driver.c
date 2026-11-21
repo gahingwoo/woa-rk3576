@@ -17,7 +17,7 @@
  * off 0x5d; the firmware leaves it running, and that is the state used here.
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
- * SPDX-License-Identifier: MIT
+ * SPDX-License-Identifier: GPL-2.0-only
  */
 
 #include "gt9271.h"

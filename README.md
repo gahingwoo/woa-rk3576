@@ -1,7 +1,7 @@
 # woa-rk3576
 
 [![CI](https://github.com/gahingwoo/woa-rk3576/actions/workflows/ci.yml/badge.svg)](https://github.com/gahingwoo/woa-rk3576/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
 
 Windows on Arm drivers for Rockchip RK3576 boards, and the tools to install
 Windows on one. Tested on the ArmSoM CM5-IO and the LCKFB TaishanPi 3M.
@@ -138,5 +138,7 @@ Mario Bălănică (SD/eMMC), CoolStar (GPIO, I²C, DMA, audio) and Doug Cook
 
 ## License
 
-Code written for this repo is MIT ([LICENSE](LICENSE)). The ported drivers keep
-their own licences; see [THIRD_PARTY.md](THIRD_PARTY.md).
+Code written for this repo is GPL-2.0-only ([LICENSE](LICENSE)). Releases
+before this change were MIT and stay MIT. The ported drivers keep their own
+licences, and RK3576 changes to them are made under the same licence as the
+driver they change; see [THIRD_PARTY.md](THIRD_PARTY.md).
