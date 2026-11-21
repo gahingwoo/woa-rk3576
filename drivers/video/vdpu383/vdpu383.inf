@@ -1,0 +1,64 @@
+;
+; vdpu383.inf - RK3576 video decoder (RKVDEC, VDPU383), bring-up driver
+;
+; Target: Windows on ARM64. Binds ACPI\RKCP0383, which edk2-rk3576 publishes
+; in an SSDT only when "Video Decoder (VDPU383, experimental)" is enabled in
+; the firmware's ACPI / Device Tree setup page. The firmware powers the
+; decoder; this driver gives tools\vdpu383test access to it (\\.\VDPU383,
+; administrators only). It does not decode video for applications.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: MIT
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = vdpu383.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+vdpu383.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%VDPU383.DeviceDesc% = VDPU383_Inst,ACPI\RKCP0383
+
+[VDPU383_Inst.NT]
+CopyFiles = VDPU383_CopyFiles
+
+[VDPU383_CopyFiles]
+vdpu383.sys
+
+[VDPU383_Inst.NT.Services]
+AddService = vdpu383,0x00000002,VDPU383_Service
+
+[VDPU383_Service]
+DisplayName   = %VDPU383.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\vdpu383.sys
+
+[VDPU383_Inst.NT.Wdf]
+KmdfService = vdpu383, VDPU383_wdfsect
+
+[VDPU383_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName       = "woa-rk3576"
+DiskName           = "RK3576 Video Decoder Installation Disk"
+VDPU383.DeviceDesc = "Rockchip RK3576 Video Decoder (VDPU383, bring-up)"
+VDPU383.SvcDesc    = "Rockchip RK3576 Video Decoder bring-up driver"

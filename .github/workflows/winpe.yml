@@ -78,7 +78,8 @@ jobs:
           $solutionDrivers = @('dwcsdhc', 'dwcmshc', 'rk3xgpio', 'rk3xi2c', 'pl330dma', 'dwc_eqos')
           $projects = @(
             'drivers/spi/rk3xspi/rk3xspi.vcxproj',
-            'drivers/input/gt9271/gt9271.vcxproj'
+            'drivers/input/gt9271/gt9271.vcxproj',
+            'drivers/video/vdpu383/vdpu383.vcxproj'
           )
           # Record the sdport miniport API surface into the log.
           #
@@ -157,6 +158,17 @@ jobs:
             throw 'no .sys came out of the driver build'
           }
 
+          # The decoder bring-up tool (user mode, beside its driver).
+          # vdpu383.sys binds only when the firmware's "Video Decoder
+          # (VDPU383)" option publishes ACPI\RKCP0383, so it changes
+          # nothing on a board without it.
+          msbuild tools\vdpu383test\vdpu383test.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed for vdpu383test" }
+          New-Item -ItemType Directory -Force -Path C:\rk-tools | Out-Null
+          Copy-Item tools\vdpu383test\ARM64\Release\vdpu383test.exe C:\rk-tools\ -Force
+          Copy-Item tools\vdpu383-capture\* C:\rk-tools\ -Force
+
           # Test-sign them.
           #
           # testsigning on the target does NOT mean "load unsigned drivers" --
@@ -209,6 +221,11 @@ jobs:
               if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
             }
           }
+
+          # The signer, for trusting this run's packages on an installed
+          # Windows before pnputil (docs/INSTALL.md): certutil -addstore -f
+          # Root signer.cer, then TrustedPublisher. DISM ignores it.
+          Export-Certificate -Cert $cert -FilePath (Join-Path $env:DRIVER_STAGE 'signer.cer') | Out-Null
 
           Get-ChildItem $env:DRIVER_STAGE -Recurse -File |
             Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
@@ -361,6 +378,12 @@ jobs:
                     tools\woa-debug\net-update.cmd, tools\woa-debug\net-update.ps1 `
                     "$env:PE_ROOT\media\woa-debug\" -Force
 
+          # Bring-up tools (vdpu383test.exe) on the media, not in the image.
+          if (Test-Path C:\rk-tools) {
+            New-Item -ItemType Directory -Force -Path "$env:PE_ROOT\media\woa-tools" | Out-Null
+            Copy-Item C:\rk-tools\* "$env:PE_ROOT\media\woa-tools\" -Force
+          }
+
           # The Windows deployment: the script, and the same test-signed driver
           # packages this image carries, as files it can inject offline.
           New-Item -ItemType Directory -Force -Path "$env:PE_ROOT\media\woa-deploy" | Out-Null
@@ -428,6 +451,19 @@ jobs:
           & bcdedit.exe /store $bcd /enum '{dbgsettings}' | Write-Host
           & bcdedit.exe /store $bcd /enum '{bootmgr}' | Write-Host
           & bcdedit.exe /store $bcd /enum '{default}' | Write-Host
+
+      - name: Upload the signed driver packages and tools
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.drivers }}
+        uses: actions/upload-artifact@v4
+        with:
+          # The same test-signed packages the image carries, for pnputil on an
+          # installed Windows: woa-drivers\<driver>\*.inf, and woa-tools.
+          name: woa-drivers-signed-arm64
+          path: |
+            C:\WinPE_arm64\media\woa-drivers\**
+            C:\WinPE_arm64\media\woa-tools\**
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Show what came out
         shell: pwsh
