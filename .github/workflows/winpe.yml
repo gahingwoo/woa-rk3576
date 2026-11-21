@@ -131,8 +131,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:DRIVER_STAGE | Out-Null
 
           Write-Host "== build/RockchipDrivers.sln"
+          # The run number goes into DriverVer, so pnputil takes these packages
+          # over the ones a previous run installed (it keeps an installed
+          # package that is not older).
           msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64 `
-                  /p:SignMode=Off /m /nologo /v:minimal
+                  /p:SignMode=Off /p:WoaDriverBuild=${{ github.run_number }} /m /nologo /v:minimal
           if ($LASTEXITCODE -ne 0) { throw "msbuild failed for RockchipDrivers.sln" }
           foreach ($set in @(@{ Names = $solutionDrivers; Stage = $env:DRIVER_STAGE },
                              @{ Names = $audioDrivers;    Stage = $env:AUDIO_STAGE })) {

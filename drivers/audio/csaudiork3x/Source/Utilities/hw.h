@@ -75,6 +75,23 @@ struct rk_stream {
     HANDLE dmaThread;
 };
 
+// Counters for diag_save() (hw.cpp), per direction.  Diagnostics only.
+struct rk_diag {
+    ULONG programCalls;
+    ULONG programStatus;        // NTSTATUS of the last rk3x_program_dma
+    ULONG getChannelNull;
+    ULONG submitStatus;         // NTSTATUS of the last SubmitAudioDMA
+    ULONG bufferPhysHigh;
+    ULONG bufferPhysLow;
+    ULONG bufferBytes;
+    ULONG playCalls;
+    ULONG playNoThread;
+    ULONG playAlreadyActive;
+    ULONG playStarted;
+    ULONG stopCalls;
+    ULONG freeChannelFail;
+};
+
 #include "adsp.h"
 
 #define JACK_TPLG "i2s-jack"
@@ -132,6 +149,10 @@ public:
 protected:
     struct rk_stream outputStream;
     struct rk_stream inputStream;
+    struct rk_diag outputDiag;
+    struct rk_diag inputDiag;
+    ULONG initCalls;
+    void diag_save();
 
     UINT32 i2s_read32(UINT32 reg);
     void i2s_write32(UINT32 reg, UINT32 val);
@@ -163,6 +184,7 @@ public:
     struct rk_stream* rk_get_stream(eDeviceType deviceType);
 
     NTSTATUS rk3x_program_dma(eDeviceType deviceType, PMDL mdl, IPortWaveRTStream* stream, UINT32 byteCount);
+    NTSTATUS rk3x_program_dma_inner(eDeviceType deviceType, PMDL mdl, IPortWaveRTStream* stream, UINT32 byteCount, struct rk_diag* diag);
     NTSTATUS rk3x_play(eDeviceType deviceType);
     NTSTATUS rk3x_stop(eDeviceType deviceType);
     NTSTATUS rk3x_current_position(eDeviceType deviceType, UINT32* linkPos, UINT64* linearPos);

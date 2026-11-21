@@ -245,11 +245,20 @@ void _stop(PPL330DMA_THREAD Thread)
 	if (_state(Thread) == PL330_STATE_FAULT_COMPLETING)
 		UNTIL(Thread, PL330_STATE_FAULTING | PL330_STATE_KILLING);
 
-	/* Return if nothing needs to be done */
+	/*
+	 * Nothing to kill.  The request is over all the same: a thread that
+	 * stopped on its own (a fault, or a program that ended) left ReqRunning
+	 * set, FreeHandle then refused the channel, and every later GetHandle
+	 * for that channel returned NULL.  csaudiork3x saw that as a stream
+	 * whose DMA could never be programmed again.
+	 */
 	if (_state(Thread) == PL330_STATE_COMPLETING
 		|| _state(Thread) == PL330_STATE_KILLING
-		|| _state(Thread) == PL330_STATE_STOPPED)
+		|| _state(Thread) == PL330_STATE_STOPPED) {
+		write32(pDevice, INTEN, inten & ~(1 << Thread->ev));
+		Thread->ReqRunning = FALSE;
 		return;
+	}
 
 	_emit_KILL(0, insn);
 

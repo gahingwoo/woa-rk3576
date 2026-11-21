@@ -58,6 +58,9 @@ Return Value:
 
     RtlZeroMemory(&this->outputStream, sizeof(this->outputStream));
     RtlZeroMemory(&this->inputStream, sizeof(this->inputStream));
+    RtlZeroMemory(&this->outputDiag, sizeof(this->outputDiag));
+    RtlZeroMemory(&this->inputDiag, sizeof(this->inputDiag));
+    this->initCalls = 0;
 
     m_rkdspInterface = *RKdspInterface;
     m_wdfDevice = wdfDevice;
@@ -147,11 +150,14 @@ struct rk_stream* CCsAudioRk3xHW::rk_get_stream(eDeviceType deviceType) {
 
 NTSTATUS CCsAudioRk3xHW::rk3x_init() {
 #if USERKHW
+    this->initCalls++;
 
     this->m_rkdspInterface.SetDSPPowerState(this->m_rkdspInterface.Context, PowerDeviceD0);
 
     if (this->isSai) {
-        return sai_init();
+        NTSTATUS saiStatus = sai_init();
+        diag_save();
+        return saiStatus;
     }
     
     //write defaults
@@ -282,6 +288,25 @@ NTSTATUS CCsAudioRk3xHW::rk3x_program_dma(eDeviceType deviceType, PMDL mdl, IPor
         return STATUS_INVALID_PARAMETER;
     }
 
+    struct rk_diag* diag = (deviceType == eInputDevice) ? &this->inputDiag : &this->outputDiag;
+    diag->programCalls++;
+
+    NTSTATUS status = rk3x_program_dma_inner(deviceType, mdl, stream, byteCount, diag);
+    diag->programStatus = (ULONG)status;
+    diag_save();
+    return status;
+#else
+    return STATUS_SUCCESS;
+#endif
+}
+
+NTSTATUS CCsAudioRk3xHW::rk3x_program_dma_inner(eDeviceType deviceType, PMDL mdl, IPortWaveRTStream *stream, UINT32 byteCount, struct rk_diag* diag) {
+#if USERKHW
+    struct rk_stream *i2sStream = rk_get_stream(deviceType);
+    if (!i2sStream) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (i2sStream->dmaThread) {
         return STATUS_SUCCESS; //already allocated. Return
     }
@@ -317,8 +342,18 @@ NTSTATUS CCsAudioRk3xHW::rk3x_program_dma(eDeviceType deviceType, PMDL mdl, IPor
     i2sStream->bufferBytes = byteCount;
     i2sStream->dmaThread = this->m_DMAInterface.GetChannel(dmaContext, dmaIndex);
 
+    diag->bufferPhysHigh = (ULONG)i2sStream->bufferBaseAddress.HighPart;
+    diag->bufferPhysLow = i2sStream->bufferBaseAddress.LowPart;
+    diag->bufferBytes = byteCount;
+
     if (!i2sStream->dmaThread) {
+        diag->getChannelNull++;
         return STATUS_UNSUCCESSFUL;
+    }
+
+    if (i2sStream->bufferBaseAddress.HighPart != 0) {
+        // The PL330 programs are 32-bit; the buffer must be below 4 GB.
+        DbgPrint("csaudiork3x: DMA buffer above 4 GB\n");
     }
 
     UINT32 srcAddr;
@@ -331,8 +366,9 @@ NTSTATUS CCsAudioRk3xHW::rk3x_program_dma(eDeviceType deviceType, PMDL mdl, IPor
         dstAddr = this->m_MMIO.PhysAddr.LowPart + deviceReg;
     }
 
+    NTSTATUS submitStatus;
     if (!i2sStream->recording) {
-        return this->m_DMAInterface.SubmitAudioDMA(
+        submitStatus = this->m_DMAInterface.SubmitAudioDMA(
             dmaContext,
             i2sStream->dmaThread,
             i2sStream->recording,
@@ -343,7 +379,7 @@ NTSTATUS CCsAudioRk3xHW::rk3x_program_dma(eDeviceType deviceType, PMDL mdl, IPor
         );
     }
     else {
-        return this->m_DMAInterface.SubmitAudioDMA(
+        submitStatus = this->m_DMAInterface.SubmitAudioDMA(
             dmaContext,
             i2sStream->dmaThread,
             i2sStream->recording,
@@ -353,6 +389,8 @@ NTSTATUS CCsAudioRk3xHW::rk3x_program_dma(eDeviceType deviceType, PMDL mdl, IPor
             byteCount / 2
         );
     }
+    diag->submitStatus = (ULONG)submitStatus;
+    return submitStatus;
 #else
     return STATUS_SUCCESS;
 #endif
@@ -365,13 +403,21 @@ NTSTATUS CCsAudioRk3xHW::rk3x_play(eDeviceType deviceType) {
         return STATUS_INVALID_PARAMETER;
     }
 
+    struct rk_diag* diag = (deviceType == eInputDevice) ? &this->inputDiag : &this->outputDiag;
+    diag->playCalls++;
+
     if (!i2sStream->dmaThread) {
+        diag->playNoThread++;
+        diag_save();
         return STATUS_INVALID_DEVICE_STATE;
     }
 
     if (i2sStream->isActive) {
+        diag->playAlreadyActive++;
+        diag_save();
         return STATUS_SUCCESS;
     }
+    diag->playStarted++;
 
     switch (deviceType) {
     case eOutputDevice:
@@ -396,6 +442,9 @@ NTSTATUS CCsAudioRk3xHW::rk3x_play(eDeviceType deviceType) {
 #endif
 
     i2sStream->isActive = TRUE;
+#if USERKHW
+    diag_save();
+#endif
 
     if (this->isJack) {
         CsAudioArg arg;
@@ -418,6 +467,9 @@ NTSTATUS CCsAudioRk3xHW::rk3x_stop(eDeviceType deviceType) {
     if (!i2sStream->isActive) {
         return STATUS_SUCCESS;
     }
+
+    struct rk_diag* diag = (deviceType == eInputDevice) ? &this->inputDiag : &this->outputDiag;
+    diag->stopCalls++;
 
     if (!i2sStream->dmaThread) {
         return STATUS_INVALID_DEVICE_STATE;
@@ -457,7 +509,9 @@ NTSTATUS CCsAudioRk3xHW::rk3x_stop(eDeviceType deviceType) {
     HANDLE dmaThread = i2sStream->dmaThread;
 
     this->m_DMAInterface.StopDMA(dmaContext, dmaThread);
-    this->m_DMAInterface.FreeChannel(dmaContext, dmaThread);
+    if (!this->m_DMAInterface.FreeChannel(dmaContext, dmaThread)) {
+        diag->freeChannelFail++;
+    }
 
     if (this->isSai) {
         // sai_stop() already cleared the TX or RX logic.
@@ -708,6 +762,62 @@ BOOLEAN CCsAudioRk3xHW::sai_irq() {
     }
 
     return handled;
+}
+#endif
+
+#if USERKHW
+//
+// Diagnostics: the counters above, into this audio device's Device
+// Parameters key (HKLM\SYSTEM\CurrentControlSet\Enum\CSAUDIO\RK&CLTR\<n>).
+// Only at PASSIVE_LEVEL; the STOP path runs under a spin lock and skips it.
+//
+static void diag_put(WDFKEY key, PCWSTR name, ULONG value) {
+    UNICODE_STRING us;
+    RtlInitUnicodeString(&us, name);
+    WdfRegistryAssignULong(key, &us, value);
+}
+
+void CCsAudioRk3xHW::diag_save() {
+    WDFKEY key;
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || !m_wdfDevice) {
+        return;
+    }
+    if (!NT_SUCCESS(WdfDeviceOpenRegistryKey(m_wdfDevice, PLUGPLAY_REGKEY_DEVICE,
+            KEY_WRITE, WDF_NO_OBJECT_ATTRIBUTES, &key))) {
+        return;
+    }
+
+    diag_put(key, L"DiagMmio", this->m_MMIO.PhysAddr.LowPart);
+    diag_put(key, L"DiagIsSai", this->isSai);
+    diag_put(key, L"DiagIsJack", this->isJack);
+    diag_put(key, L"DiagInitCalls", this->initCalls);
+    diag_put(key, L"DiagTxRoute", this->rkTPLG.i2s_tx_route);
+    diag_put(key, L"DiagDmaTx", this->rkTPLG.tx);
+
+    static const PCWSTR names[2][13] = {
+        { L"OutProgramCalls", L"OutProgramStatus", L"OutGetChannelNull", L"OutSubmitStatus",
+          L"OutBufPhysHigh", L"OutBufPhysLow", L"OutBufBytes", L"OutPlayCalls",
+          L"OutPlayNoThread", L"OutPlayAlreadyActive", L"OutPlayStarted", L"OutStopCalls",
+          L"OutFreeChannelFail" },
+        { L"InProgramCalls", L"InProgramStatus", L"InGetChannelNull", L"InSubmitStatus",
+          L"InBufPhysHigh", L"InBufPhysLow", L"InBufBytes", L"InPlayCalls",
+          L"InPlayNoThread", L"InPlayAlreadyActive", L"InPlayStarted", L"InStopCalls",
+          L"InFreeChannelFail" },
+    };
+    const struct rk_diag* d[2] = { &this->outputDiag, &this->inputDiag };
+    for (int i = 0; i < 2; i++) {
+        const ULONG* v = (const ULONG*)d[i];
+        for (int j = 0; j < 13; j++) {
+            diag_put(key, names[i][j], v[j]);
+        }
+    }
+
+    // SAI registers as this driver sees them.
+    diag_put(key, L"SaiXfer", i2s_read32(this->isSai ? SAI_XFER : I2S_XFER));
+    diag_put(key, L"SaiDmacr", i2s_read32(this->isSai ? SAI_DMACR : I2S_DMACR));
+
+    WdfRegistryClose(key);
 }
 #endif
 

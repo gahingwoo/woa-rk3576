@@ -133,6 +133,10 @@ BOOLEAN FreeHandle(PPL330DMA_CONTEXT pDevice, PPL330DMA_THREAD Thread) {
 	if (!Thread)
 		return FALSE;
 	if (Thread->ReqRunning) {
+		// The owner is giving the channel back: stop whatever is left.
+		_stop(Thread);
+	}
+	if (Thread->ReqRunning) {
 		return FALSE;
 	}
 	Thread->Free = TRUE;

@@ -19,7 +19,8 @@
  *
  * The SoC registers are read only, and only ones whose reads have no side
  * effect: CRU clock selects and gates, the IOC MCLK-out gate and GPIO4
- * iomux/pull, GPIO4 data and direction, PD_AUDIO status, and the SAI1 block.
+ * iomux/pull, GPIO4 data and direction, PD_AUDIO status, the SAI1 block and
+ * the PL330 DMA0 status of SAI1's channels.
  *
  * Diagnostics, to be removed once audio works.
  *
@@ -49,6 +50,13 @@ static const ULONG DiagSocRegs[] = {
 	0x2A610000, 0x2A610004, 0x2A610008, 0x2A61000C, 0x2A610010, 0x2A610014,
 	0x2A610018, 0x2A61001C, 0x2A610020, 0x2A610024, 0x2A610028, 0x2A61002C,
 	0x2A610038, 0x2A610064, 0x2A610068, 0x2A61006C, 0x2A610070,
+	// DMA0 (PL330, SAI1 TX = channel/request 2, RX = 3): DSR DPC INTEN
+	// INT_EVENT_RIS INTMIS FSRD FSRC FTRD FTR2 FTR3 CSR2 CPC2 CSR3 CPC3
+	// SA2 DA2 CCR2 LC0_2 SA3 DA3 CR0 CR3 CR4 CRD (status reads only)
+	0x2AB90000, 0x2AB90004, 0x2AB90020, 0x2AB90024, 0x2AB90028, 0x2AB90030,
+	0x2AB90034, 0x2AB90038, 0x2AB90048, 0x2AB9004C, 0x2AB90110, 0x2AB90114,
+	0x2AB90118, 0x2AB9011C, 0x2AB90440, 0x2AB90444, 0x2AB90448, 0x2AB9044C,
+	0x2AB90460, 0x2AB90464, 0x2AB90E00, 0x2AB90E0C, 0x2AB90E10, 0x2AB90E14,
 };
 
 static void DiagSetDword(WDFKEY key, PCWSTR name, ULONG value) {
