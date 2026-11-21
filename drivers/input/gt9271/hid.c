@@ -16,7 +16,7 @@
  * instead of "Full Windows Touch Support".
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
- * SPDX-License-Identifier: MIT
+ * SPDX-License-Identifier: GPL-2.0-only
  */
 
 #include "gt9271.h"

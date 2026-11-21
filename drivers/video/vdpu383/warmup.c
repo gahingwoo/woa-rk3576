@@ -16,12 +16,12 @@
  *   author: Ding Wei <leo.ding@rock-chips.com>
  *   SPDX-License-Identifier: (GPL-2.0+ OR MIT)
  *
- * used here under the MIT option. Where the vendor code has an IOMMU
+ * used here under the GPL-2.0 option. Where the vendor code has an IOMMU
  * address (dec->fix->iova), this has the buffer's physical address: the
  * IOMMU is left with paging off, so the decoder's addresses are physical.
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
- * SPDX-License-Identifier: MIT
+ * SPDX-License-Identifier: GPL-2.0-only
  */
 
 #include "vdpu383.h"

@@ -17,24 +17,41 @@ Each driver keeps its own licence and copyright lines.
 | `drivers/audio/rk3xi2sbus` | CoolStar | Apache-2.0 (`LICENSE.txt`) |
 | `drivers/audio/codecs/es8323` | CoolStar | Apache-2.0 (`LICENSE.txt`) |
 | `drivers/audio/csaudiork3x` | Microsoft sample, CoolStar | No licence file in the source repository |
-| `drivers/net/dwc_eqos` | Doug Cook | MIT (`LICENSE`) |
-| `drivers/sd/dwcmshc` | Mario Bălănică, Microsoft sample | MIT (SPDX headers) |
+| `drivers/net/dwc_eqos` | Doug Cook | MIT upstream (`LICENSE`); distributed here as GPL-2.0-only (`LICENSING.md`) |
+| `drivers/sd/dwcmshc` | Mario Bălănică, Microsoft sample | MIT upstream (SPDX headers); distributed here as GPL-2.0-only (`LICENSING.md`) |
 | `drivers/sd/dwcsdhc` | Microsoft sdhc sample, Greg Garbern, Mario Bălănică | Copyright lines only; no licence statement. The upstream samples it derives from are MIT. |
 | `drivers/sd/rk_sip_sdmmc_lib` | Mario Bălănică | MIT (SPDX headers) |
 | `drivers/lib/arm_smc_lib` | ARM Limited, Microsoft | BSD (file headers) |
 | `drivers/shared`, `drivers/include` | Mario Bălănică, Microsoft, NXP, DataCore | MIT / BSD-3-Clause (file headers) |
 
-Not from worproject, used under the MIT option of their dual licence:
+Not from worproject. The vendor code is dual licensed; the option used is named:
 
 | Path | Author | Licence |
 |---|---|---|
 | `drivers/video/vdpu383/lib/vdpu383_cabac.c` | Rockchip Electronics (MPP) | Apache-2.0 OR MIT (file header) |
-| `drivers/video/vdpu383/lib/vdpu383_h264.c`, register layouts | ported from Rockchip MPP, mpp/hal/rkdec | Apache-2.0 OR MIT, as MIT (file header) |
-| `drivers/video/vdpu383/warmup.c`, warm-up data and sequence | Rockchip Electronics, vendor kernel mpp_hack_rk3576.c | GPL-2.0+ OR MIT, as MIT (file header) |
+| `drivers/video/vdpu383/lib/vdpu383_h264.c`, register layouts | ported from Rockchip MPP, mpp/hal/rkdec | Apache-2.0 OR MIT, used as MIT; the file as a whole, with the changes made here, is GPL-2.0-only (file header) |
+| `drivers/video/vdpu383/warmup.c`, warm-up data and sequence | Rockchip Electronics, vendor kernel mpp_hack_rk3576.c | GPL-2.0+ OR MIT, used as GPL-2.0; the file is GPL-2.0-only (file header) |
 
-Two entries have no explicit licence: `dwcsdhc` and `csaudiork3x`. Code
-written for this repository is MIT (see [LICENSE](LICENSE)); the files above
-stay under their own licences.
+Two entries have no explicit licence: `dwcsdhc` and `csaudiork3x`.
+
+Code written for this repository is GPL-2.0-only (see [LICENSE](LICENSE)).
+Where a ported driver's licence allows it, the driver is distributed here
+under GPL-2.0-only: `dwc_eqos` and `dwcmshc`, both MIT upstream. Their
+upstream notices are kept, and each has a `LICENSING.md` saying so.
+
+The rest stay under their own licences, and changes made here to them are
+made under that licence:
+
+- **The Apache-2.0 drivers.** Apache-2.0 code cannot be combined with GPL-2.0
+  code, so those drivers and every change to them stay Apache-2.0.
+- **The shared libraries and headers** (`drivers/shared`, `drivers/include`,
+  `drivers/lib`, `rk_sip_sdmmc_lib`). They stay permissive because the
+  Apache-2.0 drivers build against them too.
+- **`dwcsdhc` and `csaudiork3x`.** Their upstream licence is unclear, so they
+  are left as they are.
+
+Each driver is built as its own binary, so the repository only distributes
+them side by side.
 
 ## Not imported
 

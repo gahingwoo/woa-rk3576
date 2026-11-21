@@ -2,7 +2,7 @@
  * vdpu383.h - private definitions of vdpu383.sys
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
- * SPDX-License-Identifier: MIT
+ * SPDX-License-Identifier: GPL-2.0-only
  */
 
 #ifndef VDPU383_DRV_H
