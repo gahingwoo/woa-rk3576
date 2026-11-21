@@ -45,6 +45,18 @@ made under that licence:
 Each driver is built as its own binary, so the repository only distributes
 them side by side.
 
+## Firmware not carried
+
+`drivers/bluetooth/bcm4345bt` needs Broadcom's BCM4345C5 patchram, which is
+not in this repository or in any package it builds. Ampak's build for the
+AP6256 (armbian/firmware) has no stated licence; Raspberry Pi's BCM43456
+build (RPi-Distro/bluez-firmware) is under Cypress's licence, which allows
+redistribution in object code for use with Cypress parts. The driver's
+`install-firmware.ps1` downloads either on the board, at a pinned commit,
+and checks its SHA-256. Microsoft's SerialHCIBus sample (MS-PL) was read for
+the BthX interface; no code from it is used, since MS-PL and GPL-2.0 cannot
+be combined.
+
 ## Not imported
 
 - `drivers/storage_fix/*.sys` and `drivers/usb/usbehci_nointerlocked`: patched

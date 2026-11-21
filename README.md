@@ -29,6 +29,7 @@ controllers. It needs firmware 0.2.0 or later. How to install it:
 | Ethernet | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | works, gets a DHCP lease |
 | SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | started, all 5; no SPI device exercised |
 | Touch (TaishanPi 3M DSI screen) | `RKCP9271` | [gt9271](drivers/input/gt9271) (VHF) | works on the TaishanPi 3M, 10 touch points; needs edk2-rk3576 built from `main` after 0.4.1 |
+| Bluetooth (TaishanPi 3M, AP6256) | `RKCP4345` | [bcm4345bt](drivers/bluetooth/bcm4345bt) (BthX, in-box BthMini) | builds; not run on hardware; needs edk2-rk3576 branch `tspi3m-bt-acpi` and the patchram fetched on the board |
 | NVMe | PCIe | inbox stornvme | works |
 | USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
 | Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
@@ -90,6 +91,9 @@ so `git log -- drivers/<class>/<name>` shows what differs from RK3588:
   past 4 GB, and without it every transfer to a buffer above 4 GB faulted.
 - rk3xspi is written for this repo; the RK3588 set has no SPI driver.
 - gt9271, the TaishanPi 3M touch screen driver, is written for this repo.
+- bcm4345bt, the TaishanPi 3M Bluetooth driver, is written for this repo. It
+  runs the UART itself (Windows on ARM has no driver for it) and does not
+  ship the Broadcom patchram, which `install-firmware.ps1` fetches.
 
 Licences per driver: [THIRD_PARTY.md](THIRD_PARTY.md).
 
@@ -99,9 +103,10 @@ Licences per driver: [THIRD_PARTY.md](THIRD_PARTY.md).
 msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64
 msbuild drivers\spi\rk3xspi\rk3xspi.vcxproj /p:Configuration=Release /p:Platform=ARM64
 msbuild drivers\input\gt9271\gt9271.vcxproj /p:Configuration=Release /p:Platform=ARM64
+msbuild drivers\bluetooth\bcm4345bt\bcm4345bt.vcxproj /p:Configuration=Release /p:Platform=ARM64
 ```
 
-CI builds all three on every push. The WinPE workflow also test-signs the drivers
+CI builds all of them on every push. The WinPE workflow also test-signs the drivers
 and puts them in a WinPE image. Details: [docs/BUILDING.md](docs/BUILDING.md).
 Debugging tools: [docs/DEBUGGING.md](docs/DEBUGGING.md).
 
@@ -118,6 +123,7 @@ drivers/
   net/dwc_eqos/         Ethernet (DWC EQoS)        NetAdapterCx
   spi/rk3xspi/          SPI                        SpbCx (written here)
   input/gt9271/         GT9271 touch screen        VHF (written here)
+  bluetooth/bcm4345bt/  BCM4345C5 on UART6         BthX bus driver (written here)
   audio/                RK3588 I²S drivers, not built into the image
   lib/, shared/, include/, sd/rk_sip_sdmmc_lib/   shared code
 tools/

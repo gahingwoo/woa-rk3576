@@ -1,0 +1,79 @@
+;
+; bcm4345bt.inf - Broadcom BCM4345C5 Bluetooth on the RK3576 UART6
+; (AP6256 module, LCKFB TaishanPi 3M)
+;
+; Target: Windows on ARM64. Binds ACPI\RKCP4345, which the TaishanPi 3M
+; firmware (edk2-rk3576, branch tspi3m-bt-acpi) publishes as \_SB.BTH0 with
+; UART6's registers and interrupt and the BT_REG_ON and BT_WAKE GPIOs. The
+; driver runs the UART itself, needs rk3xgpio for the two GPIOs, and
+; enumerates one child, BCM4345BT\UART_H4 with the compatible ID
+; MS_BTHX_BTHMINI, on which the in-box bth.inf installs BthMini and the
+; Windows Bluetooth stack.
+;
+; The patchram (BCM4345C5.hcd) is not part of this package; see README.md
+; and install-firmware.ps1. Without it the controller runs its ROM firmware.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = bcm4345bt.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+bcm4345bt.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%BCM4345BT.DeviceDesc% = BCM4345BT_Inst,ACPI\RKCP4345
+
+[BCM4345BT_Inst.NT]
+CopyFiles = BCM4345BT_CopyFiles
+
+[BCM4345BT_CopyFiles]
+bcm4345bt.sys
+
+[BCM4345BT_Inst.NT.HW]
+AddReg = BCM4345BT_Inst.NT.HW.AddReg
+
+[BCM4345BT_Inst.NT.HW.AddReg]
+; Defaults; the driver also uses these when the values are absent.
+HKR,,"OperatingBaud",0x00010003,1500000
+HKR,,"UartClock",0x00010003,24000000
+HKR,,"FirmwarePath",0x00000002,"\SystemRoot\System32\drivers\brcm\BCM4345C5.hcd"
+
+[BCM4345BT_Inst.NT.Services]
+AddService = bcm4345bt,0x00000002,BCM4345BT_Service
+
+[BCM4345BT_Service]
+DisplayName   = %BCM4345BT.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\bcm4345bt.sys
+
+[BCM4345BT_Inst.NT.Wdf]
+KmdfService = bcm4345bt, BCM4345BT_wdfsect
+
+[BCM4345BT_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName          = "woa-rk3576"
+DiskName              = "BCM4345C5 Bluetooth Installation Disk"
+BCM4345BT.DeviceDesc  = "Broadcom BCM4345C5 Bluetooth (UART)"
+BCM4345BT.SvcDesc     = "Broadcom BCM4345C5 Bluetooth UART Driver"
