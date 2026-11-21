@@ -42,6 +42,9 @@ env:
   # Same pin as ci.yml: the class extensions come from the WDK half.
   WDK_VERSION:  '10.0.26100.0'
   DRIVER_STAGE: 'C:\rk-drivers'
+  # The audio drivers: signed with the same certificate as the rest, put on
+  # the media for pnputil, and not injected (see below).
+  AUDIO_STAGE:  'C:\rk-audio'
 
 jobs:
   winpe:
@@ -72,10 +75,14 @@ jobs:
           # rather than the controller's CDETECT.
           #
           # Injected from the solution: eMMC, SD, GPIO, I2C, DMA, GMAC. Not the
-          # audio drivers: only firmware built with PcdHdmiAudioPreset
-          # publishes the SAI6 device they bind (RKCP3004), and they have not
-          # run on hardware.
+          # audio drivers: only firmware built with PcdHdmiAudioPreset (or the
+          # analog audio preset) publishes the SAI devices they bind
+          # (RKCP3004), and they have not run on hardware. They are signed
+          # and put on the media in woa-audio\ instead, so a board can
+          # install them with pnputil after trusting this run's certificate
+          # (docs/INSTALL.md).
           $solutionDrivers = @('dwcsdhc', 'dwcmshc', 'rk3xgpio', 'rk3xi2c', 'pl330dma', 'dwc_eqos')
+          $audioDrivers    = @('rk3xi2sbus', 'csaudiork3x', 'es8323')
           $projects = @(
             'drivers/spi/rk3xspi/rk3xspi.vcxproj',
             'drivers/input/gt9271/gt9271.vcxproj'
@@ -127,13 +134,16 @@ jobs:
           msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64 `
                   /p:SignMode=Off /m /nologo /v:minimal
           if ($LASTEXITCODE -ne 0) { throw "msbuild failed for RockchipDrivers.sln" }
-          foreach ($name in $solutionDrivers) {
-            $src = Join-Path 'build\ARM64\Release\Output' $name
-            if (-not (Test-Path (Join-Path $src "$name.sys"))) { throw "no $name.sys in $src" }
-            $out = Join-Path $env:DRIVER_STAGE $name
-            New-Item -ItemType Directory -Force -Path $out | Out-Null
-            Get-ChildItem $src -File -Include *.sys,*.inf,*.cat -Recurse |
-              Copy-Item -Destination $out -Force
+          foreach ($set in @(@{ Names = $solutionDrivers; Stage = $env:DRIVER_STAGE },
+                             @{ Names = $audioDrivers;    Stage = $env:AUDIO_STAGE })) {
+            foreach ($name in $set.Names) {
+              $src = Join-Path 'build\ARM64\Release\Output' $name
+              if (-not (Test-Path (Join-Path $src "$name.sys"))) { throw "no $name.sys in $src" }
+              $out = Join-Path $set.Stage $name
+              New-Item -ItemType Directory -Force -Path $out | Out-Null
+              Get-ChildItem $src -File -Include *.sys,*.inf,*.cat -Recurse |
+                Copy-Item -Destination $out -Force
+            }
           }
 
           foreach ($proj in $projects) {
@@ -184,8 +194,11 @@ jobs:
           $pfx = 'C:\rk-test.pfx'
           Export-PfxCertificate -Cert $cert -FilePath $pfx `
             -Password (ConvertTo-SecureString $pfxPw -Force -AsPlainText) | Out-Null
+          # The public half, for the board to trust before pnputil: it goes on
+          # the media next to the audio drivers.
+          Export-Certificate -Cert $cert -FilePath 'C:\rk-test.cer' | Out-Null
 
-          foreach ($d in Get-ChildItem $env:DRIVER_STAGE -Directory) {
+          foreach ($d in (Get-ChildItem $env:DRIVER_STAGE, $env:AUDIO_STAGE -Directory)) {
             Write-Host "== catalog + signature: $($d.Name)"
             # 10_RS3_ARM64 is build 16299. The other value this inf2cat takes,
             # Server10_ARM64, is 14393 -- older than the 16299 these INFs need
@@ -210,7 +223,7 @@ jobs:
             }
           }
 
-          Get-ChildItem $env:DRIVER_STAGE -Recurse -File |
+          Get-ChildItem $env:DRIVER_STAGE, $env:AUDIO_STAGE -Recurse -File |
             Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
 
       - name: Download the WinPE add-on payload
@@ -368,6 +381,12 @@ jobs:
           if (Test-Path $env:DRIVER_STAGE) {
             Copy-Item $env:DRIVER_STAGE "$env:PE_ROOT\media\woa-drivers" -Recurse -Force
             Get-ChildItem "$env:PE_ROOT\media\woa-drivers" -Recurse -Filter *.inf |
+              ForEach-Object { Write-Host "   media: $($_.FullName)" }
+          }
+          if (Test-Path $env:AUDIO_STAGE) {
+            Copy-Item $env:AUDIO_STAGE "$env:PE_ROOT\media\woa-audio" -Recurse -Force
+            Copy-Item 'C:\rk-test.cer' "$env:PE_ROOT\media\woa-audio\woa-test-signing.cer" -Force
+            Get-ChildItem "$env:PE_ROOT\media\woa-audio" -Recurse -Filter *.inf |
               ForEach-Object { Write-Host "   media: $($_.FullName)" }
           }
 
