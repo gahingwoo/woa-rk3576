@@ -50,7 +50,7 @@ Seen on that one installation: eight cores, 3.8 GB of memory, the eMMC as the
 boot disk, Ethernet at 1 Gbps with a DHCP lease and a 5 MB download, USB
 keyboard, mouse and storage on the USB-A ports. The SD controller, GPIO, I2C,
 DMA and SPI drivers all start; none of them was exercised beyond that, and no
-SD card was tried. The board was provided by LCKFB.
+SD card was tried. The board was sponsored by JLC (嘉立创).
 
 Not available: the USB-C port (left out of the board's ACPI tables), WiFi and
 Bluetooth, audio, the RTC (so the clock is wrong until it syncs) and the EC20
@@ -122,8 +122,7 @@ docs/
 
 ## Acknowledgements
 
-Thanks to [ArmSoM](https://www.armsom.org/) for sponsoring the CM5 module and
-the CM5-IO carrier this project is developed on.
+Thanks to [JLC](https://jlc.com/) (嘉立创) for sponsoring the LCKFB TaishanPi 3M, its MIPI DSI screen, the fan and the EC20 4G module used for this work, and to [ArmSoM](https://www.armsom.org/) for sponsoring the CM5 module and the CM5-IO board.
 
 The drivers are the work of the worproject Rockchip-Windows-Drivers authors:
 Mario Bălănică (SD/eMMC), CoolStar (GPIO, I²C, DMA, audio) and Doug Cook
