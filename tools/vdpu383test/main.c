@@ -863,8 +863,13 @@ static int cmd_selftest(void)
 
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
-    CHECK(sizeof(V383_DXVA_PicParams_H264) == 1040);
-    CHECK(sizeof(V383_DXVA_Qmatrix_H264) == 224);
+    {
+        /* compile-time: the DXVA layouts */
+        typedef char pp_size_is_1040[(sizeof(V383_DXVA_PicParams_H264) == 1040) ? 1 : -1];
+        typedef char qm_size_is_224[(sizeof(V383_DXVA_Qmatrix_H264) == 224) ? 1 : -1];
+        (void)sizeof(pp_size_is_1040);
+        (void)sizeof(qm_size_is_224);
+    }
     CHECK(v383_h264_parse_pps_id(sl, sizeof(sl)) == 0);
     (void)sl3;
 
