@@ -14,6 +14,7 @@ Abstract:
 --*/
 #include "definitions.h"
 #include "hw.h"
+#include <ntstrsafe.h>
 
 BOOL I2SInterrupt(PVOID pHW) {
     CCsAudioRk3xHW* hw = (CCsAudioRk3xHW*)pHW;
@@ -61,6 +62,8 @@ Return Value:
     RtlZeroMemory(&this->outputDiag, sizeof(this->outputDiag));
     RtlZeroMemory(&this->inputDiag, sizeof(this->inputDiag));
     this->initCalls = 0;
+    RtlZeroMemory(this->evCount, sizeof(this->evCount));
+    RtlZeroMemory(this->evLast, sizeof(this->evLast));
     this->diagPdo = NULL;
 
     m_rkdspInterface = *RKdspInterface;
@@ -821,11 +824,40 @@ void CCsAudioRk3xHW::diag_save() {
         }
     }
 
+    static const PCWSTR evNames[DIAG_EV_COUNT] = {
+        L"DataRange", L"NewStreamEnter", L"NewStreamFormat", L"NewStreamRate",
+        L"NewStreamStatus", L"IsFormat", L"Proposed", L"AllocSize", L"AllocStatus",
+        L"SetState", L"SetStateStatus", L"GetPosition", L"StreamClosed",
+    };
+    for (int dir = 0; dir < 2; dir++) {
+        for (int e = 0; e < DIAG_EV_COUNT; e++) {
+            WCHAR name[48];
+            RtlStringCchPrintfW(name, ARRAYSIZE(name), L"Ev%s%sCount", dir ? L"In" : L"Out", evNames[e]);
+            diag_put(key, name, this->evCount[dir][e]);
+            RtlStringCchPrintfW(name, ARRAYSIZE(name), L"Ev%s%sLast", dir ? L"In" : L"Out", evNames[e]);
+            diag_put(key, name, this->evLast[dir][e]);
+        }
+    }
+
     // SAI registers as this driver sees them.
     diag_put(key, L"SaiXfer", i2s_read32(this->isSai ? SAI_XFER : I2S_XFER));
     diag_put(key, L"SaiDmacr", i2s_read32(this->isSai ? SAI_DMACR : I2S_DMACR));
 
     ZwClose(key);
+}
+#endif
+
+#if USERKHW
+void CCsAudioRk3xHW::diag_event(BOOLEAN capture, ULONG id, ULONG value) {
+    if (id >= DIAG_EV_COUNT) {
+        return;
+    }
+    int dir = capture ? 1 : 0;
+    this->evCount[dir][id]++;
+    this->evLast[dir][id] = value;
+    if (id != DIAG_EV_GETPOSITION) {
+        diag_save();        // written at once; skipped above PASSIVE_LEVEL
+    }
 }
 #endif
 

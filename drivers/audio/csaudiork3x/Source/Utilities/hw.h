@@ -146,6 +146,7 @@ public:
     BOOLEAN isJack;
     BOOLEAN isSai;      // RK3576 SAI instead of the RK3588 I2S/TDM block
     PDEVICE_OBJECT diagPdo;     // set by CAdapterCommon::Init; NULL = no diag
+    void diag_event(BOOLEAN capture, ULONG id, ULONG value);
 
 protected:
     struct rk_stream outputStream;
@@ -153,6 +154,8 @@ protected:
     struct rk_diag outputDiag;
     struct rk_diag inputDiag;
     ULONG initCalls;
+    ULONG evCount[2][DIAG_EV_COUNT];
+    ULONG evLast[2][DIAG_EV_COUNT];
     void diag_save();
 
     UINT32 i2s_read32(UINT32 reg);

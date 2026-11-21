@@ -302,8 +302,11 @@ _Out_   MEMORY_CACHING_TYPE    *CacheType_
 {
     PAGED_CODE();
 
+    m_pMiniport->Diag(DIAG_EV_ALLOC_SIZE, RequestedSize_);
+
     if ((0 == RequestedSize_) || (RequestedSize_ < m_pWfExt->Format.nBlockAlign))
     {
+        m_pMiniport->Diag(DIAG_EV_ALLOC_STATUS, (ULONG)STATUS_UNSUCCESSFUL);
         return STATUS_UNSUCCESSFUL;
     }
 
@@ -319,6 +322,7 @@ _Out_   MEMORY_CACHING_TYPE    *CacheType_
 
     if (NULL == pBufferMdl)
     {
+        m_pMiniport->Diag(DIAG_EV_ALLOC_STATUS, 0xC0DE0001);
         return STATUS_UNSUCCESSFUL;
     }
 
@@ -331,6 +335,7 @@ _Out_   MEMORY_CACHING_TYPE    *CacheType_
     *OffsetFromFirstPage_ = 0;
     *CacheType_ = MmNonCached;
 
+    m_pMiniport->Diag(DIAG_EV_ALLOC_STATUS, STATUS_SUCCESS);
     return STATUS_SUCCESS;
 }
 
@@ -344,9 +349,13 @@ NTSTATUS CMiniportWaveRTStream::GetPosition
     NTSTATUS ntStatus;
 
     KIRQL oldIrql;
+
+    m_pMiniport->Diag(DIAG_EV_GETPOSITION, 0);
+
     KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
 
-    UINT64 linearPos;
+    // CurrentPosition leaves it alone while the stream is not running.
+    UINT64 linearPos = 0;
     m_pMiniport->CurrentPosition(NULL, &linearPos);
     Position_->PlayOffset = linearPos;
     Position_->WriteOffset = linearPos + FIFO_SIZE;
@@ -367,6 +376,8 @@ NTSTATUS CMiniportWaveRTStream::SetState
 {
     NTSTATUS        ntStatus        = STATUS_SUCCESS;
     KIRQL oldIrql;
+
+    m_pMiniport->Diag(DIAG_EV_SETSTATE, (ULONG)State_);
 
     // Spew an event for a pin state change request from portcls
     //Event type: eMINIPORT_PIN_STATE
@@ -402,6 +413,7 @@ NTSTATUS CMiniportWaveRTStream::SetState
         case KSSTATE_RUN:
             // Start DMA
             ntStatus = m_pMiniport->AcquireDMA(this, m_ulDmaBufferSize);
+            m_pMiniport->Diag(DIAG_EV_SETSTATE_STATUS, (ULONG)ntStatus);
             if (!NT_SUCCESS(ntStatus)) {
                 return ntStatus;
             }

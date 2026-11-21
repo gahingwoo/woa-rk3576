@@ -94,6 +94,7 @@ private:
         _Out_ BOOLEAN* isJack
     );
     STDMETHODIMP_(BOOLEAN) IsSai();
+    STDMETHODIMP_(VOID) DiagEvent(_In_ BOOLEAN capture, _In_ ULONG id, _In_ ULONG value);
 
     STDMETHODIMP_(BOOL)     bDevSpecificRead();
 
@@ -898,6 +899,16 @@ STDMETHODIMP_(BOOLEAN)
 CAdapterCommon::IsSai()
 {
     return m_pHW ? m_pHW->isSai : FALSE;
+}
+
+//=============================================================================
+#pragma code_seg()
+STDMETHODIMP_(VOID)
+CAdapterCommon::DiagEvent(_In_ BOOLEAN capture, _In_ ULONG id, _In_ ULONG value)
+{
+    if (m_pHW) {
+        m_pHW->diag_event(capture, id, value);
+    }
 }
 
 //=============================================================================

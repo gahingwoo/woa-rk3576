@@ -120,6 +120,24 @@ Abstract:
 #define MINTOPORT_POOLTAG           'RTNM'
 #define MINADAPTER_POOLTAG          'uAyS'
 
+// Stream-path events, counted per direction (diag_event, hw.cpp).
+enum {
+    DIAG_EV_DATARANGE,          // DataRangeIntersection, value = status
+    DIAG_EV_NEWSTREAM_ENTER,    // NewStream entered, value = pin
+    DIAG_EV_NEWSTREAM_FORMAT,   // ch << 24 | bits << 16 | valid << 8 | extensible
+    DIAG_EV_NEWSTREAM_RATE,     // nSamplesPerSec
+    DIAG_EV_NEWSTREAM_STATUS,   // NewStream result
+    DIAG_EV_ISFORMAT,           // IsFormatSupported result
+    DIAG_EV_PROPOSED,           // KSPROPERTY_PIN_PROPOSEDATAFORMAT set, status
+    DIAG_EV_ALLOC_SIZE,         // AllocateAudioBuffer, requested size
+    DIAG_EV_ALLOC_STATUS,       // AllocateAudioBuffer result
+    DIAG_EV_SETSTATE,           // SetState, value = KSSTATE
+    DIAG_EV_SETSTATE_STATUS,    // SetState result
+    DIAG_EV_GETPOSITION,        // GetPosition (counted only)
+    DIAG_EV_STREAMCLOSED,       // StreamClosed
+    DIAG_EV_COUNT
+};
+
 typedef enum
 {
     eOutputDevice = 0,
@@ -310,6 +328,14 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
     STDMETHOD_(BOOLEAN, IsSai)
         (
             THIS
+        ) PURE;
+    // Diagnostics: count a stream-path event (DIAG_EV_* in hw.h).
+    STDMETHOD_(VOID, DiagEvent)
+        (
+            THIS_
+            _In_ BOOLEAN capture,
+            _In_ ULONG id,
+            _In_ ULONG value
         ) PURE;
 
     STDMETHOD_(BOOL,            bDevSpecificRead)

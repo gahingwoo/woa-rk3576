@@ -208,6 +208,8 @@ Arguments:
 
     PAGED_CODE();
 
+    Diag(DIAG_EV_DATARANGE, PinId);
+
     if (!IsEqualGUIDAligned(ClientDataRange->Specifier, KSDATAFORMAT_SPECIFIER_WAVEFORMATEX))
     {
         return STATUS_NOT_IMPLEMENTED;
@@ -461,6 +463,22 @@ Return Value:
     
     *OutStream = NULL;
 
+    Diag(DIAG_EV_NEWSTREAM_ENTER, Pin);
+    if (DataFormat->FormatSize >= sizeof(KSDATAFORMAT_WAVEFORMATEX))
+    {
+        PWAVEFORMATEX wfx = (PWAVEFORMATEX)(DataFormat + 1);
+        ULONG valid = wfx->wBitsPerSample;
+        if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+            DataFormat->FormatSize >= sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE))
+        {
+            valid = ((PWAVEFORMATEXTENSIBLE)wfx)->Samples.wValidBitsPerSample;
+        }
+        Diag(DIAG_EV_NEWSTREAM_FORMAT,
+            ((ULONG)wfx->nChannels << 24) | ((ULONG)(wfx->wBitsPerSample & 0xFF) << 16) |
+            ((valid & 0xFF) << 8) | (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE ? 1 : 0));
+        Diag(DIAG_EV_NEWSTREAM_RATE, wfx->nSamplesPerSec);
+    }
+
      //
     // If the data format attributes were specified, extract them.
     //
@@ -483,6 +501,7 @@ Return Value:
     if (NT_SUCCESS(ntStatus))
     {
         ntStatus = IsFormatSupported(Pin, Capture, DataFormat);
+        Diag(DIAG_EV_ISFORMAT, (ULONG)ntStatus);
     }
 
     // Instantiate a stream. Stream must be in
@@ -530,7 +549,8 @@ Return Value:
     {
         stream->Release();
     }
-    
+
+    Diag(DIAG_EV_NEWSTREAM_STATUS, (ULONG)ntStatus);
     return ntStatus;
 } // NewStream
 
@@ -928,6 +948,8 @@ CMiniportWaveRT::StreamClosed
 
     DPF_ENTER(("[CMiniportWaveRT::StreamClosed]"));
 
+    Diag(DIAG_EV_STREAMCLOSED, _Pin);
+
     if (IsSystemCapturePin(_Pin))
     {
         FREE_PIN_INSTANCE_RESOURCES(m_ulSystemAllocated);
@@ -1216,6 +1238,7 @@ CMiniportWaveRT::PropertyHandlerProposedFormat
     {
         pKsFormat = (PKSDATAFORMAT)PropertyRequest->Value;
         ntStatus = IsFormatSupported(kspPin->PinId, IsSystemCapturePin(kspPin->PinId) || FALSE, pKsFormat);
+        Diag(DIAG_EV_PROPOSED, (ULONG)ntStatus);
         if (!NT_SUCCESS(ntStatus))
         {
             return ntStatus;
