@@ -16,6 +16,7 @@ on:
       - 'tools/woa-debug/**'
       - 'tools/woa-deploy/**'
       - '.github/workflows/winpe.yml'
+      - 'drivers/bluetooth/**'
 
 permissions:
   contents: read
@@ -78,7 +79,8 @@ jobs:
           $solutionDrivers = @('dwcsdhc', 'dwcmshc', 'rk3xgpio', 'rk3xi2c', 'pl330dma', 'dwc_eqos')
           $projects = @(
             'drivers/spi/rk3xspi/rk3xspi.vcxproj',
-            'drivers/input/gt9271/gt9271.vcxproj'
+            'drivers/input/gt9271/gt9271.vcxproj',
+            'drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj'
           )
           # Record the sdport miniport API surface into the log.
           #
@@ -208,6 +210,20 @@ jobs:
               Write-Host ("   {0,-14} {1}  {2}" -f $sig.Status, (Split-Path $sig.Path -Leaf), $who)
               if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
             }
+          }
+
+          # bcm4345bt on its own, for pnputil on an installed Windows: the
+          # test-signed package, this run's signer certificate (certutil
+          # -addstore -f Root signer.cer, then TrustedPublisher), and the
+          # script that fetches the patchram on the board. Outside
+          # DRIVER_STAGE, so DISM and the media see nothing new.
+          $bt = 'C:\rk-bt-signed'
+          New-Item -ItemType Directory -Force -Path $bt | Out-Null
+          Copy-Item (Join-Path $env:DRIVER_STAGE 'bcm4345bt\*') $bt -Force
+          Export-Certificate -Cert $cert -FilePath (Join-Path $bt 'signer.cer') | Out-Null
+          Copy-Item drivers\bluetooth\bcm4345bt\install-firmware.ps1, drivers\bluetooth\bcm4345bt\README.md $bt -Force
+          foreach ($f in 'bcm4345bt.inf', 'bcm4345bt.sys', 'bcm4345bt.cat', 'signer.cer') {
+            if (-not (Test-Path (Join-Path $bt $f))) { throw "bcm4345bt package: $f missing" }
           }
 
           Get-ChildItem $env:DRIVER_STAGE -Recurse -File |
@@ -428,6 +444,15 @@ jobs:
           & bcdedit.exe /store $bcd /enum '{dbgsettings}' | Write-Host
           & bcdedit.exe /store $bcd /enum '{bootmgr}' | Write-Host
           & bcdedit.exe /store $bcd /enum '{default}' | Write-Host
+
+      - name: Upload the signed bcm4345bt package
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.drivers }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bcm4345bt-signed-arm64
+          path: C:\rk-bt-signed\
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Show what came out
         shell: pwsh

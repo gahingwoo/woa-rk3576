@@ -25,9 +25,6 @@ PdoEvtIoDeviceControl(_In_ WDFQUEUE Queue, _In_ WDFREQUEST Request, _In_ size_t 
     WDF_REQUEST_FORWARD_OPTIONS fwd;
     NTSTATUS status;
 
-    UNREFERENCED_PARAMETER(OutputBufferLength);
-    UNREFERENCED_PARAMETER(InputBufferLength);
-
     switch (IoControlCode) {
     case IOCTL_BTHX_GET_VERSION:
     case IOCTL_BTHX_SET_VERSION:
@@ -45,7 +42,24 @@ PdoEvtIoDeviceControl(_In_ WDFQUEUE Queue, _In_ WDFREQUEST Request, _In_ size_t 
         status = STATUS_INVALID_DEVICE_REQUEST;
         break;
     }
+    {
+        PBT_DEVICE_CONTEXT ctx = BtGetContext(parent);
+        InterlockedExchange(&ctx->BxLastUnknown, (LONG)IoControlCode);
+        BtNote(ctx, BxOther, status, InputBufferLength, OutputBufferLength);
+    }
     WdfRequestComplete(Request, status);
+}
+
+/* Nothing is expected here; recorded so a board run shows it if it comes. */
+static VOID
+PdoEvtIoInternalDeviceControl(_In_ WDFQUEUE Queue, _In_ WDFREQUEST Request, _In_ size_t OutputBufferLength,
+                              _In_ size_t InputBufferLength, _In_ ULONG IoControlCode)
+{
+    PBT_DEVICE_CONTEXT ctx = BtGetContext(WdfPdoGetParent(WdfIoQueueGetDevice(Queue)));
+
+    InterlockedExchange(&ctx->BxLastUnknown, (LONG)(IoControlCode | 0x80000000UL));
+    BtNote(ctx, BxOther, STATUS_NOT_SUPPORTED, InputBufferLength, OutputBufferLength);
+    WdfRequestComplete(Request, STATUS_NOT_SUPPORTED);
 }
 
 NTSTATUS
@@ -117,6 +131,7 @@ BtCreateChild(_In_ PBT_DEVICE_CONTEXT Ctx)
     WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&qcfg, WdfIoQueueDispatchParallel);
     qcfg.PowerManaged = WdfFalse;
     qcfg.EvtIoDeviceControl = PdoEvtIoDeviceControl;
+    qcfg.EvtIoInternalDeviceControl = PdoEvtIoInternalDeviceControl;
     status = WdfIoQueueCreate(child, &qcfg, WDF_NO_OBJECT_ATTRIBUTES, NULL);
     if (!NT_SUCCESS(status)) {
         WdfObjectDelete(child);
@@ -135,6 +150,7 @@ BtCreateChild(_In_ PBT_DEVICE_CONTEXT Ctx)
         return status;
     }
     Ctx->ChildCreated = TRUE;
+    BtRecordStatus(Ctx, L"ChildCreated", 1);
     BT_LOG("child %wZ enumerated for BthMini", &deviceId);
     return STATUS_SUCCESS;
 }

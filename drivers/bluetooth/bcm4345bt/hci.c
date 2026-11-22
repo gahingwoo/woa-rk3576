@@ -103,6 +103,13 @@ DeliverPacket(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ UCHAR Type, _In_reads_bytes_(Len
         return;     /* nobody above us yet */
     }
     if (Type == H4_EVENT) {
+        LONG ev = (LONG)Data[0] << 16;
+        if (Data[0] == HCI_EV_CMD_COMPLETE && Length >= 5) {
+            ev |= Data[3] | (Data[4] << 8);
+        } else if (Data[0] == HCI_EV_CMD_STATUS && Length >= 6) {
+            ev |= Data[4] | (Data[5] << 8);
+        }
+        InterlockedExchange(&Ctx->BxLastEvent, ev);
         FifoPush(&Ctx->Events, Data, Length);
     } else if (Type == H4_ACL) {
         FifoPush(&Ctx->Acl, Data, Length);
@@ -201,6 +208,7 @@ ServiceOne(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ WDFQUEUE Queue, _In_ BT_PACKET_FIFO
         }
         /* Complete from the slot under the lock, then retire the slot. */
         (VOID)CompleteRead(req, Type, &F->Slots[F->Head]);
+        BtNoteDone(Ctx, BxReadHci);
         F->Head = (F->Head + 1) % F->Capacity;
         F->Count--;
         WdfSpinLockRelease(Ctx->PacketLock);
@@ -233,8 +241,12 @@ TryWrite(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ WDFREQUEST Request)
     if (!UartQueueFrame(Ctx, in->Type, in->Data, in->DataLen)) {
         return FALSE;   /* ring full, try again when it drains */
     }
+    if (in->Type == H4_COMMAND && in->DataLen >= 2) {
+        InterlockedExchange(&Ctx->BxLastCommand, in->Data[0] | (in->Data[1] << 8));
+    }
     *out = in->DataLen;
     WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, sizeof(ULONG));
+    BtNoteDone(Ctx, BxWriteHci);
     return TRUE;
 }
 
@@ -261,58 +273,63 @@ BtServiceWrites(_In_ PBT_DEVICE_CONTEXT Ctx)
     WdfSpinLockRelease(Ctx->TxLock);
 }
 
+/*
+ * BthMini sends these as METHOD_NEITHER from kernel mode (0x410403 and up,
+ * read from BthMini.sys); KMDF hands such buffers out as for a kernel
+ * requestor. Every call is counted with the status returned, see BtNote.
+ */
 VOID
 BtEvtIoDeviceControl(_In_ WDFQUEUE Queue, _In_ WDFREQUEST Request, _In_ size_t OutputBufferLength,
                      _In_ size_t InputBufferLength, _In_ ULONG IoControlCode)
 {
     PBT_DEVICE_CONTEXT ctx = BtGetContext(WdfIoQueueGetDevice(Queue));
     NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
-    PVOID buf;
+    BT_BX_INDEX idx = BxOther;
+    ULONG_PTR info = 0;
+    BOOLEAN pended = FALSE;
+    PVOID buf = NULL;
     size_t len;
-
-    UNREFERENCED_PARAMETER(OutputBufferLength);
-    UNREFERENCED_PARAMETER(InputBufferLength);
 
     switch (IoControlCode) {
     case IOCTL_BTHX_GET_VERSION:
+        idx = BxGetVersion;
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(BTHX_VERSION), &buf, &len);
         if (NT_SUCCESS(status)) {
             *(BTHX_VERSION *)buf = Microsoft_BTHX_DDI_Version;
-            WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, sizeof(BTHX_VERSION));
-            return;
+            info = sizeof(BTHX_VERSION);
         }
         break;
 
     case IOCTL_BTHX_SET_VERSION:
+        idx = BxSetVersion;
         status = WdfRequestRetrieveInputBuffer(Request, sizeof(BTHX_VERSION), &buf, &len);
         if (NT_SUCCESS(status)) {
-            BT_LOG("BthMini speaks BthX version 0x%lx", ((BTHX_VERSION *)buf)->Version);
+            InterlockedExchange(&ctx->BxSetVersion, (LONG)((BTHX_VERSION *)buf)->Version);
         }
         break;
 
     case IOCTL_BTHX_QUERY_CAPABILITIES:
+        idx = BxQueryCaps;
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(BTHX_CAPABILITIES), &buf, &len);
         if (NT_SUCCESS(status)) {
             *(BTHX_CAPABILITIES *)buf = ctx->Caps;
-            WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, sizeof(BTHX_CAPABILITIES));
-            return;
+            info = sizeof(BTHX_CAPABILITIES);
         }
         break;
 
     case IOCTL_BTHX_WRITE_HCI:
+        idx = BxWriteHci;
         if (!ctx->Ready) {
             status = STATUS_DEVICE_NOT_READY;
             break;
         }
         status = WdfRequestForwardToIoQueue(Request, ctx->TxWaitQueue);
-        if (NT_SUCCESS(status)) {
-            BtServiceWrites(ctx);
-            return;
-        }
+        pended = NT_SUCCESS(status);
         break;
 
     case IOCTL_BTHX_READ_HCI: {
         ULONG type;
+        idx = BxReadHci;
         status = WdfRequestRetrieveInputBuffer(Request, sizeof(ULONG), &buf, &len);
         if (!NT_SUCCESS(status)) {
             break;
@@ -324,18 +341,25 @@ BtEvtIoDeviceControl(_In_ WDFQUEUE Queue, _In_ WDFREQUEST Request, _In_ size_t O
         }
         status = WdfRequestForwardToIoQueue(Request,
                      type == (ULONG)HciPacketEvent ? ctx->EventReadQueue : ctx->AclReadQueue);
-        if (NT_SUCCESS(status)) {
-            BtServiceReads(ctx);
-            return;
-        }
+        pended = NT_SUCCESS(status);
         break;
     }
 
     default:
+        InterlockedExchange(&ctx->BxLastUnknown, (LONG)IoControlCode);
         break;
     }
 
-    WdfRequestComplete(Request, status);
+    BtNote(ctx, idx, pended ? STATUS_PENDING : status, InputBufferLength, OutputBufferLength);
+    if (pended) {
+        if (idx == BxWriteHci) {
+            BtServiceWrites(ctx);
+        } else {
+            BtServiceReads(ctx);
+        }
+        return;
+    }
+    WdfRequestCompleteWithInformation(Request, status, NT_SUCCESS(status) ? info : 0);
 }
 
 /* ------------------------------------------------------------- bring-up */

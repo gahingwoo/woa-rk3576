@@ -49,10 +49,16 @@ ACPI\RKCP4345          bcm4345bt.sys  (this driver, class System)
   `MS_BTHX_BTHMINI`; the in-box `bth.inf` binds BthMini to it (checked in
   the 22621 ARM64 image). Its IOCTLs are forwarded to this driver, which
   frames writes as H4 and parses the receive stream into events and ACL.
-- **No voice.** `ScoSupport` is `ScoSupportNone`: the module's SCO audio
-  goes to its PCM pins (SAI2 on this board), and there is no audio driver
-  for that path. Data profiles (A2DP playback, HID, file transfer) are what
-  this offers; a headset's microphone and calls will not work.
+- **No voice, but HCI bypass declared.** `ScoSupport` is
+  `ScoSupportHCIBypass` with one SCO channel. The in-box BthMini (22621)
+  accepts nothing else: after `IOCTL_BTHX_QUERY_CAPABILITIES` it fails its
+  start with `STATUS_DEVICE_CONFIGURATION_ERROR` (0xC0000182, code 10 on
+  `BCM4345BT\UART_H4`) unless `MaxAclTransferInSize` >= 0x103,
+  `ScoSupport` == 2 and `MaxScoChannels` == 1 (read from BthMini.sys; the
+  first board run, with `ScoSupportNone`, hit exactly that). Bypass means
+  SCO audio is expected on the module's PCM pins (SAI2 on this board), and
+  there is no audio driver for that path: data profiles (A2DP playback, HID,
+  file transfer) work, calls and a headset microphone will not.
 - **No sleep.** The controller stays powered while the driver is in D0
   (`IsDeviceIdleCapable` FALSE). HOST_WAKE is not used.
 
@@ -100,6 +106,14 @@ Under the device's hardware key
 | `Baud` | the speed it ended at |
 | `AddressFromChip` | 0 if the placeholder address was replaced |
 | `BringUpStatus` | NTSTATUS of the whole bring-up; the child (and so Bluetooth) exists only when it is 0 |
+| `ChildCreated` | 1 once `BCM4345BT\UART_H4` was enumerated |
+| `BthX<Name>Count`, `Status`, `Lens`, `Done` | per BthX IOCTL (`GetVersion`, `SetVersion`, `QueryCaps`, `WriteHci`, `ReadHci`, `Other`): calls, NTSTATUS of the last one (0x103 = pended), (input length << 16) \| output length, completions after pending |
+| `BthXOtherIoctl` | last IOCTL code nobody handles (bit 31 set: an internal IOCTL on the child) |
+| `BthXSetVersion`, `BthXLastCommand`, `BthXLastEvent` | the version BthMini chose; the last HCI opcode it wrote; (event code << 16) \| opcode of the last event it read |
+| `BthXCapsSco`, `BthXCapsScoChannels`, `BthXCapsMaxAcl`, `BthXCapsIdle` | what QUERY_CAPABILITIES answers |
+
+Overrides, REG_DWORD in the same key, stored as value plus one (0 is
+"not set"): `BthXScoSupport`, `BthXMaxScoChannels`, `BthXIdleCapable`.
 
 The driver also logs every step with `DbgPrintEx` (component IHVDRIVER,
 prefix `bcm4345bt:`).

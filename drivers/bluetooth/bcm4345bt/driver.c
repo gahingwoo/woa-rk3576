@@ -37,6 +37,7 @@ static EVT_WDF_DEVICE_D0_ENTRY BtEvtD0Entry;
 static EVT_WDF_DEVICE_D0_EXIT BtEvtD0Exit;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_INIT BtEvtSelfManagedIoInit;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_RESTART BtEvtSelfManagedIoRestart;
+static EVT_WDF_WORKITEM BtEvtStatsWork;
 
 VOID
 BtDelayMs(_In_ ULONG Ms)
@@ -80,6 +81,101 @@ BtRecordString(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ PCSTR Value, 
         (VOID)WdfRegistryAssignUnicodeString(key, &n, &v);
         WdfRegistryClose(key);
     }
+}
+
+/* ------------------------------------------------------ instrumentation
+ *
+ * Every BthX IOCTL is counted, with the status it got back and the buffer
+ * lengths, and flushed to Device Parameters at PASSIVE_LEVEL by a work
+ * item (BthMini may call at DISPATCH_LEVEL):
+ *
+ *   BthX<Name>Count   calls received; <Name> is GetVersion, SetVersion,
+ *                     QueryCaps, WriteHci, ReadHci, Other
+ *   BthX<Name>Status  NTSTATUS of the last one (0x103 = pended)
+ *   BthX<Name>Lens    (input length << 16) | output length of the last one
+ *   BthX<Name>Done    reads and writes completed after pending
+ *   BthXOtherIoctl    the last IOCTL code nobody handles (FDO or child)
+ *   BthXSetVersion    the version BthMini chose
+ *   BthXLastCommand   the last HCI opcode BthMini wrote
+ *   BthXLastEvent     (event code << 16) | opcode of the last event read
+ *   BthXCapsSco, BthXCapsScoChannels, BthXCapsMaxAcl, BthXCapsIdle
+ *                     what QUERY_CAPABILITIES answers
+ */
+static const PCWSTR BtBxName[BX_MAX] = {
+    L"GetVersion", L"SetVersion", L"QueryCaps", L"WriteHci", L"ReadHci", L"Other"
+};
+
+static VOID
+PutULong(_In_ WDFKEY Key, _In_ PCWSTR Name, _In_ ULONG Value)
+{
+    UNICODE_STRING n;
+
+    RtlInitUnicodeString(&n, Name);
+    (VOID)WdfRegistryAssignULong(Key, &n, Value);
+}
+
+static VOID
+BtEvtStatsWork(_In_ WDFWORKITEM WorkItem)
+{
+    PBT_DEVICE_CONTEXT ctx = BtGetContext((WDFDEVICE)WdfWorkItemGetParentObject(WorkItem));
+    WCHAR name[40];
+    WDFKEY key;
+    ULONG i;
+
+    InterlockedExchange(&ctx->StatsQueued, 0);
+    if (!NT_SUCCESS(WdfDeviceOpenRegistryKey(ctx->Device, PLUGPLAY_REGKEY_DEVICE, KEY_WRITE,
+                                             WDF_NO_OBJECT_ATTRIBUTES, &key))) {
+        return;
+    }
+    for (i = 0; i < BX_MAX; i++) {
+        if (NT_SUCCESS(RtlStringCchPrintfW(name, RTL_NUMBER_OF(name), L"BthX%wsCount", BtBxName[i]))) {
+            PutULong(key, name, (ULONG)ctx->BxCount[i]);
+        }
+        if (NT_SUCCESS(RtlStringCchPrintfW(name, RTL_NUMBER_OF(name), L"BthX%wsStatus", BtBxName[i]))) {
+            PutULong(key, name, (ULONG)ctx->BxStatus[i]);
+        }
+        if (NT_SUCCESS(RtlStringCchPrintfW(name, RTL_NUMBER_OF(name), L"BthX%wsLens", BtBxName[i]))) {
+            PutULong(key, name, (ULONG)ctx->BxLens[i]);
+        }
+        if (NT_SUCCESS(RtlStringCchPrintfW(name, RTL_NUMBER_OF(name), L"BthX%wsDone", BtBxName[i]))) {
+            PutULong(key, name, (ULONG)ctx->BxDone[i]);
+        }
+    }
+    PutULong(key, L"BthXOtherIoctl", (ULONG)ctx->BxLastUnknown);
+    PutULong(key, L"BthXSetVersion", (ULONG)ctx->BxSetVersion);
+    PutULong(key, L"BthXLastCommand", (ULONG)ctx->BxLastCommand);
+    PutULong(key, L"BthXLastEvent", (ULONG)ctx->BxLastEvent);
+    PutULong(key, L"BthXCapsSco", (ULONG)ctx->Caps.ScoSupport);
+    PutULong(key, L"BthXCapsScoChannels", ctx->Caps.MaxScoChannels);
+    PutULong(key, L"BthXCapsMaxAcl", ctx->Caps.MaxAclTransferInSize);
+    PutULong(key, L"BthXCapsIdle", ctx->Caps.IsDeviceIdleCapable);
+    WdfRegistryClose(key);
+}
+
+/* Any IRQL up to DISPATCH_LEVEL. */
+VOID
+BtStatsKick(_In_ PBT_DEVICE_CONTEXT Ctx)
+{
+    if (Ctx->StatsWork != NULL && InterlockedExchange(&Ctx->StatsQueued, 1) == 0) {
+        WdfWorkItemEnqueue(Ctx->StatsWork);
+    }
+}
+
+VOID
+BtNote(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ BT_BX_INDEX Index, _In_ NTSTATUS Status,
+       _In_ size_t InLen, _In_ size_t OutLen)
+{
+    InterlockedIncrement(&Ctx->BxCount[Index]);
+    InterlockedExchange(&Ctx->BxStatus[Index], Status);
+    InterlockedExchange(&Ctx->BxLens[Index], (LONG)((min(InLen, 0xFFFF) << 16) | min(OutLen, 0xFFFF)));
+    BtStatsKick(Ctx);
+}
+
+VOID
+BtNoteDone(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ BT_BX_INDEX Index)
+{
+    InterlockedIncrement(&Ctx->BxDone[Index]);
+    BtStatsKick(Ctx);
 }
 
 static ULONG
@@ -171,6 +267,11 @@ BtEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRES
 
     ctx->UartClock = ReadSetting(Device, L"UartClock", BT_DEFAULT_UART_CLOCK);
     ctx->OperBaud = ReadSetting(Device, L"OperatingBaud", BT_DEFAULT_OPER_BAUD);
+    /* 0 means "not set" to ReadSetting, so these are stored plus one. */
+    ctx->Caps.ScoSupport = (BTHX_SCO_SUPPORT)(ReadSetting(Device, L"BthXScoSupport", (ULONG)ctx->Caps.ScoSupport + 1) - 1);
+    ctx->Caps.MaxScoChannels = ReadSetting(Device, L"BthXMaxScoChannels", ctx->Caps.MaxScoChannels + 1) - 1;
+    ctx->Caps.IsDeviceIdleCapable = (BOOLEAN)(ReadSetting(Device, L"BthXIdleCapable", (ULONG)ctx->Caps.IsDeviceIdleCapable + 1) > 1);
+    BtStatsKick(ctx);
 
     return BtGpioOpen(ctx);
 }
@@ -247,6 +348,7 @@ BtEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT Init)
     WDF_PNPPOWER_EVENT_CALLBACKS pnp;
     WDF_OBJECT_ATTRIBUTES attr;
     WDF_IO_QUEUE_CONFIG qcfg;
+    WDF_WORKITEM_CONFIG wcfg;
     WDFDEVICE device;
     PBT_DEVICE_CONTEXT ctx;
     NTSTATUS status;
@@ -275,16 +377,32 @@ BtEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT Init)
     BtInitQueuesAndFifos(ctx);
 
     /*
-     * What BthMini is told. No SCO over HCI and no HCI bypass: voice would
-     * need the module's PCM lines (SAI2) and an audio driver for them, so
-     * only data profiles (A2DP, HID, file transfer) are offered. The
-     * controller stays in D0: a D3 round trip would cost a patchram reload.
+     * What BthMini is told. Its start path (BthMini.sys, 22621 ARM64, the
+     * code after IOCTL_BTHX_QUERY_CAPABILITIES) fails with
+     * STATUS_DEVICE_CONFIGURATION_ERROR unless MaxAclTransferInSize is at
+     * least 0x103, ScoSupport is ScoSupportHCIBypass (2) and MaxScoChannels
+     * is 1; it caps MaxAclTransferInSize at 0x1000. ScoSupportNone, which
+     * the first version of this driver sent, is refused, and so is
+     * ScoSupportHCI. HCI bypass means SCO audio would travel on the
+     * module's PCM lines (SAI2 here), for which there is no audio driver:
+     * calls and a headset microphone still will not work, but the radio
+     * starts. The controller stays in D0: a D3 round trip would cost a
+     * patchram reload. PrepareHardware lets the registry override each
+     * field (BthXScoSupport, BthXMaxScoChannels, BthXIdleCapable).
      */
     ctx->Caps.MaxAclTransferInSize = BT_MAX_ACL_PAYLOAD;
-    ctx->Caps.ScoSupport = ScoSupportNone;
-    ctx->Caps.MaxScoChannels = 0;
+    ctx->Caps.ScoSupport = ScoSupportHCIBypass;
+    ctx->Caps.MaxScoChannels = 1;
     ctx->Caps.IsDeviceIdleCapable = FALSE;
     ctx->Caps.IsDeviceWakeCapable = FALSE;
+
+    WDF_WORKITEM_CONFIG_INIT(&wcfg, BtEvtStatsWork);
+    WDF_OBJECT_ATTRIBUTES_INIT(&attr);
+    attr.ParentObject = device;
+    status = WdfWorkItemCreate(&wcfg, &attr, &ctx->StatsWork);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
 
     WDF_OBJECT_ATTRIBUTES_INIT(&attr);
     attr.ParentObject = device;

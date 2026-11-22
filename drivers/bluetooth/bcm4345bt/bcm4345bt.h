@@ -150,6 +150,17 @@ typedef enum _BT_RX_STATE {
     RxPayload,
 } BT_RX_STATE;
 
+/* Slots of the BthX instrumentation, one per IOCTL. */
+typedef enum _BT_BX_INDEX {
+    BxGetVersion = 0,
+    BxSetVersion,
+    BxQueryCaps,
+    BxWriteHci,
+    BxReadHci,
+    BxOther,            /* anything else, on the FDO or the child */
+    BX_MAX
+} BT_BX_INDEX;
+
 typedef struct _BT_DEVICE_CONTEXT {
     WDFDEVICE       Device;
 
@@ -205,6 +216,18 @@ typedef struct _BT_DEVICE_CONTEXT {
     WDFQUEUE        AclReadQueue;
     WDFQUEUE        TxWaitQueue;
 
+    /* BthX instrumentation, flushed to Device Parameters by StatsWork. */
+    volatile LONG   BxCount[BX_MAX];
+    volatile LONG   BxStatus[BX_MAX];
+    volatile LONG   BxLens[BX_MAX];     /* (input length << 16) | output length */
+    volatile LONG   BxDone[BX_MAX];     /* reads and writes completed later */
+    volatile LONG   BxLastUnknown;      /* IOCTL code nobody handles */
+    volatile LONG   BxSetVersion;
+    volatile LONG   BxLastCommand;      /* last HCI opcode BthMini wrote */
+    volatile LONG   BxLastEvent;        /* (event code << 16) | opcode if a command reply */
+    volatile LONG   StatsQueued;
+    WDFWORKITEM     StatsWork;
+
     /* State */
     BOOLEAN         Ready;          /* bring-up done, BthX traffic allowed */
     BOOLEAN         ChildCreated;
@@ -242,6 +265,10 @@ VOID     BtPower(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ BOOLEAN On);
 NTSTATUS BtCreateChild(_In_ PBT_DEVICE_CONTEXT Ctx);
 
 /* driver.c */
+VOID     BtNote(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ BT_BX_INDEX Index, _In_ NTSTATUS Status,
+                _In_ size_t InLen, _In_ size_t OutLen);
+VOID     BtNoteDone(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ BT_BX_INDEX Index);
+VOID     BtStatsKick(_In_ PBT_DEVICE_CONTEXT Ctx);
 VOID     BtDelayMs(_In_ ULONG Ms);
 VOID     BtRecordStatus(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Value);
 VOID     BtRecordString(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ PCSTR Value, _In_ ULONG Length);
