@@ -88,6 +88,11 @@
  * is 64 deep; half of it leaves room if the depth is smaller than thought. */
 #define UART_TX_BURST   32
 
+/* Bounds on interrupt-time work; see BtEvtInterruptIsr. */
+#define BT_ISR_RX_MAX   256
+#define BT_ISR_STORM    64
+#define BT_DPC_RX_MAX   2048
+
 /* ------------------------------------------------------------- HCI / H4 */
 #define H4_COMMAND      0x01
 #define H4_ACL          0x02
@@ -189,6 +194,16 @@ typedef struct _BT_DEVICE_CONTEXT {
     ULONG           TxHead;         /* writers add */
     ULONG           TxTail;         /* ISR sends */
     UCHAR           Ier;
+    BOOLEAN         InterruptsOn;
+    BOOLEAN         RxThrottled;
+    ULONG           IsrSinceDpc;
+    ULONG           IsrCount;
+    ULONG           IsrUnclaimed;
+    ULONG           RxBytes;
+    ULONG           ThrottleCount;
+    ULONG           BusyTimeouts;
+    ULONG           Baud;
+    ULONG           ParseResyncs;
 
     /* Parser, packet FIFOs and bring-up state; guarded by PacketLock. */
     WDFSPINLOCK     PacketLock;
@@ -226,6 +241,7 @@ typedef struct _BT_DEVICE_CONTEXT {
     volatile LONG   BxLastCommand;      /* last HCI opcode BthMini wrote */
     volatile LONG   BxLastEvent;        /* (event code << 16) | opcode if a command reply */
     volatile LONG   StatsQueued;
+    volatile LONG   StepSeq;
     WDFWORKITEM     StatsWork;
 
     /* State */
@@ -240,6 +256,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(BT_DEVICE_CONTEXT, BtGetContext)
 VOID     UartInit(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ ULONG Baud);
 VOID     UartSetBaud(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ ULONG Baud);
 VOID     UartFlush(_In_ PBT_DEVICE_CONTEXT Ctx);
+VOID     UartQuiesce(_In_ PBT_DEVICE_CONTEXT Ctx);
 BOOLEAN  UartQueueFrame(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ UCHAR Type,
                         _In_reads_bytes_(Length) const UCHAR *Data, _In_ ULONG Length);
 BOOLEAN  UartWaitTxIdle(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ ULONG TimeoutMs);
@@ -254,6 +271,7 @@ VOID     BtInitQueuesAndFifos(_In_ PBT_DEVICE_CONTEXT Ctx);
 VOID     BtParseBytes(_In_ PBT_DEVICE_CONTEXT Ctx, _In_reads_bytes_(Length) const UCHAR *Bytes, _In_ ULONG Length);
 VOID     BtServiceReads(_In_ PBT_DEVICE_CONTEXT Ctx);
 VOID     BtServiceWrites(_In_ PBT_DEVICE_CONTEXT Ctx);
+VOID     BtCancelPending(_In_ PBT_DEVICE_CONTEXT Ctx);
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL BtEvtIoDeviceControl;
 
 /* btgpio.c */
@@ -269,6 +287,7 @@ VOID     BtNote(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ BT_BX_INDEX Index, _In_ NTSTAT
                 _In_ size_t InLen, _In_ size_t OutLen);
 VOID     BtNoteDone(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ BT_BX_INDEX Index);
 VOID     BtStatsKick(_In_ PBT_DEVICE_CONTEXT Ctx);
+VOID     BtCrumb(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ PCWSTR Step);
 VOID     BtDelayMs(_In_ ULONG Ms);
 VOID     BtRecordStatus(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Value);
 VOID     BtRecordString(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ PCSTR Value, _In_ ULONG Length);

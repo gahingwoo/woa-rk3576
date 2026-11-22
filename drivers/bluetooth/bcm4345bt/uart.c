@@ -29,18 +29,24 @@ Wr(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ ULONG Off, _In_ ULONG Val)
     WRITE_REGISTER_ULONG((volatile ULONG *)(Ctx->Regs + Off), Val);
 }
 
-/* The DesignWare UART ignores LCR writes while busy; wait it out. */
+/*
+ * The DesignWare UART ignores LCR writes while busy (receiving); wait for a
+ * gap, but never longer than 200 us: this runs with the interrupt lock held.
+ * A line that is never idle (noise from an unpowered module) gets the
+ * divisor written anyway, and the attempt is counted.
+ */
 static VOID
 UartWaitNotBusy(_In_ PBT_DEVICE_CONTEXT Ctx)
 {
     ULONG i;
 
-    for (i = 0; i < 10000; i++) {
+    for (i = 0; i < 200; i++) {
         if ((Rd(Ctx, UART_USR) & USR_BUSY) == 0) {
             return;
         }
         KeStallExecutionProcessor(1);
     }
+    Ctx->BusyTimeouts++;
 }
 
 static VOID
@@ -56,8 +62,8 @@ UartProgramDivisor(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ ULONG Baud)
     Wr(Ctx, UART_DLL, div & 0xFF);
     Wr(Ctx, UART_DLH, (div >> 8) & 0xFF);
     Wr(Ctx, UART_LCR, LCR_8N1);
-    BT_LOG("UART %lu baud, divisor %lu from %lu Hz (LCR 0x%02lX)",
-           Baud, div, Ctx->UartClock, Rd(Ctx, UART_LCR) & 0xFF);
+    (VOID)Rd(Ctx, UART_USR);    /* clears a busy-detect raised by the writes */
+    Ctx->Baud = Baud;
 }
 
 /* Called with interrupts not yet connected (D0Entry). */
@@ -72,13 +78,36 @@ UartInit(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ ULONG Baud)
     Wr(Ctx, UART_MCR, MCR_RTS | MCR_AFCE);
     (VOID)Rd(Ctx, UART_LSR);
     (VOID)Rd(Ctx, UART_USR);
-    while (Rd(Ctx, UART_LSR) & LSR_DR) {
-        (VOID)Rd(Ctx, UART_RBR);
+    {
+        ULONG i;
+        for (i = 0; i < 256 && (Rd(Ctx, UART_LSR) & LSR_DR); i++) {
+            (VOID)Rd(Ctx, UART_RBR);
+        }
     }
     Ctx->RxHead = Ctx->RxTail = 0;
     Ctx->TxHead = Ctx->TxTail = 0;
-    BT_LOG("UART at %p: CPR 0x%08lX MCR 0x%02lX", Ctx->Regs,
-           Rd(Ctx, UART_CPR), Rd(Ctx, UART_MCR) & 0xFF);
+    BT_LOG("UART at %p: %lu baud from %lu Hz, CPR 0x%08lX MCR 0x%02lX", Ctx->Regs,
+           Baud, Ctx->UartClock, Rd(Ctx, UART_CPR), Rd(Ctx, UART_MCR) & 0xFF);
+}
+
+/*
+ * Stop the UART from interrupting, at once and without waiting for
+ * anything. Safe at any IRQL up to DIRQL; used on the stop path, where the
+ * interrupt has been disabled by the framework already, and before the
+ * module is powered off, when its TX line may float.
+ */
+VOID
+UartQuiesce(_In_ PBT_DEVICE_CONTEXT Ctx)
+{
+    if (Ctx->Regs == NULL) {
+        return;
+    }
+    Ctx->Ier = 0;
+    Wr(Ctx, UART_IER, 0);
+    Wr(Ctx, UART_MCR, 0);           /* RTS off: tell the module to stop sending */
+    Wr(Ctx, UART_SRR, SRR_RFR | SRR_XFR);
+    (VOID)Rd(Ctx, UART_LSR);
+    (VOID)Rd(Ctx, UART_USR);
 }
 
 /*
@@ -174,16 +203,29 @@ UartWaitTxIdle(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ ULONG TimeoutMs)
     return FALSE;
 }
 
+/*
+ * At most BT_ISR_RX_MAX bytes and 16 IIR rounds per interrupt. If the ring
+ * is full, or the ISR has run BT_ISR_STORM times since the DPC last
+ * drained, receive interrupts are masked (RxThrottled); the DPC unmasks
+ * them once the ring has room. A line that never stops delivering bytes,
+ * or an interrupt that cannot be cleared, so costs a bounded amount of
+ * time per DPC round and cannot hold a CPU at DIRQL.
+ */
 BOOLEAN
 BtEvtInterruptIsr(_In_ WDFINTERRUPT Interrupt, _In_ ULONG MessageID)
 {
     PBT_DEVICE_CONTEXT ctx = BtGetContext(WdfInterruptGetDevice(Interrupt));
     BOOLEAN claimed = FALSE;
-    ULONG iir, lsr, loops;
+    ULONG iir, lsr, loops, taken = 0;
 
     UNREFERENCED_PARAMETER(MessageID);
 
-    for (loops = 0; loops < 64; loops++) {
+    if (ctx->Regs == NULL) {
+        return FALSE;
+    }
+    ctx->IsrCount++;
+
+    for (loops = 0; loops < 16; loops++) {
         iir = Rd(ctx, UART_IIR) & IIR_ID_MASK;
         if (iir == IIR_NONE) {
             break;
@@ -202,7 +244,8 @@ BtEvtInterruptIsr(_In_ WDFINTERRUPT Interrupt, _In_ ULONG MessageID)
         default:            /* RLS, RDA, character timeout */
             break;
         }
-        for (;;) {
+        while (taken < BT_ISR_RX_MAX) {
+            ULONG next;
             lsr = Rd(ctx, UART_LSR);
             if (lsr & (LSR_OE | LSR_PE | LSR_FE | LSR_BI)) {
                 ctx->LineErrors++;
@@ -210,50 +253,80 @@ BtEvtInterruptIsr(_In_ WDFINTERRUPT Interrupt, _In_ ULONG MessageID)
             if ((lsr & LSR_DR) == 0) {
                 break;
             }
-            ULONG next = (ctx->RxHead + 1) & (BT_RX_RING - 1);
-            UCHAR b = (UCHAR)Rd(ctx, UART_RBR);
+            next = (ctx->RxHead + 1) & (BT_RX_RING - 1);
             if (next == ctx->RxTail) {
                 ctx->RxOverflow++;
-            } else {
-                ctx->RxRing[ctx->RxHead] = b;
-                ctx->RxHead = next;
+                break;      /* ring full: leave the rest in the FIFO */
             }
+            ctx->RxRing[ctx->RxHead] = (UCHAR)Rd(ctx, UART_RBR);
+            ctx->RxHead = next;
+            ctx->RxBytes++;
+            taken++;
+        }
+        if (taken >= BT_ISR_RX_MAX ||
+            ((ctx->RxHead + 1) & (BT_RX_RING - 1)) == ctx->RxTail) {
+            break;
         }
     }
 
+    if (!claimed && (Rd(ctx, UART_LSR) & LSR_DR)) {
+        claimed = TRUE;     /* data with no IIR reason: still ours */
+    }
     if (claimed) {
+        ctx->IsrSinceDpc++;
+        if (((ctx->RxHead + 1) & (BT_RX_RING - 1)) == ctx->RxTail ||
+            ctx->IsrSinceDpc > BT_ISR_STORM) {
+            /* Mask receive until the DPC has drained. */
+            ctx->Ier = (UCHAR)(ctx->Ier & ~(IER_ERBFI | IER_ELSI));
+            Wr(ctx, UART_IER, ctx->Ier);
+            if (!ctx->RxThrottled) {
+                ctx->RxThrottled = TRUE;
+                ctx->ThrottleCount++;
+            }
+        }
         WdfInterruptQueueDpcForIsr(Interrupt);
+    } else {
+        ctx->IsrUnclaimed++;
     }
     return claimed;
 }
 
+/*
+ * Moves at most BT_DPC_RX_MAX bytes per run; if more are waiting it queues
+ * itself again instead of looping, so one run is short however busy the
+ * line is.
+ */
 VOID
 BtEvtInterruptDpc(_In_ WDFINTERRUPT Interrupt, _In_ WDFOBJECT AssociatedObject)
 {
     PBT_DEVICE_CONTEXT ctx = BtGetContext((WDFDEVICE)AssociatedObject);
-    ULONG n;
+    ULONG n = 0;
+    BOOLEAN more;
 
-    UNREFERENCED_PARAMETER(Interrupt);
-
-    /* Parsing is serialised by PacketLock, which also owns RxStage. */
     WdfSpinLockAcquire(ctx->PacketLock);
-    for (;;) {
-        n = 0;
-        WdfInterruptAcquireLock(ctx->Interrupt);
-        while (ctx->RxTail != ctx->RxHead && n < BT_RX_RING) {
-            ctx->RxStage[n++] = ctx->RxRing[ctx->RxTail];
-            ctx->RxTail = (ctx->RxTail + 1) & (BT_RX_RING - 1);
-        }
-        WdfInterruptReleaseLock(ctx->Interrupt);
-        if (n == 0) {
-            break;
-        }
+    WdfInterruptAcquireLock(ctx->Interrupt);
+    while (ctx->RxTail != ctx->RxHead && n < BT_DPC_RX_MAX) {
+        ctx->RxStage[n++] = ctx->RxRing[ctx->RxTail];
+        ctx->RxTail = (ctx->RxTail + 1) & (BT_RX_RING - 1);
+    }
+    more = (ctx->RxTail != ctx->RxHead);
+    ctx->IsrSinceDpc = 0;
+    if (ctx->RxThrottled && !more && ctx->InterruptsOn) {
+        ctx->RxThrottled = FALSE;
+        ctx->Ier = (UCHAR)(ctx->Ier | IER_ERBFI | IER_ELSI);
+        Wr(ctx, UART_IER, ctx->Ier);
+    }
+    WdfInterruptReleaseLock(ctx->Interrupt);
+    if (n != 0) {
         BtParseBytes(ctx, ctx->RxStage, n);
     }
     WdfSpinLockRelease(ctx->PacketLock);
 
     BtServiceReads(ctx);
     BtServiceWrites(ctx);
+    if (more) {
+        WdfInterruptQueueDpcForIsr(Interrupt);
+    }
 }
 
 NTSTATUS
@@ -264,6 +337,9 @@ BtEvtInterruptEnable(_In_ WDFINTERRUPT Interrupt, _In_ WDFDEVICE AssociatedDevic
     UNREFERENCED_PARAMETER(Interrupt);
     /* Called with the interrupt lock held. */
     ctx->Ier = IER_ERBFI | IER_ELSI;
+    ctx->RxThrottled = FALSE;
+    ctx->IsrSinceDpc = 0;
+    ctx->InterruptsOn = TRUE;
     Wr(ctx, UART_IER, ctx->Ier);
     return STATUS_SUCCESS;
 }
@@ -274,7 +350,7 @@ BtEvtInterruptDisable(_In_ WDFINTERRUPT Interrupt, _In_ WDFDEVICE AssociatedDevi
     PBT_DEVICE_CONTEXT ctx = BtGetContext(AssociatedDevice);
 
     UNREFERENCED_PARAMETER(Interrupt);
-    ctx->Ier = 0;
-    Wr(ctx, UART_IER, 0);
+    ctx->InterruptsOn = FALSE;
+    UartQuiesce(ctx);
     return STATUS_SUCCESS;
 }

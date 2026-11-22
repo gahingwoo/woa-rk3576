@@ -67,6 +67,7 @@ NTSTATUS
 BtGpioSet(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ WDFIOTARGET Target, _In_ BOOLEAN High)
 {
     WDF_MEMORY_DESCRIPTOR in, out;
+    WDF_REQUEST_SEND_OPTIONS opts;
     UCHAR value = High ? 1 : 0;
     NTSTATUS status;
 
@@ -77,8 +78,11 @@ BtGpioSet(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ WDFIOTARGET Target, _In_ BOOLEAN Hig
     /* The GPIO client documentation passes the same buffer both ways. */
     WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&in, &value, sizeof(value));
     WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&out, &value, sizeof(value));
+    /* Bounded: on the stop path the GPIO controller may already be gone. */
+    WDF_REQUEST_SEND_OPTIONS_INIT(&opts, WDF_REQUEST_SEND_OPTION_TIMEOUT);
+    WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&opts, WDF_REL_TIMEOUT_IN_MS(200));
     status = WdfIoTargetSendIoctlSynchronously(Target, NULL, IOCTL_GPIO_WRITE_PINS,
-                                               &in, &out, NULL, NULL);
+                                               &in, &out, &opts, NULL);
     return status;
 }
 

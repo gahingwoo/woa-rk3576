@@ -155,7 +155,9 @@ BtParseBytes(_In_ PBT_DEVICE_CONTEXT Ctx, _In_reads_bytes_(Length) const UCHAR *
                     payload = Ctx->RxPacket[2];
                 }
                 if (Ctx->RxNeed + payload > BT_MAX_FRAME) {
-                    BT_LOG("RX: type %u length %lu too long, resync", Ctx->RxPacketType, payload);
+                    /* Counted, not logged: this runs at DISPATCH_LEVEL, and a
+                     * noisy line would turn every byte into a DbgPrint. */
+                    Ctx->ParseResyncs++;
                     Ctx->RxState = RxType;
                     break;
                 }
@@ -174,45 +176,61 @@ BtParseBytes(_In_ PBT_DEVICE_CONTEXT Ctx, _In_reads_bytes_(Length) const UCHAR *
 
 /* ------------------------------------------------------------- BthX I/O */
 
+/*
+ * No request is ever completed with PacketLock or TxLock held: BthMini
+ * reissues a read or write from its completion routine, which calls back
+ * into BtEvtIoDeviceControl on the same CPU, and taking the same spin lock
+ * again there would spin forever (a DPC_WATCHDOG_VIOLATION). So the work
+ * under a lock only fills buffers and records what to complete; the
+ * completions happen after the release.
+ */
+
+/* PacketLock held. Copies the slot into the request; returns Information. */
 static NTSTATUS
-CompleteRead(_In_ WDFREQUEST Request, _In_ UCHAR Type, _In_ const BT_PACKET_SLOT *Slot)
+FillRead(_In_ WDFREQUEST Request, _In_ UCHAR Type, _In_ const BT_PACKET_SLOT *Slot, _Out_ ULONG_PTR *Info)
 {
     PBTHX_HCI_READ_WRITE_CONTEXT out;
     size_t outLen;
     size_t need = FIELD_OFFSET(BTHX_HCI_READ_WRITE_CONTEXT, Data) + Slot->Length;
-    NTSTATUS status;
 
-    status = WdfRequestRetrieveOutputBuffer(Request, need, (PVOID *)&out, &outLen);
-    if (!NT_SUCCESS(status)) {
-        WdfRequestCompleteWithInformation(Request, STATUS_BUFFER_TOO_SMALL, 0);
-        return status;
+    *Info = 0;
+    if (!NT_SUCCESS(WdfRequestRetrieveOutputBuffer(Request, need, (PVOID *)&out, &outLen))) {
+        return STATUS_BUFFER_TOO_SMALL;
     }
     out->Type = Type;
     out->DataLen = Slot->Length;
     RtlCopyMemory(out->Data, Slot->Data, Slot->Length);
-    WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, need);
+    *Info = need;
     return STATUS_SUCCESS;
 }
+
+#define BT_SERVICE_BATCH 8
 
 /* Hand buffered packets to pended reads. IRQL <= DISPATCH_LEVEL. */
 static VOID
 ServiceOne(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ WDFQUEUE Queue, _In_ BT_PACKET_FIFO *F, _In_ UCHAR Type)
 {
-    WDFREQUEST req;
+    WDFREQUEST req[BT_SERVICE_BATCH];
+    NTSTATUS st[BT_SERVICE_BATCH];
+    ULONG_PTR info[BT_SERVICE_BATCH];
+    ULONG n, i;
 
-    for (;;) {
+    do {
+        n = 0;
         WdfSpinLockAcquire(Ctx->PacketLock);
-        if (F->Count == 0 || !NT_SUCCESS(WdfIoQueueRetrieveNextRequest(Queue, &req))) {
-            WdfSpinLockRelease(Ctx->PacketLock);
-            return;
+        while (n < BT_SERVICE_BATCH && F->Count != 0 &&
+               NT_SUCCESS(WdfIoQueueRetrieveNextRequest(Queue, &req[n]))) {
+            st[n] = FillRead(req[n], Type, &F->Slots[F->Head], &info[n]);
+            F->Head = (F->Head + 1) % F->Capacity;
+            F->Count--;
+            n++;
         }
-        /* Complete from the slot under the lock, then retire the slot. */
-        (VOID)CompleteRead(req, Type, &F->Slots[F->Head]);
-        BtNoteDone(Ctx, BxReadHci);
-        F->Head = (F->Head + 1) % F->Capacity;
-        F->Count--;
         WdfSpinLockRelease(Ctx->PacketLock);
-    }
+        for (i = 0; i < n; i++) {
+            WdfRequestCompleteWithInformation(req[i], st[i], info[i]);
+            BtNoteDone(Ctx, BxReadHci);
+        }
+    } while (n == BT_SERVICE_BATCH);
 }
 
 VOID
@@ -222,31 +240,39 @@ BtServiceReads(_In_ PBT_DEVICE_CONTEXT Ctx)
     ServiceOne(Ctx, Ctx->AclReadQueue, &Ctx->Acl, (UCHAR)HciPacketAclData);
 }
 
-/* TxLock held. TRUE when the request is finished with (sent or failed). */
+/*
+ * TxLock held. Returns FALSE when the ring has no room (try later);
+ * otherwise TRUE with the status and Information to complete with.
+ */
 static BOOLEAN
-TryWrite(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ WDFREQUEST Request)
+TryWrite(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ WDFREQUEST Request, _Out_ NTSTATUS *Status, _Out_ ULONG_PTR *Info)
 {
     PBTHX_HCI_READ_WRITE_CONTEXT in;
     PULONG out;
     size_t inLen, outLen;
     const size_t hdr = FIELD_OFFSET(BTHX_HCI_READ_WRITE_CONTEXT, Data);
 
+    *Info = 0;
     if (!NT_SUCCESS(WdfRequestRetrieveInputBuffer(Request, hdr, (PVOID *)&in, &inLen)) ||
         !NT_SUCCESS(WdfRequestRetrieveOutputBuffer(Request, sizeof(ULONG), (PVOID *)&out, &outLen)) ||
         inLen < hdr + (size_t)in->DataLen || in->DataLen > BT_MAX_FRAME ||
         !BT_VALID_WRITE_TYPE(in->Type)) {
-        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        *Status = STATUS_INVALID_PARAMETER;
+        return TRUE;
+    }
+    if (!Ctx->Ready) {
+        *Status = STATUS_DEVICE_NOT_READY;
         return TRUE;
     }
     if (!UartQueueFrame(Ctx, in->Type, in->Data, in->DataLen)) {
-        return FALSE;   /* ring full, try again when it drains */
+        return FALSE;
     }
     if (in->Type == H4_COMMAND && in->DataLen >= 2) {
         InterlockedExchange(&Ctx->BxLastCommand, in->Data[0] | (in->Data[1] << 8));
     }
     *out = in->DataLen;
-    WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, sizeof(ULONG));
-    BtNoteDone(Ctx, BxWriteHci);
+    *Status = STATUS_SUCCESS;
+    *Info = sizeof(ULONG);
     return TRUE;
 }
 
@@ -254,23 +280,66 @@ TryWrite(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ WDFREQUEST Request)
  * Every write goes through TxWaitQueue, in arrival order, and TxLock makes
  * taking one off the queue and putting it into the ring a single step, so
  * HCI commands and ACL packets reach the controller in the order BthMini
- * sent them. IRQL <= DISPATCH_LEVEL.
+ * sent them. Never waits: a write that does not fit stays queued and the
+ * DPC retries it when the transmit ring drains. IRQL <= DISPATCH_LEVEL.
  */
 VOID
 BtServiceWrites(_In_ PBT_DEVICE_CONTEXT Ctx)
 {
-    WDFREQUEST req;
+    WDFREQUEST req[BT_SERVICE_BATCH];
+    NTSTATUS st[BT_SERVICE_BATCH];
+    ULONG_PTR info[BT_SERVICE_BATCH];
+    ULONG n, i;
+    BOOLEAN full;
 
-    WdfSpinLockAcquire(Ctx->TxLock);
-    while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(Ctx->TxWaitQueue, &req))) {
-        if (!TryWrite(Ctx, req)) {
-            if (!NT_SUCCESS(WdfRequestRequeue(req))) {
-                WdfRequestComplete(req, STATUS_INSUFFICIENT_RESOURCES);
+    do {
+        n = 0;
+        full = FALSE;
+        WdfSpinLockAcquire(Ctx->TxLock);
+        while (n < BT_SERVICE_BATCH &&
+               NT_SUCCESS(WdfIoQueueRetrieveNextRequest(Ctx->TxWaitQueue, &req[n]))) {
+            if (!TryWrite(Ctx, req[n], &st[n], &info[n])) {
+                if (!NT_SUCCESS(WdfRequestRequeue(req[n]))) {
+                    st[n] = STATUS_INSUFFICIENT_RESOURCES;
+                    info[n] = 0;
+                    n++;
+                }
+                full = TRUE;
+                break;
             }
-            break;
+            n++;
+        }
+        WdfSpinLockRelease(Ctx->TxLock);
+        for (i = 0; i < n; i++) {
+            WdfRequestCompleteWithInformation(req[i], st[i], info[i]);
+            BtNoteDone(Ctx, BxWriteHci);
+        }
+    } while (n == BT_SERVICE_BATCH && !full);
+}
+
+/*
+ * On stop: fail every pended read and write, outside any lock.
+ * PASSIVE_LEVEL (D0Exit).
+ */
+VOID
+BtCancelPending(_In_ PBT_DEVICE_CONTEXT Ctx)
+{
+    WDFREQUEST req;
+    WDFQUEUE q[3];
+    ULONG i;
+
+    q[0] = Ctx->TxWaitQueue;
+    q[1] = Ctx->EventReadQueue;
+    q[2] = Ctx->AclReadQueue;
+    for (i = 0; i < 3; i++) {
+        while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(q[i], &req))) {
+            WdfRequestComplete(req, STATUS_DEVICE_NOT_READY);
         }
     }
-    WdfSpinLockRelease(Ctx->TxLock);
+    WdfSpinLockAcquire(Ctx->PacketLock);
+    Ctx->Events.Count = 0;
+    Ctx->Acl.Count = 0;
+    WdfSpinLockRelease(Ctx->PacketLock);
 }
 
 /*
@@ -665,6 +734,7 @@ BtBringUp(_In_ PBT_DEVICE_CONTEXT Ctx)
     Ctx->RxState = RxType;
     WdfSpinLockRelease(Ctx->PacketLock);
 
+    BtCrumb(Ctx, L"BringUp: power cycle");
     BtPower(Ctx, FALSE);
     BtDelayMs(20);
     UartFlush(Ctx);
@@ -672,6 +742,7 @@ BtBringUp(_In_ PBT_DEVICE_CONTEXT Ctx)
     BtPower(Ctx, TRUE);
     BtDelayMs(100);
 
+    BtCrumb(Ctx, L"BringUp: HCI_Reset");
     status = STATUS_IO_TIMEOUT;
     for (attempt = 0; attempt < 3 && !NT_SUCCESS(status); attempt++) {
         status = HciReset(Ctx);
@@ -685,6 +756,7 @@ BtBringUp(_In_ PBT_DEVICE_CONTEXT Ctx)
     LogName(Ctx);
 
     BtRecordStatus(Ctx, L"FirmwareLoaded", 0);
+    BtCrumb(Ctx, L"BringUp: patchram");
     if (NT_SUCCESS(LoadFirmware(Ctx, &fw, &fwLen))) {
         status = DownloadPatchram(Ctx, (const UCHAR *)WdfMemoryGetBuffer(fw, NULL), fwLen);
         WdfObjectDelete(fw);
@@ -714,6 +786,7 @@ BtBringUp(_In_ PBT_DEVICE_CONTEXT Ctx)
         BT_LOG("no patchram: running the ROM firmware%s", "");
     }
 
+    BtCrumb(Ctx, L"BringUp: baud");
     if (Ctx->OperBaud != BT_INIT_BAUD) {
         NTSTATUS s = SetOperatingSpeed(Ctx, Ctx->OperBaud);
         if (NT_SUCCESS(s)) {
@@ -738,6 +811,7 @@ BtBringUp(_In_ PBT_DEVICE_CONTEXT Ctx)
         }
     }
 
+    BtCrumb(Ctx, L"BringUp: address");
     FixAddress(Ctx);
     status = STATUS_SUCCESS;
 

@@ -38,6 +38,8 @@ static EVT_WDF_DEVICE_D0_EXIT BtEvtD0Exit;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_INIT BtEvtSelfManagedIoInit;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_RESTART BtEvtSelfManagedIoRestart;
 static EVT_WDF_WORKITEM BtEvtStatsWork;
+static EVT_WDF_DEVICE_SELF_MANAGED_IO_SUSPEND BtEvtSelfManagedIoSuspend;
+static EVT_WDF_DEVICE_SELF_MANAGED_IO_CLEANUP BtEvtSelfManagedIoCleanup;
 
 VOID
 BtDelayMs(_In_ ULONG Ms)
@@ -149,6 +151,15 @@ BtEvtStatsWork(_In_ WDFWORKITEM WorkItem)
     PutULong(key, L"BthXCapsScoChannels", ctx->Caps.MaxScoChannels);
     PutULong(key, L"BthXCapsMaxAcl", ctx->Caps.MaxAclTransferInSize);
     PutULong(key, L"BthXCapsIdle", ctx->Caps.IsDeviceIdleCapable);
+    PutULong(key, L"UartIsrCount", ctx->IsrCount);
+    PutULong(key, L"UartIsrUnclaimed", ctx->IsrUnclaimed);
+    PutULong(key, L"UartRxBytes", ctx->RxBytes);
+    PutULong(key, L"UartRxOverflow", ctx->RxOverflow);
+    PutULong(key, L"UartLineErrors", ctx->LineErrors);
+    PutULong(key, L"UartThrottles", ctx->ThrottleCount);
+    PutULong(key, L"UartBusyTimeouts", ctx->BusyTimeouts);
+    PutULong(key, L"UartBaud", ctx->Baud);
+    PutULong(key, L"HciResyncs", ctx->ParseResyncs);
     WdfRegistryClose(key);
 }
 
@@ -178,6 +189,50 @@ BtNoteDone(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ BT_BX_INDEX Index)
     BtStatsKick(Ctx);
 }
 
+/*
+ * Breadcrumb: the step the driver is in, flushed to disk at once, so that a
+ * hang or a power cut leaves the last step readable afterwards
+ * (Device Parameters: LastStep, PrevStep, StepSeq). PASSIVE_LEVEL only;
+ * every caller is a PnP or power callback or the bring-up.
+ */
+VOID
+BtCrumb(_In_ PBT_DEVICE_CONTEXT Ctx, _In_ PCWSTR Step)
+{
+    WDFKEY key;
+    UNICODE_STRING n, v;
+    DECLARE_UNICODE_STRING_SIZE(prev, 64);
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return;
+    }
+    if (!NT_SUCCESS(WdfDeviceOpenRegistryKey(Ctx->Device, PLUGPLAY_REGKEY_DEVICE, KEY_READ | KEY_WRITE,
+                                             WDF_NO_OBJECT_ATTRIBUTES, &key))) {
+        return;
+    }
+    RtlInitUnicodeString(&n, L"LastStep");
+    if (NT_SUCCESS(WdfRegistryQueryUnicodeString(key, &n, NULL, &prev))) {
+        RtlInitUnicodeString(&v, L"PrevStep");
+        (VOID)WdfRegistryAssignUnicodeString(key, &v, &prev);
+    }
+    RtlInitUnicodeString(&v, Step);
+    (VOID)WdfRegistryAssignUnicodeString(key, &n, &v);
+    PutULong(key, L"StepSeq", (ULONG)InterlockedIncrement(&Ctx->StepSeq));
+    (VOID)ZwFlushKey(WdfRegistryWdmGetHandle(key));
+    WdfRegistryClose(key);
+    BT_LOG("step %ws", Step);
+}
+
+/* Write the counters now, at PASSIVE_LEVEL, not from the work item. */
+static VOID
+BtStatsFlushNow(_In_ PBT_DEVICE_CONTEXT Ctx)
+{
+    if (Ctx->StatsWork != NULL) {
+        WdfWorkItemFlush(Ctx->StatsWork);
+        InterlockedExchange(&Ctx->StatsQueued, 1);
+        BtEvtStatsWork(Ctx->StatsWork);
+    }
+}
+
 static ULONG
 ReadSetting(_In_ WDFDEVICE Device, _In_ PCWSTR Name, _In_ ULONG Default)
 {
@@ -204,6 +259,10 @@ BtEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRES
     ULONG gpios = 0;
     BOOLEAN haveIrq = FALSE;
     NTSTATUS status;
+
+    BtCrumb(ctx, L"PrepareHardware: start");
+    ctx->HaveRegOn = FALSE;
+    ctx->HaveWake = FALSE;
 
     for (i = 0; i < count; i++) {
         PCM_PARTIAL_RESOURCE_DESCRIPTOR t = WdfCmResourceListGetDescriptor(Translated, i);
@@ -273,7 +332,9 @@ BtEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRES
     ctx->Caps.IsDeviceIdleCapable = (BOOLEAN)(ReadSetting(Device, L"BthXIdleCapable", (ULONG)ctx->Caps.IsDeviceIdleCapable + 1) > 1);
     BtStatsKick(ctx);
 
-    return BtGpioOpen(ctx);
+    status = BtGpioOpen(ctx);
+    BtCrumb(ctx, NT_SUCCESS(status) ? L"PrepareHardware: done" : L"PrepareHardware: GPIO open failed");
+    return status;
 }
 
 static NTSTATUS
@@ -282,10 +343,25 @@ BtEvtReleaseHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Translated)
     PBT_DEVICE_CONTEXT ctx = BtGetContext(Device);
 
     UNREFERENCED_PARAMETER(Translated);
-    if (ctx->Regs != NULL) {
-        MmUnmapIoSpace((PVOID)ctx->Regs, ctx->RegsLength);
-        ctx->Regs = NULL;
+    BtCrumb(ctx, L"ReleaseHardware: start");
+    /* Interrupts are disconnected by now; make sure the UART agrees. */
+    UartQuiesce(ctx);
+    /* Close the GPIO connections, so a later start can open them again
+     * (they are Exclusive). */
+    if (ctx->RegOnTarget != NULL) {
+        WdfObjectDelete(ctx->RegOnTarget);
+        ctx->RegOnTarget = NULL;
     }
+    if (ctx->WakeTarget != NULL) {
+        WdfObjectDelete(ctx->WakeTarget);
+        ctx->WakeTarget = NULL;
+    }
+    if (ctx->Regs != NULL) {
+        volatile UCHAR *regs = ctx->Regs;
+        ctx->Regs = NULL;
+        MmUnmapIoSpace((PVOID)regs, ctx->RegsLength);
+    }
+    BtCrumb(ctx, L"ReleaseHardware: done");
     return STATUS_SUCCESS;
 }
 
@@ -295,20 +371,61 @@ BtEvtD0Entry(_In_ WDFDEVICE Device, _In_ WDF_POWER_DEVICE_STATE Previous)
     PBT_DEVICE_CONTEXT ctx = BtGetContext(Device);
 
     UNREFERENCED_PARAMETER(Previous);
+    BtCrumb(ctx, L"D0Entry: start");
     /* Interrupts are connected after this returns; bring-up needs them. */
     UartInit(ctx, BT_INIT_BAUD);
+    BtCrumb(ctx, L"D0Entry: done");
     return STATUS_SUCCESS;
 }
 
+/*
+ * Stop. The framework has already run BtEvtSelfManagedIoSuspend (no new
+ * HCI traffic, pended requests failed) and disabled the interrupt, which
+ * quiesced the UART. Nothing here waits on the controller: the module is
+ * switched off through the GPIO with a bounded wait and that is all.
+ */
 static NTSTATUS
 BtEvtD0Exit(_In_ WDFDEVICE Device, _In_ WDF_POWER_DEVICE_STATE Target)
 {
     PBT_DEVICE_CONTEXT ctx = BtGetContext(Device);
 
     UNREFERENCED_PARAMETER(Target);
+    BtCrumb(ctx, L"D0Exit: start");
     ctx->Ready = FALSE;
+    UartQuiesce(ctx);
+    BtCancelPending(ctx);
+    BtCrumb(ctx, L"D0Exit: power off");
     BtPower(ctx, FALSE);
+    BtStatsFlushNow(ctx);
+    BtCrumb(ctx, L"D0Exit: done");
     return STATUS_SUCCESS;
+}
+
+static VOID
+BtEvtSelfManagedIoSuspend2(_In_ PBT_DEVICE_CONTEXT Ctx)
+{
+    BtCrumb(Ctx, L"SelfManagedIoSuspend: start");
+    Ctx->Ready = FALSE;
+    BtCancelPending(Ctx);
+    BtCrumb(Ctx, L"SelfManagedIoSuspend: done");
+}
+
+static NTSTATUS
+BtEvtSelfManagedIoSuspend(_In_ WDFDEVICE Device)
+{
+    BtEvtSelfManagedIoSuspend2(BtGetContext(Device));
+    return STATUS_SUCCESS;
+}
+
+static VOID
+BtEvtSelfManagedIoCleanup(_In_ WDFDEVICE Device)
+{
+    PBT_DEVICE_CONTEXT ctx = BtGetContext(Device);
+
+    BtCrumb(ctx, L"SelfManagedIoCleanup");
+    if (ctx->StatsWork != NULL) {
+        WdfWorkItemFlush(ctx->StatsWork);
+    }
 }
 
 static NTSTATUS
@@ -317,7 +434,9 @@ BtEvtSelfManagedIoInit(_In_ WDFDEVICE Device)
     PBT_DEVICE_CONTEXT ctx = BtGetContext(Device);
     NTSTATUS status;
 
+    BtCrumb(ctx, L"SelfManagedIoInit: bring-up");
     status = BtBringUp(ctx);
+    BtCrumb(ctx, NT_SUCCESS(status) ? L"SelfManagedIoInit: bring-up done" : L"SelfManagedIoInit: bring-up failed");
     if (!NT_SUCCESS(status)) {
         /* Stay started, so the status values above can be read. */
         BT_LOG("bring-up failed 0x%08X; no Bluetooth radio", status);
@@ -335,7 +454,9 @@ BtEvtSelfManagedIoRestart(_In_ WDFDEVICE Device)
 {
     PBT_DEVICE_CONTEXT ctx = BtGetContext(Device);
 
+    BtCrumb(ctx, L"SelfManagedIoRestart: bring-up");
     (VOID)BtBringUp(ctx);
+    BtCrumb(ctx, L"SelfManagedIoRestart: done");
     if (ctx->Ready && !ctx->ChildCreated) {
         (VOID)BtCreateChild(ctx);
     }
@@ -364,6 +485,8 @@ BtEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT Init)
     pnp.EvtDeviceD0Exit = BtEvtD0Exit;
     pnp.EvtDeviceSelfManagedIoInit = BtEvtSelfManagedIoInit;
     pnp.EvtDeviceSelfManagedIoRestart = BtEvtSelfManagedIoRestart;
+    pnp.EvtDeviceSelfManagedIoSuspend = BtEvtSelfManagedIoSuspend;
+    pnp.EvtDeviceSelfManagedIoCleanup = BtEvtSelfManagedIoCleanup;
     WdfDeviceInitSetPnpPowerEventCallbacks(Init, &pnp);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attr, BT_DEVICE_CONTEXT);
@@ -373,6 +496,7 @@ BtEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT Init)
     }
     ctx = BtGetContext(device);
     ctx->Device = device;
+    BtCrumb(ctx, L"DeviceAdd");
     KeInitializeEvent(&ctx->SyncEvent, NotificationEvent, FALSE);
     BtInitQueuesAndFifos(ctx);
 
