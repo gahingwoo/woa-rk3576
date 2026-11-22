@@ -208,6 +208,8 @@ Arguments:
 
     PAGED_CODE();
 
+    Diag(DIAG_EV_DATARANGE, PinId);
+
     if (!IsEqualGUIDAligned(ClientDataRange->Specifier, KSDATAFORMAT_SPECIFIER_WAVEFORMATEX))
     {
         return STATUS_NOT_IMPLEMENTED;
@@ -237,13 +239,53 @@ Arguments:
         //Set ResultantFormat to be the only supported format for the MicArray endpoint. 
         PKSDATAFORMAT_WAVEFORMATEXTENSIBLE resultantFormat;
         resultantFormat = (PKSDATAFORMAT_WAVEFORMATEXTENSIBLE)ResultantFormat;
-        *resultantFormat = *MicArrayPinSupportedDeviceFormats;
+        // The endpoint's own format: the SAI jack microphone is 24 in
+        // 32-bit (micjacksaiwavtable.h), the RK3588 ones 16-bit.
+        KSDATAFORMAT_WAVEFORMATEXTENSIBLE *pinFormats = NULL;
+        if (GetPinSupportedDeviceFormats(PinId, &pinFormats) > 0 && pinFormats != NULL) {
+            *resultantFormat = pinFormats[0];
+        } else {
+            *resultantFormat = *MicArrayPinSupportedDeviceFormats;
+        }
         *ResultantFormatLength = requiredSize;
 
         return STATUS_SUCCESS;
     }
     else
     {
+        // Render: a pin with one extensible device format gets that format
+        // back, as the capture pins above do.  The class handler would
+        // answer with a plain WAVEFORMATEX, which for 32-bit PCM the audio
+        // engine cannot use (TaishanPi 3M, 1.0.0.133: the endpoint's device
+        // format was cached as WAVE_FORMAT_PCM 2ch 32-bit and GetMixFormat
+        // failed with AUDCLNT_E_UNSUPPORTED_FORMAT before any stream opened).
+        Diag(DIAG_EV_DR_CLIENT,
+            ((((PKSDATARANGE_AUDIO)ClientDataRange)->MaximumChannels & 0xFF) << 24) |
+            (ClientDataRange->SubFormat.Data1 & 0xFFFFFF));
+        KSDATAFORMAT_WAVEFORMATEXTENSIBLE *renderFormats = NULL;
+        if (GetPinSupportedDeviceFormats(PinId, &renderFormats) == 1 && renderFormats != NULL &&
+            renderFormats[0].WaveFormatExt.Format.wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+        {
+            requiredSize = sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE);
+            if (!OutputBufferLength)
+            {
+                *ResultantFormatLength = requiredSize;
+                Diag(DIAG_EV_DR_PATH, 1);
+                return STATUS_BUFFER_OVERFLOW;
+            }
+            else if (OutputBufferLength < requiredSize)
+            {
+                Diag(DIAG_EV_DR_PATH, 2);
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            *(PKSDATAFORMAT_WAVEFORMATEXTENSIBLE)ResultantFormat = renderFormats[0];
+            *ResultantFormatLength = requiredSize;
+            Diag(DIAG_EV_DR_PATH, 3);
+            return STATUS_SUCCESS;
+        }
+        Diag(DIAG_EV_DR_PATH, 4);
+
         requiredSize = sizeof(KSDATAFORMAT_WAVEFORMATEX);
 
         //
@@ -454,6 +496,29 @@ Return Value:
     
     *OutStream = NULL;
 
+    Diag(DIAG_EV_NEWSTREAM_ENTER, Pin);
+    if (DataFormat->FormatSize >= sizeof(KSDATAFORMAT_WAVEFORMATEX))
+    {
+        PWAVEFORMATEX wfx = (PWAVEFORMATEX)(DataFormat + 1);
+        ULONG valid = wfx->wBitsPerSample;
+        if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+            DataFormat->FormatSize >= sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE))
+        {
+            valid = ((PWAVEFORMATEXTENSIBLE)wfx)->Samples.wValidBitsPerSample;
+        }
+        Diag(DIAG_EV_NEWSTREAM_FORMAT,
+            ((ULONG)wfx->nChannels << 24) | ((ULONG)(wfx->wBitsPerSample & 0xFF) << 16) |
+            ((valid & 0xFF) << 8) | (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE ? 1 : 0));
+        Diag(DIAG_EV_NEWSTREAM_RATE, wfx->nSamplesPerSec);
+        Diag(DIAG_EV_NEWSTREAM_TAG, ((ULONG)wfx->wFormatTag << 16) | wfx->nBlockAlign);
+        if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+            DataFormat->FormatSize >= sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE))
+        {
+            Diag(DIAG_EV_NEWSTREAM_MASK, ((PWAVEFORMATEXTENSIBLE)wfx)->dwChannelMask);
+            Diag(DIAG_EV_NEWSTREAM_SUB, ((PWAVEFORMATEXTENSIBLE)wfx)->SubFormat.Data1);
+        }
+    }
+
      //
     // If the data format attributes were specified, extract them.
     //
@@ -476,6 +541,7 @@ Return Value:
     if (NT_SUCCESS(ntStatus))
     {
         ntStatus = IsFormatSupported(Pin, Capture, DataFormat);
+        Diag(DIAG_EV_ISFORMAT, (ULONG)ntStatus);
     }
 
     // Instantiate a stream. Stream must be in
@@ -523,7 +589,8 @@ Return Value:
     {
         stream->Release();
     }
-    
+
+    Diag(DIAG_EV_NEWSTREAM_STATUS, (ULONG)ntStatus);
     return ntStatus;
 } // NewStream
 
@@ -921,6 +988,8 @@ CMiniportWaveRT::StreamClosed
 
     DPF_ENTER(("[CMiniportWaveRT::StreamClosed]"));
 
+    Diag(DIAG_EV_STREAMCLOSED, _Pin);
+
     if (IsSystemCapturePin(_Pin))
     {
         FREE_PIN_INSTANCE_RESOURCES(m_ulSystemAllocated);
@@ -1208,7 +1277,24 @@ CMiniportWaveRT::PropertyHandlerProposedFormat
     else if (PropertyRequest->Verb & KSPROPERTY_TYPE_SET)
     {
         pKsFormat = (PKSDATAFORMAT)PropertyRequest->Value;
+        if (pKsFormat->FormatSize >= sizeof(KSDATAFORMAT_WAVEFORMATEX))
+        {
+            PWAVEFORMATEX pwfx = (PWAVEFORMATEX)(pKsFormat + 1);
+            ULONG pvalid = pwfx->wBitsPerSample;
+            ULONG psub = pwfx->wFormatTag;
+            if (pwfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+                pKsFormat->FormatSize >= sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE))
+            {
+                pvalid = ((PWAVEFORMATEXTENSIBLE)pwfx)->Samples.wValidBitsPerSample;
+                psub = ((PWAVEFORMATEXTENSIBLE)pwfx)->SubFormat.Data1;
+            }
+            Diag(DIAG_EV_PROPOSED_FORMAT,
+                ((ULONG)pwfx->nChannels << 24) | ((ULONG)(pwfx->wBitsPerSample & 0xFF) << 16) |
+                ((pvalid & 0xFF) << 8) | (pwfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE ? 1 : 0));
+            Diag(DIAG_EV_PROPOSED_SUB, ((ULONG)pwfx->wFormatTag << 16) | (psub & 0xFFFF));
+        }
         ntStatus = IsFormatSupported(kspPin->PinId, IsSystemCapturePin(kspPin->PinId) || FALSE, pKsFormat);
+        Diag(DIAG_EV_PROPOSED, (ULONG)ntStatus);
         if (!NT_SUCCESS(ntStatus))
         {
             return ntStatus;

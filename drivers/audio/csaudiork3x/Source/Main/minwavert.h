@@ -66,6 +66,15 @@ protected:
     PENDPOINT_MINIPAIR                  m_pMiniportPair;
     
 public:
+    // Diagnostics: count a DIAG_EV_* event for this endpoint's direction.
+    VOID Diag(ULONG id, ULONG value)
+    {
+        if (m_pAdapterCommon)
+        {
+            m_pAdapterCommon->DiagEvent(m_DeviceType == eInputDevice, id, value);
+        }
+    }
+
     NTSTATUS EventHandler_PinCapsChange
     (
         _In_  PPCEVENT_REQUEST EventRequest

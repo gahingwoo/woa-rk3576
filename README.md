@@ -33,7 +33,7 @@ controllers. It needs firmware 0.2.0 or later. How to install it:
 | NVMe | PCIe | inbox stornvme | works |
 | USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
 | Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
-| Audio (TaishanPi 3M headphones) | `RKCP3004`, `RKCP8388` | rk3xi2sbus, csaudiork3x, es8323, on the `audio` branch | drivers load and the endpoints appear; no sound yet ([audio](docs/AUDIO.md)) |
+| Audio (TaishanPi 3M headphones) | `RKCP3004`, `RKCP8388` | rk3xi2sbus, csaudiork3x, es8323 | headphone playback works (1.0.0.135, 22 November 2026); recording and HDMI audio not yet tested ([audio](docs/AUDIO.md)) |
 
 Most of these were measured once, on 2026-10-01.
 
@@ -59,8 +59,11 @@ controller (edk2-rk3576 `main` after 0.4.1): the radio comes up in Settings,
 pairing and file transfer work. Voice calls and headset microphones do not,
 because the module carries SCO audio over a PCM link that has no driver.
 
-Not available: the USB-C port (left out of the board's ACPI tables), WiFi,
-sound (the audio drivers load but nothing plays yet) and the EC20 modem.
+Headphone playback works since 22 November 2026 (csaudiork3x 1.0.0.135);
+recording and HDMI audio have not been tried with it yet.
+
+Not available: the USB-C port (left out of the board's ACPI tables), WiFi
+and the EC20 modem.
 
 The board's RTC chip holds no valid time, so the clock is wrong after every
 boot until Windows syncs it over the network. Set
@@ -129,7 +132,7 @@ drivers/
   spi/rk3xspi/          SPI                        SpbCx (written here)
   input/gt9271/         GT9271 touch screen        VHF (written here)
   bluetooth/bcm4345bt/  BCM4345C5 on UART6         BthX bus driver (written here)
-  audio/                RK3588 I²S drivers, not built into the image
+  audio/                SAI/I²S audio and the ES8388 codec, not in the image
   lib/, shared/, include/, sd/rk_sip_sdmmc_lib/   shared code
 tools/
   woa-deploy/           install Windows to the eMMC from WinPE

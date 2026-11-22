@@ -6,6 +6,9 @@
     <ConversionToolVersion>1.0</ConversionToolVersion>
     <IntDir Condition="'$(Platform)'!='Win32'">$(SolutionDir)$(Platform)\$(Configuration)\Intermediate\$(TargetName)\</IntDir>
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\Output\</OutDir>
+    <!-- Fourth DriverVer field (StampInf). CI passes the run number, so a
+         rebuilt package always outranks the one installed before it. -->
+    <WoaDriverBuild Condition="'$(WoaDriverBuild)'==''">0</WoaDriverBuild>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>

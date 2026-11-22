@@ -82,6 +82,7 @@ jobs:
           msbuild build\RockchipDrivers.sln `
             /p:Configuration=Release `
             /p:Platform=ARM64 `
+            /p:WoaDriverBuild=${{ github.run_number }} `
             /m /nologo /v:minimal
           if ($LASTEXITCODE -ne 0) { throw "msbuild failed for RockchipDrivers.sln" }
 

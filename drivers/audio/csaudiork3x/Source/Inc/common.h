@@ -120,6 +120,31 @@ Abstract:
 #define MINTOPORT_POOLTAG           'RTNM'
 #define MINADAPTER_POOLTAG          'uAyS'
 
+// Stream-path events, counted per direction (diag_event, hw.cpp).
+enum {
+    DIAG_EV_DATARANGE,          // DataRangeIntersection, value = status
+    DIAG_EV_NEWSTREAM_ENTER,    // NewStream entered, value = pin
+    DIAG_EV_NEWSTREAM_FORMAT,   // ch << 24 | bits << 16 | valid << 8 | extensible
+    DIAG_EV_NEWSTREAM_RATE,     // nSamplesPerSec
+    DIAG_EV_NEWSTREAM_STATUS,   // NewStream result
+    DIAG_EV_ISFORMAT,           // IsFormatSupported result
+    DIAG_EV_PROPOSED,           // KSPROPERTY_PIN_PROPOSEDATAFORMAT set, status
+    DIAG_EV_ALLOC_SIZE,         // AllocateAudioBuffer, requested size
+    DIAG_EV_ALLOC_STATUS,       // AllocateAudioBuffer result
+    DIAG_EV_SETSTATE,           // SetState, value = KSSTATE
+    DIAG_EV_SETSTATE_STATUS,    // SetState result
+    DIAG_EV_GETPOSITION,        // GetPosition (counted only)
+    DIAG_EV_STREAMCLOSED,       // StreamClosed
+    DIAG_EV_NEWSTREAM_TAG,      // wFormatTag << 16 | nBlockAlign
+    DIAG_EV_NEWSTREAM_MASK,     // dwChannelMask (extensible only)
+    DIAG_EV_NEWSTREAM_SUB,      // SubFormat.Data1 (extensible only)
+    DIAG_EV_PROPOSED_FORMAT,    // as NEWSTREAM_FORMAT, for PROPOSEDATAFORMAT
+    DIAG_EV_PROPOSED_SUB,       // wFormatTag << 16 | SubFormat.Data1 low 16
+    DIAG_EV_DR_CLIENT,          // render intersection: client MaximumChannels << 24 | SubFormat.Data1 low 24
+    DIAG_EV_DR_PATH,            // 1 size query, 2 too small, 3 own format returned, 4 class handler
+    DIAG_EV_COUNT
+};
+
 typedef enum
 {
     eOutputDevice = 0,
@@ -305,6 +330,19 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         (
             THIS_
             _Out_ BOOLEAN *isJack
+        ) PURE;
+    // TRUE when the interface is the RK3576 SAI ("rockchip,sai").
+    STDMETHOD_(BOOLEAN, IsSai)
+        (
+            THIS
+        ) PURE;
+    // Diagnostics: count a stream-path event (DIAG_EV_* in hw.h).
+    STDMETHOD_(VOID, DiagEvent)
+        (
+            THIS_
+            _In_ BOOLEAN capture,
+            _In_ ULONG id,
+            _In_ ULONG value
         ) PURE;
 
     STDMETHOD_(BOOL,            bDevSpecificRead)

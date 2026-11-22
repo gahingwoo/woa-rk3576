@@ -28,6 +28,7 @@ Abstract:
 #include "micjacktoptable.h"
 #include "micarray1toptable.h"
 #include "micarraywavtable.h"
+#include "micjacksaiwavtable.h"
 
 
 NTSTATUS
@@ -119,6 +120,34 @@ ENDPOINT_MINIPAIR HeadphoneMiniports =
     SPEAKER_DEVICE_MAX_CHANNELS,
     SpeakerPinDeviceFormatsAndModes,
     SIZEOF_ARRAY(SpeakerPinDeviceFormatsAndModes),
+    SpeakerTopologyPhysicalConnections,
+    SIZEOF_ARRAY(SpeakerTopologyPhysicalConnections),
+    ENDPOINT_NO_FLAGS,
+};
+
+//
+// The headphone endpoint on an RK3576 SAI: the same topology, the wave filter
+// and formats of the HDMI endpoint (24 in 32-bit), because the SAI is run with
+// 32-bit slots for both.  See hdmiwavtable.h.
+//
+static
+ENDPOINT_MINIPAIR HeadphoneSaiMiniports =
+{
+    eOutputDevice,
+    L"TopologyHeadphonesSai",                               // own KSNAME: the INF gives it its own format
+    NULL,                                                   // optional template name
+    CreateMiniportTopologyCsAudioRk3x,
+    &HeadphoneTopoMiniportFilterDescriptor,
+    0, NULL,                                                // Interface properties
+    L"WaveHeadphonesSai",
+    NULL,                                                   // optional template name
+    CreateMiniportWaveRTCsAudioRk3x,
+    &HdmiWaveMiniportFilterDescriptor,                      // 24 in 32-bit, see hdmiwavtable.h
+    0,                                                      // Interface properties
+    NULL,
+    HDMI_DEVICE_MAX_CHANNELS,
+    HdmiPinDeviceFormatsAndModes,
+    SIZEOF_ARRAY(HdmiPinDeviceFormatsAndModes),
     SpeakerTopologyPhysicalConnections,
     SIZEOF_ARRAY(SpeakerTopologyPhysicalConnections),
     ENDPOINT_NO_FLAGS,
@@ -218,6 +247,32 @@ ENDPOINT_MINIPAIR MicJackMiniports =
 };
 
 
+//
+// The jack microphone on an RK3576 SAI: 24 in 32-bit, see micjacksaiwavtable.h.
+//
+static
+ENDPOINT_MINIPAIR MicJackSaiMiniports =
+{
+    eInputDevice,
+    L"TopologyMicJack",                     // same KSNAME as MicJackMiniports
+    NULL,                                   // optional template name
+    CreateMiniportTopologyCsAudioRk3x,
+    &MicJackTopoMiniportFilterDescriptor,
+    0, NULL,                                // Interface properties
+    L"WaveMicJack",
+    NULL,                                   // optional template name
+    CreateMiniportWaveRTCsAudioRk3x,
+    &MicJackSaiWaveMiniportFilterDescriptor,
+    0,                                      // Interface properties
+    NULL,
+    MICJACKSAI_DEVICE_MAX_CHANNELS,
+    MicJackSaiPinDeviceFormatsAndModes,
+    SIZEOF_ARRAY(MicJackSaiPinDeviceFormatsAndModes),
+    MicArray1TopologyPhysicalConnections,
+    SIZEOF_ARRAY(MicArray1TopologyPhysicalConnections),
+    ENDPOINT_NO_FLAGS,
+};
+
 //=============================================================================
 //
 // Render miniport pairs. NOTE: the split of render and capture is arbitrary and
@@ -235,6 +290,12 @@ PENDPOINT_MINIPAIR  g_RenderHDMIEndpoints[] =
     &HdmiMiniports
 };
 
+static
+PENDPOINT_MINIPAIR  g_RenderSaiJackEndpoints[] =
+{
+    &HeadphoneSaiMiniports
+};
+
 #define g_cRenderEndpoints  (SIZEOF_ARRAY(g_RenderEndpoints))
 
 //=============================================================================
@@ -246,6 +307,12 @@ static
 PENDPOINT_MINIPAIR  g_CaptureEndpoints[] =
 {
     &MicJackMiniports
+};
+
+static
+PENDPOINT_MINIPAIR  g_CaptureSaiJackEndpoints[] =
+{
+    &MicJackSaiMiniports
 };
 
 #define g_cCaptureEndpoints (SIZEOF_ARRAY(g_CaptureEndpoints))

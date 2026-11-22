@@ -161,6 +161,14 @@ GetRKTplg(
 			else if (CHECK_STR(dsdParameterName, "rockchip,i2s-rx-route")) {
 				copyDSDParamNum(dsdParameterData, &rkTplg->i2s_rx_route);
 			}
+			// RK3576 SAI: the same packing, one nibble per lane, lane 0 in
+			// bits 15:12.  TX: the path SDO n sends; RX: the SDI path n reads.
+			else if (CHECK_STR(dsdParameterName, "rockchip,sai-tx-route")) {
+				copyDSDParamNum(dsdParameterData, &rkTplg->i2s_tx_route);
+			}
+			else if (CHECK_STR(dsdParameterName, "rockchip,sai-rx-route")) {
+				copyDSDParamNum(dsdParameterData, &rkTplg->i2s_rx_route);
+			}
 			else if (CHECK_STR(dsdParameterName, "rockchip,sai")) {
 				copyDSDParamNum(dsdParameterData, &rkTplg->sai);
 			}

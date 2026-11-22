@@ -93,6 +93,8 @@ private:
     STDMETHODIMP_(char*) GetTopology(
         _Out_ BOOLEAN* isJack
     );
+    STDMETHODIMP_(BOOLEAN) IsSai();
+    STDMETHODIMP_(VOID) DiagEvent(_In_ BOOLEAN capture, _In_ ULONG id, _In_ ULONG value);
 
     STDMETHODIMP_(BOOL)     bDevSpecificRead();
 
@@ -583,6 +585,8 @@ Return Value:
     }
     IF_FAILED_JUMP(ntStatus, Done);
 
+    m_pHW->diagPdo = m_pPhysicalDeviceObject;
+
     if (!m_pHW->ResourcesValidated())
     {
         DPF(D_TERSE, ("Insufficient resources for Rockchip I2S HW"));
@@ -887,6 +891,24 @@ CAdapterCommon::GetTopology(
         return m_pHW->rkTPLG.audio_tplg;
     }
     return "";
+}
+
+//=============================================================================
+#pragma code_seg()
+STDMETHODIMP_(BOOLEAN)
+CAdapterCommon::IsSai()
+{
+    return m_pHW ? m_pHW->isSai : FALSE;
+}
+
+//=============================================================================
+#pragma code_seg()
+STDMETHODIMP_(VOID)
+CAdapterCommon::DiagEvent(_In_ BOOLEAN capture, _In_ ULONG id, _In_ ULONG value)
+{
+    if (m_pHW) {
+        m_pHW->diag_event(capture, id, value);
+    }
 }
 
 //=============================================================================

@@ -52,6 +52,34 @@ typedef struct _ES8323_CONTEXT
 
 	WDFINTERRUPT Interrupt;
 
+	//
+	// Bound as RKCP8388: an ES8388 on an RK3576 SAI (see es8388_sai.c).
+	// The SAI sends 32-bit slots, so the codec runs 24-bit I2S.
+	//
+	BOOLEAN Rk3576Sai;
+
+	//
+	// Optional GpioIo: the enable of an amplifier after LOUT1/ROUT1, driven
+	// high in D0 and low before the codec is powered down.
+	//
+	BOOLEAN HasAmpGpio;
+	LARGE_INTEGER AmpGpioResHubId;
+	WDFIOTARGET AmpGpioTarget;
+
+	//
+	// Diagnostics (es8388_diag.c): results of the last power-up, and a
+	// periodic dump of the codec and SoC registers into the device's
+	// "Device Parameters" key.
+	//
+	NTSTATUS InitStatus;
+	ULONG InitFailedReg;
+	NTSTATUS AmpOpenStatus;
+	NTSTATUS AmpWriteStatus;
+	ULONG AmpWriteValue;
+	WDFTIMER DiagTimer;
+	WDFWORKITEM DiagWorkItem;
+	ULONG DiagCount;
+
 } ES8323_CONTEXT, *PES8323_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(ES8323_CONTEXT, GetDeviceContext)
@@ -59,6 +87,17 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(ES8323_CONTEXT, GetDeviceContext)
 //
 // Function definitions
 //
+
+BOOLEAN Es8388SaiIsBound(_In_ WDFDEVICE FxDevice);
+NTSTATUS Es8388SaiOpenAmpGpio(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388SaiCloseAmpGpio(_In_ PES8323_CONTEXT pDevice);
+NTSTATUS Es8388SaiPowerUp(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388SaiPowerDown(_In_ PES8323_CONTEXT pDevice);
+NTSTATUS Es8388DiagCreate(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388DiagStart(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388DiagStop(_In_ PES8323_CONTEXT pDevice);
+NTSTATUS es8323_reg_read(_In_ PES8323_CONTEXT pDevice, UINT8 reg, UINT8* data);
+NTSTATUS es8323_reg_write(_In_ PES8323_CONTEXT pDevice, UINT8 reg, UINT8 data);
 
 DRIVER_INITIALIZE DriverEntry;
 

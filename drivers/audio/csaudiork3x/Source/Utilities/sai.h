@@ -22,8 +22,10 @@
 #define SAI_INTCR       0x0028
 #define SAI_INTSR       0x002c
 #define SAI_TXDR        0x0030
+#define SAI_RXDR        0x0034
 #define SAI_PATH_SEL    0x0038
 #define SAI_TX_SHIFT    0x0064
+#define SAI_RX_SHIFT    0x0068
 #define SAI_STATUS      0x006c
 #define SAI_VERSION     0x0070
 
@@ -43,6 +45,7 @@
 #define SAI_FSCR_FW(bits)       (((bits) - 1u) << 0)
 
 /* XFER: transfer start. */
+#define SAI_XFER_RXS            (1u << 3)
 #define SAI_XFER_TXS            (1u << 2)
 #define SAI_XFER_FSS            (1u << 1)
 #define SAI_XFER_CLK            (1u << 0)
@@ -58,11 +61,17 @@
 #define SAI_CKR_FSP_HIGH        (1u << 0)            /* 0 = frame sync low active */
 
 /* DMACR */
+#define SAI_DMACR_RDE           (1u << 24)
+#define SAI_DMACR_RDL(level)    (((level) - 1u) << 16) /* request at or above level */
+#define SAI_DMACR_RDL_MASK      (0x1fu << 16)
 #define SAI_DMACR_TDE           (1u << 8)
 #define SAI_DMACR_TDL(level)    ((level) << 0)       /* request at or below level */
 #define SAI_DMACR_TDL_MASK      0x1fu
 
 /* INTCR / INTSR */
+#define SAI_INTCR_RXOIC         (1u << 18)           /* write 1 to clear */
+#define SAI_INTCR_RXOIE         (1u << 17)
+#define SAI_INTSR_RXOI_ACT      (1u << 17)
 #define SAI_INTCR_TXUIC         (1u << 2)            /* write 1 to clear */
 #define SAI_INTCR_TXUIE         (1u << 1)
 #define SAI_INTSR_TXUI_ACT      (1u << 1)
@@ -71,7 +80,18 @@
 #define SAI_XSHIFT_RIGHT(half)  ((half) << 0)
 
 /* STATUS (SAI_VERSION 0x2307xxxx): 1 = idle. */
+#define SAI_STATUS_RX_IDLE      (1u << 3)
 #define SAI_STATUS_TX_IDLE      (1u << 2)
 #define SAI_STATUS_FS_IDLE      (1u << 1)
+
+/*
+ * PATH_SEL.  [7:0]: SDOn sends the data of TX path m, 2 bits per SDO
+ * (n = 0..3).  [15:8]: RX path n takes its data from SDIm.  Reset value
+ * 0x0000e4e4: every SDO and SDI on its own path.
+ */
+#define SAI_PATH_SEL_TX(sdo, path)  ((path) << ((sdo) * 2))
+#define SAI_PATH_SEL_TX_MASK        0x000000ffu
+#define SAI_PATH_SEL_RX(path, sdi)  ((sdi) << (8 + (path) * 2))
+#define SAI_PATH_SEL_RX_MASK        0x0000ff00u
 
 #endif

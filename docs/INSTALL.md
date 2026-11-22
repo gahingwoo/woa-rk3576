@@ -151,6 +151,16 @@ firmware 0.4.0 and 0.4.1.
   `install-firmware.ps1` (it downloads it and checks its SHA-256; it cannot be
   shipped here), then the [bcm4345bt](../drivers/bluetooth/bcm4345bt/README.md)
   package. No voice (SCO) yet.
+- Audio: the headphone jack plays with rk3xi2sbus, es8323 and csaudiork3x
+  1.0.0.135 or later. Recording and HDMI audio have not been tried with that
+  build. Keep the pl330dma that is already installed.
+- Replacing a driver that is already bound and running: `pnputil /add-driver`
+  followed by a restart keeps the old driver, and `/install` on a running
+  audio, DMA, display or Bluetooth driver has bugchecked this board. Stage the
+  package with `/add-driver` alone, set bit 0x20 (CONFIGFLAG_REINSTALL) in
+  `ConfigFlags` under the device's
+  `HKLM\SYSTEM\CurrentControlSet\Enum\<instance>` key as SYSTEM, then
+  restart: the device comes up on the newest staged package.
 - To add a driver to an installed Windows with `pnputil` instead of
   `add-drivers.cmd`, take it from the WinPE artifact's `woa-drivers\`, not
   from the CI build artifact: only the WinPE workflow signs the catalogs. Each
@@ -184,7 +194,7 @@ firmware 0.4.0 and 0.4.1.
 - Do not make the stick with Ventoy. With this WinPE image its UDF driver
   stopped with a synchronous exception.
 
-Not available under Windows on this board: WiFi and Bluetooth, sound, a valid RTC time (see above) and the EC20 modem's network
+Not available under Windows on this board: WiFi, a valid RTC time (see above) and the EC20 modem's network
 interface.
 
 Everything else is as for the CM5-IO.

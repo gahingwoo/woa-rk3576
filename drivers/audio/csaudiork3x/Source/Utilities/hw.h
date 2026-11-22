@@ -75,6 +75,23 @@ struct rk_stream {
     HANDLE dmaThread;
 };
 
+// Counters for diag_save() (hw.cpp), per direction.  Diagnostics only.
+struct rk_diag {
+    ULONG programCalls;
+    ULONG programStatus;        // NTSTATUS of the last rk3x_program_dma
+    ULONG getChannelNull;
+    ULONG submitStatus;         // NTSTATUS of the last SubmitAudioDMA
+    ULONG bufferPhysHigh;
+    ULONG bufferPhysLow;
+    ULONG bufferBytes;
+    ULONG playCalls;
+    ULONG playNoThread;
+    ULONG playAlreadyActive;
+    ULONG playStarted;
+    ULONG stopCalls;
+    ULONG freeChannelFail;
+};
+
 #include "adsp.h"
 
 #define JACK_TPLG "i2s-jack"
@@ -128,10 +145,18 @@ public:
     RK_TPLG rkTPLG;
     BOOLEAN isJack;
     BOOLEAN isSai;      // RK3576 SAI instead of the RK3588 I2S/TDM block
+    PDEVICE_OBJECT diagPdo;     // set by CAdapterCommon::Init; NULL = no diag
+    void diag_event(BOOLEAN capture, ULONG id, ULONG value);
 
 protected:
     struct rk_stream outputStream;
     struct rk_stream inputStream;
+    struct rk_diag outputDiag;
+    struct rk_diag inputDiag;
+    ULONG initCalls;
+    ULONG evCount[2][DIAG_EV_COUNT];
+    ULONG evLast[2][DIAG_EV_COUNT];
+    void diag_save();
 
     UINT32 i2s_read32(UINT32 reg);
     void i2s_write32(UINT32 reg, UINT32 val);
@@ -143,8 +168,9 @@ protected:
     BOOLEAN sai_poll(UINT32 reg, UINT32 mask, UINT32 want);
     NTSTATUS sai_init();
     void sai_deinit();
-    void sai_play();
-    void sai_stop();
+    void sai_set_paths();
+    void sai_play(eDeviceType deviceType);
+    void sai_stop(eDeviceType deviceType);
     BOOLEAN sai_irq();
 #endif
 
@@ -162,6 +188,7 @@ public:
     struct rk_stream* rk_get_stream(eDeviceType deviceType);
 
     NTSTATUS rk3x_program_dma(eDeviceType deviceType, PMDL mdl, IPortWaveRTStream* stream, UINT32 byteCount);
+    NTSTATUS rk3x_program_dma_inner(eDeviceType deviceType, PMDL mdl, IPortWaveRTStream* stream, UINT32 byteCount, struct rk_diag* diag);
     NTSTATUS rk3x_play(eDeviceType deviceType);
     NTSTATUS rk3x_stop(eDeviceType deviceType);
     NTSTATUS rk3x_current_position(eDeviceType deviceType, UINT32* linkPos, UINT64* linearPos);
