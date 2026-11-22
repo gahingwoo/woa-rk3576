@@ -33,7 +33,7 @@ controllers. It needs firmware 0.2.0 or later. How to install it:
 | NVMe | PCIe | inbox stornvme | works |
 | USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
 | Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
-| Video decoder (VDPU383) | `RKCP0383` | [vdpu383](drivers/video/vdpu383), on the `vdpu383-v2` branch | bring-up driver and test tool, not run on hardware; needs edk2-rk3576 branch `vdpu383-acpi-v2` with the setup option on |
+| Video decoder (VDPU383) | `RKCP0383` | [vdpu383](drivers/video/vdpu383), on the `vdpu383-v2` branch | bring-up driver and test tool, not run on hardware; needs edk2-rk3576 branch `vdpu383-acpi-v2` with the setup option on ([plan](docs/VIDEO-DECODE.md)) |
 | Audio (TaishanPi 3M headphones) | `RKCP3004`, `RKCP8388` | rk3xi2sbus, csaudiork3x, es8323 | headphone playback and the jack microphone work (1.0.0.135, 22 November 2026); HDMI audio not yet tested ([audio](docs/AUDIO.md)) |
 
 Most of these were measured once, on 2026-10-01.
