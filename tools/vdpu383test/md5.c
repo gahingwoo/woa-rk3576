@@ -3,7 +3,7 @@
  * reference output. Written from the RFC.
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
- * SPDX-License-Identifier: MIT
+ * SPDX-License-Identifier: GPL-2.0-only
  */
 
 #include <string.h>

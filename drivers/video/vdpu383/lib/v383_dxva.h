@@ -17,7 +17,7 @@
  * Acceleration Specification for H.264/AVC Decoding") and dxva.h.
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
- * SPDX-License-Identifier: MIT
+ * SPDX-License-Identifier: GPL-2.0-only
  */
 
 #ifndef V383_DXVA_H
