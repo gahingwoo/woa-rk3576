@@ -29,7 +29,7 @@ controllers. It needs firmware 0.2.0 or later. How to install it:
 | Ethernet | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | works, gets a DHCP lease |
 | SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | started, all 5; no SPI device exercised |
 | Touch (TaishanPi 3M DSI screen) | `RKCP9271` | [gt9271](drivers/input/gt9271) (VHF) | works on the TaishanPi 3M, 10 touch points; needs edk2-rk3576 built from `main` after 0.4.1 |
-| Bluetooth (TaishanPi 3M, AP6256) | `RKCP4345` | [bcm4345bt](drivers/bluetooth/bcm4345bt) (BthX, in-box BthMini) | builds; not run on hardware; needs edk2-rk3576 branch `tspi3m-bt-acpi` and the patchram fetched on the board |
+| Bluetooth (TaishanPi 3M, AP6256) | `RKCP4345` | [bcm4345bt](drivers/bluetooth/bcm4345bt) (BthX, in-box BthMini) | works: radio up, pairing and file transfer; no voice (SCO) yet; needs edk2-rk3576 `main` after 0.4.1 and the patchram fetched on the board once |
 | NVMe | PCIe | inbox stornvme | works |
 | USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
 | Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
@@ -53,9 +53,14 @@ keyboard, mouse and storage on the USB-A ports. The SD controller, GPIO, I2C,
 DMA and SPI drivers all start; none of them was exercised beyond that, and no
 SD card was tried. The board was sponsored by JLC (嘉立创).
 
-Not available: the USB-C port (left out of the board's ACPI tables), WiFi and
-Bluetooth, sound (the audio drivers load but nothing plays yet) and the EC20
-modem.
+Bluetooth works since 22 November 2026 with
+[bcm4345bt](drivers/bluetooth/bcm4345bt) and firmware that declares the
+controller (edk2-rk3576 `main` after 0.4.1): the radio comes up in Settings,
+pairing and file transfer work. Voice calls and headset microphones do not,
+because the module carries SCO audio over a PCM link that has no driver.
+
+Not available: the USB-C port (left out of the board's ACPI tables), WiFi,
+sound (the audio drivers load but nothing plays yet) and the EC20 modem.
 
 The board's RTC chip holds no valid time, so the clock is wrong after every
 boot until Windows syncs it over the network. Set

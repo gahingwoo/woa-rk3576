@@ -5,12 +5,14 @@ on UART6, for the Windows Bluetooth stack. A KMDF bus driver that runs the
 UART itself, powers the controller, loads its patchram and hands the HCI
 link to the in-box BthMini.
 
-**Not run on hardware.** It builds in CI; nothing more is known.
+**Works on the TaishanPi 3M** (22 November 2026, Windows 11 23H2): the
+Bluetooth Radio, the BR/EDR and LE enumerators and RFCOMM start, and pairing
+and file transfer work. No voice (SCO) and no idle power saving yet.
 
 ## What it binds
 
 `ACPI\RKCP4345`, declared by the TaishanPi 3M firmware (edk2-rk3576,
-branch `tspi3m-bt-acpi`) as `\_SB.BTH0`, with in this order:
+`main` after 0.4.1) as `\_SB.BTH0`, with in this order:
 
 - `Memory32Fixed (0x2ad90000, 0x100)`: UART6's registers;
 - `Interrupt { 114 }`: UART6, level high;
@@ -85,12 +87,18 @@ It goes to `%SystemRoot%\System32\drivers\brcm\BCM4345C5.hcd`; the
 
 ## Install
 
-1. Firmware with `\_SB.BTH0` (edk2-rk3576 `tspi3m-bt-acpi`), rk3xgpio
+1. Firmware with `\_SB.BTH0` (edk2-rk3576 `main` after 0.4.1), rk3xgpio
    installed.
 2. `powershell -ExecutionPolicy Bypass -File install-firmware.ps1` as
    administrator.
-3. `pnputil /add-driver bcm4345bt.inf /install` (trust the CI certificate
-   first, as for the other drivers: see [INSTALL](../../../docs/INSTALL.md)).
+3. Trust the package's `signer.cer` (Root and TrustedPublisher, as for the
+   other drivers: see [INSTALL](../../../docs/INSTALL.md)). The signed package
+   is the `bcm4345bt-signed-arm64` artifact of the WinPE workflow.
+4. First install, on a device with no driver yet:
+   `pnputil /add-driver bcm4345bt.inf /install`. To replace an installed
+   copy, stage it with `pnputil /add-driver bcm4345bt.inf` (no `/install`)
+   and restart: stopping an older build of this driver on a running system
+   ended in DPC_WATCHDOG_VIOLATION twice.
 
 ## Reading what happened
 

@@ -146,6 +146,11 @@ firmware 0.4.0 and 0.4.1.
   0.4.1; no release has it yet. With no screen attached the firmware hides
   the device and nothing appears in Device Manager. Keep a USB keyboard at
   hand for WinPE and the first setup.
+- Bluetooth: firmware from edk2-rk3576 `main` after 0.4.1 declares the
+  controller. Install the patchram once with the driver's
+  `install-firmware.ps1` (it downloads it and checks its SHA-256; it cannot be
+  shipped here), then the [bcm4345bt](../drivers/bluetooth/bcm4345bt/README.md)
+  package. No voice (SCO) yet.
 - To add a driver to an installed Windows with `pnputil` instead of
   `add-drivers.cmd`, take it from the WinPE artifact's `woa-drivers\`, not
   from the CI build artifact: only the WinPE workflow signs the catalogs. Each
