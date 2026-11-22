@@ -253,6 +253,39 @@ Arguments:
     }
     else
     {
+        // Render: a pin with one extensible device format gets that format
+        // back, as the capture pins above do.  The class handler would
+        // answer with a plain WAVEFORMATEX, which for 32-bit PCM the audio
+        // engine cannot use (TaishanPi 3M, 1.0.0.133: the endpoint's device
+        // format was cached as WAVE_FORMAT_PCM 2ch 32-bit and GetMixFormat
+        // failed with AUDCLNT_E_UNSUPPORTED_FORMAT before any stream opened).
+        Diag(DIAG_EV_DR_CLIENT,
+            ((((PKSDATARANGE_AUDIO)ClientDataRange)->MaximumChannels & 0xFF) << 24) |
+            (ClientDataRange->SubFormat.Data1 & 0xFFFFFF));
+        KSDATAFORMAT_WAVEFORMATEXTENSIBLE *renderFormats = NULL;
+        if (GetPinSupportedDeviceFormats(PinId, &renderFormats) == 1 && renderFormats != NULL &&
+            renderFormats[0].WaveFormatExt.Format.wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+        {
+            requiredSize = sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE);
+            if (!OutputBufferLength)
+            {
+                *ResultantFormatLength = requiredSize;
+                Diag(DIAG_EV_DR_PATH, 1);
+                return STATUS_BUFFER_OVERFLOW;
+            }
+            else if (OutputBufferLength < requiredSize)
+            {
+                Diag(DIAG_EV_DR_PATH, 2);
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            *(PKSDATAFORMAT_WAVEFORMATEXTENSIBLE)ResultantFormat = renderFormats[0];
+            *ResultantFormatLength = requiredSize;
+            Diag(DIAG_EV_DR_PATH, 3);
+            return STATUS_SUCCESS;
+        }
+        Diag(DIAG_EV_DR_PATH, 4);
+
         requiredSize = sizeof(KSDATAFORMAT_WAVEFORMATEX);
 
         //

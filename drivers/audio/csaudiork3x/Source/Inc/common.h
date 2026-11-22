@@ -140,6 +140,8 @@ enum {
     DIAG_EV_NEWSTREAM_SUB,      // SubFormat.Data1 (extensible only)
     DIAG_EV_PROPOSED_FORMAT,    // as NEWSTREAM_FORMAT, for PROPOSEDATAFORMAT
     DIAG_EV_PROPOSED_SUB,       // wFormatTag << 16 | SubFormat.Data1 low 16
+    DIAG_EV_DR_CLIENT,          // render intersection: client MaximumChannels << 24 | SubFormat.Data1 low 24
+    DIAG_EV_DR_PATH,            // 1 size query, 2 too small, 3 own format returned, 4 class handler
     DIAG_EV_COUNT
 };
 
