@@ -22,17 +22,28 @@ Environment:
 #include "precomp.h"
 #pragma hdrstop
 #include <acpiutil.hpp>
+#include <ntimage.h>
 
 #include "dwcsdhc.h"
+
+extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 static PDRIVER_OBJECT s_pDriverObject;
 
 //
 // CCLK_SRC_EMMC in the RK3576 CRU. One controller, so one mapping for the
-// driver's lifetime; NULL in crashdump mode, where the memory manager is off
-// limits and the clock is already what the running system set.
+// driver's lifetime. Never mapped in crashdump mode: that copy runs at
+// HIGH_LEVEL, where the memory manager is off limits, and borrows this
+// mapping from the running copy through s_CrashdumpShare instead.
 //
 static volatile ULONG *s_CruClkSel;
+
+//
+// Filled in by the running driver once s_CruClkSel is mapped and the chain
+// the dump copy will walk has been checked. Read, never written, by the dump
+// copy, at the same offset in the running driver's image.
+//
+static DWCSDHC_CRASHDUMP_SHARE s_CrashdumpShare;
 
 INIT_SEGMENT_BEGIN; //======================================================
 
@@ -67,7 +78,18 @@ Return Value:
 {
     s_pDriverObject = (PDRIVER_OBJECT)DriverObject;
 
-    ExInitializeDriverRuntime(0);
+    //
+    // The crash dump copy of this driver is entered at bugcheck time, at
+    // HIGH_LEVEL. ExInitializeDriverRuntime calls RtlGetVersion,
+    // MmGetSystemRoutineAddress and NtQuerySystemInformation, which are
+    // PASSIVE_LEVEL routines: running them there bugchecks again inside the
+    // dump, and no dump is written. Nothing in this driver allocates pool,
+    // so the dump copy loses nothing by skipping it.
+    //
+
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        ExInitializeDriverRuntime(0);
+    }
 
     SDPORT_INITIALIZATION_DATA InitializationData;
 
@@ -111,6 +133,290 @@ Return Value:
 
 INIT_SEGMENT_END; //======================================================
 NONPAGED_SEGMENT_BEGIN; //======================================================
+
+//-----------------------------------------------------------------------------
+// Crash dump support.
+//
+// dumpsdport (the sdport of the dump stack) re-runs the whole eMMC power-up
+// from SdhcSlotInitialize on: ResetHw, ResetHost(All), 3.3 V, SetClock(400),
+// CMD0, CMD1, CMD2, CMD3, CMD7, EXT_CSD, bus width and speed, then the
+// operating clock. Everything after Initialize is polled: dumpsdport calls
+// SdhcSlotInterrupt and SdhcRequestDpc itself, with interrupts disabled.
+// What it cannot do is change the card clock, because on this controller
+// only the CRU can, and the CRU is outside the device's registers.
+//
+// None of this runs in the normal path except SdhcCrashdumpPublish, which
+// only records a pointer.
+//-----------------------------------------------------------------------------
+
+static
+PDRIVER_OBJECT
+SdhcMiniportDriverObject(
+    _In_ PVOID PrivateExtension
+    )
+
+/*++
+
+Routine Description:
+
+    Find the driver object of the running miniport from a slot's private
+    extension: slot extension (sdport.h) -> SD_MINIPORT ->
+    ConfigurationInfo.DeviceObject, which sdport sets to the FDO it created
+    for this miniport, -> DriverObject.
+
+    In the dump copy, dumpsdport hands the miniport a copy of the running
+    SD_MINIPORT, so DeviceObject is still the running FDO and DriverObject is
+    the running driver's.
+
+Return value:
+
+    The driver object, or NULL if anything on the way does not look like what
+    it should be.
+
+--*/
+
+{
+    PSDPORT_SLOT_EXTENSION Slot;
+    PSD_MINIPORT Miniport;
+    PDEVICE_OBJECT Fdo;
+    PDRIVER_OBJECT DriverObject;
+
+    Slot = CONTAINING_RECORD(PrivateExtension,
+                             SDPORT_SLOT_EXTENSION,
+                             PrivateExtension);
+
+    Miniport = Slot->Miniport;
+    if (Miniport == NULL) {
+        return NULL;
+    }
+
+    Fdo = (PDEVICE_OBJECT)Miniport->ConfigurationInfo.DeviceObject;
+    if ((Fdo == NULL) || (Fdo->Type != IO_TYPE_DEVICE)) {
+        return NULL;
+    }
+
+    DriverObject = Fdo->DriverObject;
+    if ((DriverObject == NULL) || (DriverObject->Type != IO_TYPE_DRIVER)) {
+        return NULL;
+    }
+
+    return DriverObject;
+}
+
+static
+PIMAGE_NT_HEADERS
+SdhcImageNtHeaders(
+    _In_ PUCHAR ImageBase
+    )
+
+{
+    PIMAGE_DOS_HEADER DosHeader;
+    PIMAGE_NT_HEADERS NtHeaders;
+
+    DosHeader = (PIMAGE_DOS_HEADER)ImageBase;
+    if ((DosHeader->e_magic != IMAGE_DOS_SIGNATURE) ||
+        (DosHeader->e_lfanew <= 0) ||
+        (DosHeader->e_lfanew > (LONG)(PAGE_SIZE - sizeof(IMAGE_NT_HEADERS)))) {
+
+        return NULL;
+    }
+
+    NtHeaders = (PIMAGE_NT_HEADERS)(ImageBase + DosHeader->e_lfanew);
+    if (NtHeaders->Signature != IMAGE_NT_SIGNATURE) {
+        return NULL;
+    }
+
+    return NtHeaders;
+}
+
+static
+VOID
+SdhcCrashdumpPublish(
+    _In_ PVOID PrivateExtension
+    )
+
+/*++
+
+Routine Description:
+
+    Running driver only. Leave the CRU mapping where the dump copy will look
+    for it, after checking that the path the dump copy takes to get here
+    really leads to this driver on this Windows build. If it does not, publish
+    nothing: the dump copy then leaves the clock alone, as it always did.
+
+--*/
+
+{
+    PDRIVER_OBJECT DriverObject;
+
+    if ((s_CruClkSel == NULL) ||
+        (s_CrashdumpShare.Magic == DWCSDHC_CRASHDUMP_SHARE_MAGIC)) {
+
+        return;
+    }
+
+    DriverObject = SdhcMiniportDriverObject(PrivateExtension);
+    if ((DriverObject == NULL) ||
+        (DriverObject != s_pDriverObject) ||
+        (DriverObject->DriverStart != (PVOID)&__ImageBase)) {
+
+        return;
+    }
+
+    s_CrashdumpShare.Version = DWCSDHC_CRASHDUMP_SHARE_VERSION;
+    s_CrashdumpShare.CruPhysical = RK3576_CRU_CLKSEL_CON89;
+    s_CrashdumpShare.CruClkSel = s_CruClkSel;
+    s_CrashdumpShare.Self = &s_CrashdumpShare;
+    KeMemoryBarrier();
+    s_CrashdumpShare.Magic = DWCSDHC_CRASHDUMP_SHARE_MAGIC;
+}
+
+static
+volatile ULONG *
+SdhcCrashdumpBorrowCru(
+    _In_ PVOID PrivateExtension
+    )
+
+/*++
+
+Routine Description:
+
+    Dump copy only, at HIGH_LEVEL. Find the running driver's image through
+    its driver object, check that it is the same build as this copy (so
+    s_CrashdumpShare is at the same offset in both), and take the CRU mapping
+    it published. Reads only; nothing is mapped, allocated or locked.
+
+Return value:
+
+    The running driver's mapping of CRU_CLKSEL_CON89, or NULL.
+
+--*/
+
+{
+    PUCHAR Base;
+    PDRIVER_OBJECT DriverObject;
+    PIMAGE_NT_HEADERS OtherHeaders;
+    PUCHAR OwnBase;
+    PIMAGE_NT_HEADERS OwnHeaders;
+    ULONG_PTR Offset;
+    const volatile DWCSDHC_CRASHDUMP_SHARE *Share;
+
+    DriverObject = SdhcMiniportDriverObject(PrivateExtension);
+    if (DriverObject == NULL) {
+        return NULL;
+    }
+
+    OwnBase = (PUCHAR)&__ImageBase;
+    Base = (PUCHAR)DriverObject->DriverStart;
+    if ((Base == NULL) || (Base == OwnBase)) {
+        return NULL;
+    }
+
+    OwnHeaders = SdhcImageNtHeaders(OwnBase);
+    OtherHeaders = SdhcImageNtHeaders(Base);
+    if ((OwnHeaders == NULL) ||
+        (OtherHeaders == NULL) ||
+        (OwnHeaders->FileHeader.TimeDateStamp !=
+         OtherHeaders->FileHeader.TimeDateStamp) ||
+        (OwnHeaders->OptionalHeader.SizeOfImage !=
+         OtherHeaders->OptionalHeader.SizeOfImage) ||
+        (OwnHeaders->OptionalHeader.CheckSum !=
+         OtherHeaders->OptionalHeader.CheckSum)) {
+
+        return NULL;
+    }
+
+    Offset = (ULONG_PTR)((PUCHAR)&s_CrashdumpShare - OwnBase);
+    if ((Offset + sizeof(DWCSDHC_CRASHDUMP_SHARE)) >
+        OwnHeaders->OptionalHeader.SizeOfImage) {
+
+        return NULL;
+    }
+
+    Share = (const volatile DWCSDHC_CRASHDUMP_SHARE *)(Base + Offset);
+    if ((Share->Magic != DWCSDHC_CRASHDUMP_SHARE_MAGIC) ||
+        (Share->Version != DWCSDHC_CRASHDUMP_SHARE_VERSION) ||
+        (Share->Self != (const DWCSDHC_CRASHDUMP_SHARE *)(Base + Offset)) ||
+        (Share->CruPhysical != RK3576_CRU_CLKSEL_CON89)) {
+
+        return NULL;
+    }
+
+    return Share->CruClkSel;
+}
+
+static
+BOOLEAN
+SdhcCrashdumpCommandAllowed(
+    _In_ const SDPORT_COMMAND *Command
+    )
+
+/*++
+
+Routine Description:
+
+    The dump copy writes the dump to the user area and nothing else. A
+    power-up through CMD0 already selects the user area (PARTITION_ACCESS is
+    cleared by CMD0), so refuse anything that could move it, or that erases,
+    locks or rewrites the card's permanent state. A dump needs none of
+    these: the CMD6 writes of an eMMC power-up go to POWER_CLASS (187, the
+    one CMD6 argument dumpsdport.sys 10.0.22621 holds as a constant),
+    BUS_WIDTH (183) and HS_TIMING (185).
+
+--*/
+
+{
+    UCHAR ExtCsdIndex;
+
+    if (Command->Class == SdCommandClassApp) {
+        return TRUE;
+    }
+
+    switch (Command->Index) {
+    case 26:    // PROGRAM_CID
+    case 27:    // PROGRAM_CSD
+    case 28:    // SET_WRITE_PROT
+    case 29:    // CLR_WRITE_PROT
+    case 35:    // ERASE_GROUP_START
+    case 36:    // ERASE_GROUP_END
+    case 38:    // ERASE
+    case 42:    // LOCK_UNLOCK
+        return FALSE;
+
+    case 6:     // SWITCH
+        ExtCsdIndex = (UCHAR)(Command->Argument >> 16);
+        if ((ExtCsdIndex >= 136) && (ExtCsdIndex <= 155)) {
+
+            //
+            // Enhanced area, GP partition sizes, partition attributes,
+            // PARTITION_SETTING_COMPLETED: one-time programmable.
+            //
+
+            return FALSE;
+        }
+
+        switch (ExtCsdIndex) {
+        case 162:   // RST_n_FUNCTION
+        case 167:   // WR_REL_SET
+        case 171:   // USER_WP
+        case 173:   // BOOT_WP
+        case 177:   // BOOT_BUS_CONDITIONS
+        case 178:   // BOOT_CONFIG_PROT
+        case 179:   // PARTITION_CONFIG
+            return FALSE;
+
+        default:
+            break;
+        }
+
+        break;
+
+    default:
+        break;
+    }
+
+    return TRUE;
+}
 
 NTSTATUS
 SdhcGetSlotCount(
@@ -305,6 +611,41 @@ Return value:
                                                        PAGE_READWRITE | PAGE_NOCACHE);
         if (s_CruClkSel == NULL) {
             return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
+
+    if (!CrashdumpMode) {
+        SdhcExtension->CruClkSel = s_CruClkSel;
+        SdhcCrashdumpPublish(PrivateExtension);
+
+    } else {
+        ULONG EmmcControl;
+
+        SdhcExtension->CruClkSel = SdhcCrashdumpBorrowCru(PrivateExtension);
+
+        //
+        // Polled from here on: nothing may reach the GIC. dumpsdport also
+        // disables the events and resets the host before it starts, so this
+        // only covers the time in between.
+        //
+
+        SdhcWriteRegisterUshort(SdhcExtension, SDHC_INTERRUPT_SIGNAL_ENABLE, 0);
+        SdhcWriteRegisterUshort(SdhcExtension, SDHC_ERROR_SIGNAL_ENABLE, 0);
+
+        //
+        // EMMC_RST_N survives a controller reset and the firmware leaves it
+        // released, so this should never fire. If the card is held in
+        // hardware reset, nothing below can reach it: release it and give
+        // it tRSCA (200 us) before dumpsdport's CMD0.
+        //
+
+        EmmcControl = SdhcReadRegisterUlong(SdhcExtension, DWCMSHC_EMMC_CONTROL);
+        if ((EmmcControl & DWCMSHC_EMMC_RST_N) == 0) {
+            SdhcWriteRegisterUlong(SdhcExtension,
+                                   DWCMSHC_EMMC_CONTROL,
+                                   EmmcControl | DWCMSHC_EMMC_RST_N);
+
+            SdPortWait(1000);
         }
     }
 
@@ -761,6 +1102,13 @@ Return value:
 
     SdhcExtension = (PSDHC_EXTENSION) PrivateExtension;
 
+    if (SdhcExtension->CrashdumpMode &&
+        (Request->Type != SdRequestTypeStartTransfer) &&
+        !SdhcCrashdumpCommandAllowed(&Request->Command)) {
+
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
     //
     // Mark the current request as being outstanding.
     //
@@ -1099,6 +1447,13 @@ Return value:
     UNREFERENCED_PARAMETER(Miniport);
 
     if (s_CruClkSel != NULL) {
+
+        //
+        // Withdraw the mapping from the dump copy before it goes away.
+        //
+
+        s_CrashdumpShare.Magic = 0;
+        KeMemoryBarrier();
         MmUnmapIoSpace((PVOID)s_CruClkSel, sizeof(ULONG));
         s_CruClkSel = NULL;
     }
@@ -1292,11 +1647,12 @@ DwcSdhcRkSetClock(
     }
 
     //
-    // In crashdump mode nothing is mapped and the clock stays at the rate the
-    // running system left it.
+    // In crashdump mode this is the running driver's mapping, borrowed. If
+    // it could not be found, the clock stays at the rate the running system
+    // left it, which is too fast for identification.
     //
 
-    if (s_CruClkSel != NULL) {
+    if (SdhcExtension->CruClkSel != NULL) {
 
         //
         // Take the parent that gets closest to the requested rate without
@@ -1340,7 +1696,7 @@ DwcSdhcRkSetClock(
 
         Value = RK3576_CRU_EMMC_MUX(BestMux);
         Value |= RK3576_CRU_EMMC_WRITE_MASK | RK3576_CRU_EMMC_DIV(Divider);
-        WRITE_REGISTER_ULONG((volatile ULONG *)s_CruClkSel, Value);
+        WRITE_REGISTER_ULONG((volatile ULONG *)SdhcExtension->CruClkSel, Value);
     }
 
     //
