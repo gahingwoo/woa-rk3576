@@ -69,6 +69,18 @@ extern BOOLEAN gCrashdumpMode;
                                           (0x3FUL << RK3576_SDMMC_DIV_SHIFT)) << 16)
 #define RK3576_SDMMC_DIV_MAX            64
 
+//
+// The SDIO controller (sdio: mmc@2a320000) has its own card clock,
+// CCLK_SRC_SDIO (mainline clk-rk3576.c: CLKSEL_CON(104), mux [7:6] over the
+// same gpll/cpll/xin24m, divider [5:0]).  Only this register differs; the
+// fixed divide-by-two and the internal phases are the same.
+//
+#define RK3576_CRU_CLKSEL_CON104        0x272004A0
+#define RK3576_SDIO_MUX_SHIFT           6
+#define RK3576_SDIO_DIV_SHIFT           0
+#define RK3576_SDIO_WRITE_MASK          (((0x3UL << RK3576_SDIO_MUX_SHIFT) | \
+                                          (0x3FUL << RK3576_SDIO_DIV_SHIFT)) << 16)
+
 #define MSHC_TIMING_CON0                0x130   // drive phase
 #define MSHC_TIMING_CON1                0x134   // sample phase
 #define ROCKCHIP_MMC_DELAY_SEL          (1UL << 10)
@@ -157,7 +169,8 @@ MshcRockchipSetClock(
     if ((MshcExtension->RkCruClkSel == NULL) && !gCrashdumpMode) {
         PHYSICAL_ADDRESS CruClkSel;
 
-        CruClkSel.QuadPart = RK3576_CRU_CLKSEL_CON105;
+        CruClkSel.QuadPart = MshcExtension->IsSdio ? RK3576_CRU_CLKSEL_CON104
+                                                   : RK3576_CRU_CLKSEL_CON105;
         MshcExtension->RkCruClkSel = (volatile ULONG *)MmMapIoSpaceEx(
             CruClkSel,
             sizeof(ULONG),
@@ -209,11 +222,19 @@ MshcRockchipSetClock(
         BestHz = Rk3576SdmmcParentHz[BestMux] / BestDiv;
     }
 
-    WRITE_REGISTER_ULONG(
-        (volatile ULONG *)MshcExtension->RkCruClkSel,
-        RK3576_SDMMC_WRITE_MASK |
-        (BestMux << RK3576_SDMMC_MUX_SHIFT) |
-        ((BestDiv - 1) << RK3576_SDMMC_DIV_SHIFT));
+    if (MshcExtension->IsSdio) {
+        WRITE_REGISTER_ULONG(
+            (volatile ULONG *)MshcExtension->RkCruClkSel,
+            RK3576_SDIO_WRITE_MASK |
+            (BestMux << RK3576_SDIO_MUX_SHIFT) |
+            ((BestDiv - 1) << RK3576_SDIO_DIV_SHIFT));
+    } else {
+        WRITE_REGISTER_ULONG(
+            (volatile ULONG *)MshcExtension->RkCruClkSel,
+            RK3576_SDMMC_WRITE_MASK |
+            (BestMux << RK3576_SDMMC_MUX_SHIFT) |
+            ((BestDiv - 1) << RK3576_SDMMC_DIV_SHIFT));
+    }
 
     MshcExtension->RkCardClockHz = BestHz / CRU_SD_CLKGEN_DIV;
 

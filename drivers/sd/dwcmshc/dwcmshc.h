@@ -150,6 +150,19 @@ Environment:
 // MSHC_INTMASK/MINTSTS/RINTSTS fields
 //
 #define MSHC_INT_SDIO(n)                            (0x1 << (16 + (n)))   // SDIO slot interrupt
+
+//
+// Rockchip wires the SDIO card interrupt to bit 8 of the SDIO field, so
+// RINTSTS/INTMASK bit 24 (mainline dw_mmc-rockchip.c: host->sdio_irq = 8).
+//
+#define MSHC_RK_SDIO_IRQ_INDEX                      8
+#define MSHC_INT_SDIO_RK                            MSHC_INT_SDIO(MSHC_RK_SDIO_IRQ_INDEX)
+
+//
+// RK3576 sdio: mmc@2a320000 (rk3576.dtsi), the controller the TaishanPi 3M's
+// AP6256 Wi-Fi is on.  The SD slot is sdmmc: mmc@2a310000.
+//
+#define RK3576_SDIO_PHYS_BASE                       0x2A320000ULL
 #define MSHC_INT_EBE                                (0x1 << 15)           // End-bit error (read)/Write no CRC
 #define MSHC_INT_ACD                                (0x1 << 14)           // Auto command done
 #define MSHC_INT_SBE                                (0x1 << 13)           // Start-bit error
@@ -430,6 +443,7 @@ typedef struct _MSHC_IDMAC_DESCRIPTOR {
 //
 #define SDCMD_GO_IDLE_STATE             0
 #define SDCMD_SEND_RELATIVE_ADDR        3
+#define SDCMD_IO_SEND_OP_COND           5
 #define SDCMD_VOLTAGE_SWITCH            11
 #define SDCMD_STOP_TRANSMISSION         12
 #define SDCMD_SEND_STATUS               13
@@ -493,6 +507,8 @@ typedef struct _MSHC_PLATFORM_CAPABILITIES {
     ULONG SupportHs200;
     ULONG No18vRegulator;
     ULONG BrokenCd;
+    ULONG NonRemovable;
+    ULONG CapSdioIrq;
 } MSHC_PLATFORM_CAPABILITIES, *PMSHC_PLATFORM_CAPABILITIES;
 
 typedef enum _MSHC_PLATFORM_TYPE {
@@ -560,6 +576,45 @@ struct _MSHC_EXTENSION {
     //
     volatile ULONG *RkCruClkSel;
     ULONG RkCardClockHz;
+
+    //
+    // RK3576: TRUE on the SDIO controller (sdio: mmc@2a320000), which takes
+    // its card clock from CCLK_SRC_SDIO and carries SDIO card interrupts.
+    // Everything SDIO-specific in this driver is gated on it, so the SD slot
+    // behaves exactly as before.
+    //
+    BOOLEAN IsSdio;
+
+    //
+    // SDIO bring-up breadcrumbs (sdiodiag.cpp), written to
+    // HKLM\SYSTEM\CurrentControlSet\Services\dwcmshc\SdioDiag and flushed.
+    // Only the SDIO controller records them.
+    //
+    struct {
+        PIO_WORKITEM WorkItem;
+        volatile LONG FlushPending;
+        volatile LONG WorkersActive;
+        volatile LONG Commands;
+        volatile LONG Cmd5Count;
+        volatile LONG Cmd52Count;
+        volatile LONG Cmd53Count;
+        volatile LONG CmdErrors;
+        volatile LONG DataErrors;
+        volatile LONG SdioInterrupts;
+        volatile LONG CardIntEnables;
+        volatile LONG CardIntDisables;
+        volatile LONG BusOps;
+        volatile LONG CardDetectCalls;
+        ULONG LastCmd;
+        ULONG LastArg;
+        ULONG LastResp0;
+        ULONG LastErrorRintsts;
+        ULONG Cmd5Resp;
+        ULONG Cmd3Rca;
+        ULONG LastBusOpType;
+        ULONG ClockKhz;
+        ULONG BusWidth;
+    } Diag;
 
     //
     // Current request state
@@ -790,6 +845,29 @@ MshcCompleteRequest(
     _In_ PMSHC_EXTENSION MshcExtension,
     _In_ PSDPORT_REQUEST Request,
     _In_ NTSTATUS Status
+    );
+
+//
+// SDIO bring-up breadcrumbs (sdiodiag.cpp)
+//
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+MshcSdioDiagInit(
+    _In_ PMSHC_EXTENSION MshcExtension,
+    _In_ PDEVICE_OBJECT MiniportFdo
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID
+MshcSdioDiagKick(
+    _In_ PMSHC_EXTENSION MshcExtension
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+MshcSdioDiagCleanup(
+    _In_ PMSHC_EXTENSION MshcExtension
     );
 
 _IRQL_requires_max_(DISPATCH_LEVEL)

@@ -288,6 +288,7 @@ MshcSlotInitialize(
     //
     MshcExtension->PhysicalAddress = (PVOID)PhysicalBase.QuadPart;
     MshcExtension->BaseAddress = VirtualBase;
+    MshcExtension->IsSdio = ((ULONGLONG)PhysicalBase.QuadPart == RK3576_SDIO_PHYS_BASE);
 
     //
     // Check whether the driver is in crashdump mode.
@@ -301,6 +302,11 @@ MshcSlotInitialize(
 
         // Initialize the DPC that handles local request completions.
         KeInitializeDpc(&MshcExtension->LocalRequestDpc, MshcLocalRequestDpc, MshcExtension);
+
+        // SDIO controller only: registry breadcrumbs for the Wi-Fi bring-up.
+        if (MshcExtension->IsSdio) {
+            MshcSdioDiagInit(MshcExtension, MiniportFdo);
+        }
 
     } else {
         //
@@ -553,6 +559,15 @@ MshcSlotIssueBusOperation(
         "Type:%!BUSOPERATIONTYPE!",
         BusOperation->Type);
 
+    if (MshcExtension->IsSdio) {
+        InterlockedIncrement(&MshcExtension->Diag.BusOps);
+        MshcExtension->Diag.LastBusOpType = (ULONG)BusOperation->Type;
+        if (BusOperation->Type == SdSetBusWidth) {
+            MshcExtension->Diag.BusWidth = (ULONG)BusOperation->Parameters.BusWidth;
+        }
+        MshcSdioDiagKick(MshcExtension);
+    }
+
     Status = STATUS_NOT_SUPPORTED;
 
     switch (BusOperation->Type) {
@@ -671,6 +686,11 @@ MshcSlotGetCardDetectState(
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
     Present = MshcIsCardInserted(MshcExtension);
+
+    if (MshcExtension->IsSdio) {
+        InterlockedIncrement(&MshcExtension->Diag.CardDetectCalls);
+        MshcSdioDiagKick(MshcExtension);
+    }
 
     MSHC_LOG_EXIT(MshcExtension->LogHandle, MshcExtension, "%!bool!", Present);
 
@@ -864,8 +884,35 @@ MshcSlotInterrupt(
     }
 
     if (Rintsts & MSHC_INT_CD) {
-        *CardChange = !MshcExtension->PlatformInfo->Capabilities.BrokenCd;
+        *CardChange = !MshcExtension->PlatformInfo->Capabilities.BrokenCd &&
+                      !MshcExtension->PlatformInfo->Capabilities.NonRemovable;
         Rintsts &= ~MSHC_INT_CD;
+    }
+
+    //
+    // SDIO card interrupt (DAT1).  RINTSTS shows it whether or not it is
+    // masked, so only an enabled one counts.  It stays asserted until the
+    // function driver clears its source, so mask it here and let sdport turn
+    // it back on with ToggleEvents(SDPORT_EVENT_CARD_INTERRUPT) once the
+    // function driver has acknowledged it, as the Microsoft sdhc sample does.
+    //
+    if (MshcExtension->IsSdio && (Rintsts & MSHC_INT_SDIO_RK)) {
+        if (MshcReadRegister(MshcExtension, MSHC_INTMASK) & MSHC_INT_SDIO_RK) {
+            MshcDisableInterrupts(MshcExtension, MSHC_INT_SDIO_RK, 0);
+            *SdioInterrupt = TRUE;
+            InterlockedIncrement(&MshcExtension->Diag.SdioInterrupts);
+        }
+    }
+    Rintsts &= ~MSHC_INT_SDIO_RK;
+
+    if (MshcExtension->IsSdio && (Rintsts & MSHC_INT_ERROR)) {
+        MshcExtension->Diag.LastErrorRintsts = Rintsts;
+        if (Rintsts & MSHC_INT_CMD_ERROR) {
+            InterlockedIncrement(&MshcExtension->Diag.CmdErrors);
+        }
+        if (Rintsts & MSHC_INT_DATA_ERROR) {
+            InterlockedIncrement(&MshcExtension->Diag.DataErrors);
+        }
     }
 
     MshcConvertIntStatusToStandardEvents(Rintsts, Idsts, Events, Errors);
@@ -891,7 +938,7 @@ MshcSlotInterrupt(
             // Actually ensure we don't get a DpcForIsr at the same time.
             // Let sdport sense card changes but not anything else.
             //
-            Handled = (*CardChange == TRUE);
+            Handled = (*CardChange == TRUE) || (*SdioInterrupt == TRUE);
             *Events = 0;
             *Errors = 0;
         }
@@ -937,6 +984,25 @@ MshcSlotIssueRequest(
             (Request->Command.TransferDirection == SdTransferDirectionRead ? "Read" : "Write"),
             Request->Command.BlockCount,
             Request->Command.Length);
+    }
+
+    if (MshcExtension->IsSdio &&
+        ((Request->Type == SdRequestTypeCommandNoTransfer) ||
+         (Request->Type == SdRequestTypeCommandWithTransfer))) {
+        InterlockedIncrement(&MshcExtension->Diag.Commands);
+        MshcExtension->Diag.LastCmd = Request->Command.Index;
+        MshcExtension->Diag.LastArg = Request->Command.Argument;
+        switch (Request->Command.Index) {
+        case SDCMD_IO_SEND_OP_COND:
+            InterlockedIncrement(&MshcExtension->Diag.Cmd5Count);
+            break;
+        case SDCMD_IO_RW_DIRECT:
+            InterlockedIncrement(&MshcExtension->Diag.Cmd52Count);
+            break;
+        case SDCMD_IO_RW_EXTENDED:
+            InterlockedIncrement(&MshcExtension->Diag.Cmd53Count);
+            break;
+        }
     }
 
     //
@@ -1049,6 +1115,16 @@ MshcSlotGetResponse(
         MshcExtension->CardRca = Response[0] >> 16;
     }
 
+    if (MshcExtension->IsSdio) {
+        MshcExtension->Diag.LastResp0 = Response[0];
+        if (Command->Index == SDCMD_IO_SEND_OP_COND) {
+            MshcExtension->Diag.Cmd5Resp = Response[0];
+        } else if (Command->Index == SDCMD_SEND_RELATIVE_ADDR) {
+            MshcExtension->Diag.Cmd3Rca = Response[0] >> 16;
+        }
+        MshcSdioDiagKick(MshcExtension);
+    }
+
     MSHC_LOG_EXIT(MshcExtension->LogHandle, MshcExtension, "()");
 }
 
@@ -1084,8 +1160,16 @@ MshcSlotToggleEvents(
     //
     Intsts |= MSHC_INT_HTO;
 
-    if (MshcExtension->PlatformInfo->Capabilities.BrokenCd) {
+    if (MshcExtension->PlatformInfo->Capabilities.BrokenCd ||
+        MshcExtension->PlatformInfo->Capabilities.NonRemovable) {
         Intsts &= ~MSHC_INT_CD;
+    }
+
+    if (MshcExtension->IsSdio && (EventMask & SDPORT_EVENT_CARD_INTERRUPT)) {
+        Intsts |= MSHC_INT_SDIO_RK;
+        InterlockedIncrement(Enable ? &MshcExtension->Diag.CardIntEnables
+                                    : &MshcExtension->Diag.CardIntDisables);
+        MshcSdioDiagKick(MshcExtension);
     }
 
     if (Enable) {
@@ -1117,6 +1201,10 @@ MshcSlotClearEvents(
         EventMask);
 
     MshcConvertStandardEventsToIntStatus(EventMask, 0xFFFF, &Intsts, &Idsts);
+
+    if (MshcExtension->IsSdio && (EventMask & SDPORT_EVENT_CARD_INTERRUPT)) {
+        Intsts |= MSHC_INT_SDIO_RK;
+    }
 
     MshcAcknowledgeInterrupts(MshcExtension, Intsts, Idsts);
 
@@ -1314,6 +1402,10 @@ MshcCleanup(
 
         if (MshcExtension->CompleteRequestBusyWorkItem) {
             IoFreeWorkItem(MshcExtension->CompleteRequestBusyWorkItem);
+        }
+
+        if (MshcExtension->IsSdio) {
+            MshcSdioDiagCleanup(MshcExtension);
         }
 
         MshcRockchipCleanup(MshcExtension);
@@ -1614,7 +1706,16 @@ MshcSetClock(
         }
 
         Clkena |= MSHC_CLKENA_CCLK_ENABLE(MshcExtension->SlotId);
-        Clkena |= MSHC_CLKENA_CCLK_LOW_POWER(MshcExtension->SlotId);
+
+        //
+        // Clock auto-gating stops the card clock while the bus is idle, and
+        // a 4-bit SDIO card can only signal its interrupt on DAT1 while the
+        // clock runs (mainline dw_mci_enable_sdio_irq clears LOW_PWR for the
+        // same reason).  Keep it for the SD slot only.
+        //
+        if (!MshcExtension->IsSdio) {
+            Clkena |= MSHC_CLKENA_CCLK_LOW_POWER(MshcExtension->SlotId);
+        }
         MshcWriteRegister(MshcExtension, MSHC_CLKENA, Clkena);
 
         Status = MshcCiuUpdateClock(MshcExtension, 0);
@@ -1624,6 +1725,7 @@ MshcSetClock(
     }
 
     MshcExtension->BusFrequencyKhz = FrequencyKhz;
+    MshcExtension->Diag.ClockKhz = FrequencyKhz;
 
     return STATUS_SUCCESS;
 }
@@ -2178,9 +2280,23 @@ MshcSendCommand(
 
     if (Command->Index == SDCMD_GO_IDLE_STATE ||
         Command->Index == SDCMD_STOP_TRANSMISSION ||
-        Command->Index == SDCMD_GO_INACTIVE_STATE ||
-        Command->Index == SDCMD_IO_RW_DIRECT) {
+        Command->Index == SDCMD_GO_INACTIVE_STATE) {
         Cmd |= MSHC_CMD_STOP_ABORT_CMD;
+    }
+
+    //
+    // CMD52 is an abort only when it writes the CCCR ABORT register (0x06)
+    // of function 0, which is the only case mainline dw_mmc flags
+    // (dw_mci_prepare_command).  On the SD slot keep the old behaviour, which
+    // flagged every CMD52; no SD memory card sends one.
+    //
+    if (Command->Index == SDCMD_IO_RW_DIRECT) {
+        if (!MshcExtension->IsSdio ||
+            ((Command->Argument & 0x80000000UL) != 0 &&
+             ((Command->Argument >> 28) & 0x7) == 0 &&
+             ((Command->Argument >> 9) & 0x1FFFF) == 0x06)) {
+            Cmd |= MSHC_CMD_STOP_ABORT_CMD;
+        }
     }
 
     if (Command->Index == SDCMD_VOLTAGE_SWITCH) {
@@ -3133,7 +3249,8 @@ MshcIsCardInserted(
 {
     ULONG Cdetect;
 
-    if (MshcExtension->PlatformInfo->Capabilities.BrokenCd) {
+    if (MshcExtension->PlatformInfo->Capabilities.BrokenCd ||
+        MshcExtension->PlatformInfo->Capabilities.NonRemovable) {
         return TRUE;
     }
 
@@ -3200,6 +3317,8 @@ MshcQueryAcpiPlatformCapabilities(
     AcpiDevicePropertiesQueryIntegerValue(Properties, "mmc-hs200-1_8v", &Capabilities->SupportHs200);
     AcpiDevicePropertiesQueryIntegerValue(Properties, "no-1-8-v", &Capabilities->No18vRegulator);
     AcpiDevicePropertiesQueryIntegerValue(Properties, "broken-cd", &Capabilities->BrokenCd);
+    AcpiDevicePropertiesQueryIntegerValue(Properties, "non-removable", &Capabilities->NonRemovable);
+    AcpiDevicePropertiesQueryIntegerValue(Properties, "cap-sdio-irq", &Capabilities->CapSdioIrq);
 
     Status = STATUS_SUCCESS;
 
