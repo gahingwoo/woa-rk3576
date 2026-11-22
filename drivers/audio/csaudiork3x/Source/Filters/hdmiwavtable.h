@@ -15,12 +15,22 @@ Abstract:
     the SAI, which stores one sample per 32-bit FIFO word, so every sample
     has to arrive as one 32-bit DMA word.  The firmware's HDMI audio preset
     declares 24-bit samples in the IEC 60958 channel status to match.
+
+    The format says 32 valid bits, not 24.  A KSDATARANGE_AUDIO cannot say
+    "24 in 32", so the Windows audio engine builds the endpoint's device
+    format from the range as 32 valid bits (TaishanPi 3M, 1.0.0.117/131:
+    GetMixFormat AUDCLNT_E_UNSUPPORTED_FORMAT, every NewStream and
+    PROPOSEDATAFORMAT refused, no stream ever opened).  The hardware does not
+    care: the SAI runs with VDW 32 and sends all 32 bits MSB first, and the
+    ES8388 and the HDMI controller take their 24 bits from the top of the
+    slot, so the low 8 bits of a 32-bit sample are dropped as they would be
+    with 24 in 32.
 --*/
 
 #ifndef _CSAUDIORK3X_HDMIWAVTABLE_H_
 #define _CSAUDIORK3X_HDMIWAVTABLE_H_
 
-// Only 48 kHz, 24 in 32-bit, stereo: the format the firmware set the HDMI controller up for.
+// Only 48 kHz, 32-bit, stereo: the slot the firmware set the HDMI controller up for.
 
 #define HDMI_DEVICE_MAX_CHANNELS                 2       // Max Channels.
 
@@ -60,7 +70,7 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE HdmiHostPinSupportedDeviceFormats[] =
                 32,
                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
             },
-            24,
+            32,     // see the note at the top: not 24
             KSAUDIO_SPEAKER_STEREO,
             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
         }
