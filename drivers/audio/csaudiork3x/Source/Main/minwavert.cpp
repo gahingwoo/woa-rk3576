@@ -253,6 +253,38 @@ Arguments:
     }
     else
     {
+        // A render pin whose one device format carries fewer valid bits than
+        // its container (the SAI's 24 in 32-bit, hdmiwavtable.h) gets that
+        // format back, as the capture pins above do.  The class handler
+        // would answer with a WAVEFORMATEX whose valid bits equal the
+        // container, which IsFormatSupported rejects; the audio engine then
+        // finds no mix format (AUDCLNT_E_UNSUPPORTED_FORMAT) and never opens
+        // a stream.
+        KSDATAFORMAT_WAVEFORMATEXTENSIBLE *renderFormats = NULL;
+        if (GetPinSupportedDeviceFormats(PinId, &renderFormats) == 1 && renderFormats != NULL &&
+            renderFormats[0].WaveFormatExt.Format.wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+            renderFormats[0].WaveFormatExt.Samples.wValidBitsPerSample <
+                renderFormats[0].WaveFormatExt.Format.wBitsPerSample &&
+            ((PKSDATARANGE_AUDIO)ClientDataRange)->MaximumChannels >= renderFormats[0].WaveFormatExt.Format.nChannels &&
+            (IsEqualGUIDAligned(ClientDataRange->SubFormat, KSDATAFORMAT_SUBTYPE_PCM) ||
+             IsEqualGUIDAligned(ClientDataRange->SubFormat, KSDATAFORMAT_SUBTYPE_WILDCARD)))
+        {
+            requiredSize = sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE);
+            if (!OutputBufferLength)
+            {
+                *ResultantFormatLength = requiredSize;
+                return STATUS_BUFFER_OVERFLOW;
+            }
+            else if (OutputBufferLength < requiredSize)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            *(PKSDATAFORMAT_WAVEFORMATEXTENSIBLE)ResultantFormat = renderFormats[0];
+            *ResultantFormatLength = requiredSize;
+            return STATUS_SUCCESS;
+        }
+
         requiredSize = sizeof(KSDATAFORMAT_WAVEFORMATEX);
 
         //
