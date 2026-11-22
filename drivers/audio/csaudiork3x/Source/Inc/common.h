@@ -135,6 +135,11 @@ enum {
     DIAG_EV_SETSTATE_STATUS,    // SetState result
     DIAG_EV_GETPOSITION,        // GetPosition (counted only)
     DIAG_EV_STREAMCLOSED,       // StreamClosed
+    DIAG_EV_NEWSTREAM_TAG,      // wFormatTag << 16 | nBlockAlign
+    DIAG_EV_NEWSTREAM_MASK,     // dwChannelMask (extensible only)
+    DIAG_EV_NEWSTREAM_SUB,      // SubFormat.Data1 (extensible only)
+    DIAG_EV_PROPOSED_FORMAT,    // as NEWSTREAM_FORMAT, for PROPOSEDATAFORMAT
+    DIAG_EV_PROPOSED_SUB,       // wFormatTag << 16 | SubFormat.Data1 low 16
     DIAG_EV_COUNT
 };
 

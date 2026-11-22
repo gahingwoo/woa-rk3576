@@ -509,6 +509,13 @@ Return Value:
             ((ULONG)wfx->nChannels << 24) | ((ULONG)(wfx->wBitsPerSample & 0xFF) << 16) |
             ((valid & 0xFF) << 8) | (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE ? 1 : 0));
         Diag(DIAG_EV_NEWSTREAM_RATE, wfx->nSamplesPerSec);
+        Diag(DIAG_EV_NEWSTREAM_TAG, ((ULONG)wfx->wFormatTag << 16) | wfx->nBlockAlign);
+        if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+            DataFormat->FormatSize >= sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE))
+        {
+            Diag(DIAG_EV_NEWSTREAM_MASK, ((PWAVEFORMATEXTENSIBLE)wfx)->dwChannelMask);
+            Diag(DIAG_EV_NEWSTREAM_SUB, ((PWAVEFORMATEXTENSIBLE)wfx)->SubFormat.Data1);
+        }
     }
 
      //
@@ -1269,6 +1276,22 @@ CMiniportWaveRT::PropertyHandlerProposedFormat
     else if (PropertyRequest->Verb & KSPROPERTY_TYPE_SET)
     {
         pKsFormat = (PKSDATAFORMAT)PropertyRequest->Value;
+        if (pKsFormat->FormatSize >= sizeof(KSDATAFORMAT_WAVEFORMATEX))
+        {
+            PWAVEFORMATEX pwfx = (PWAVEFORMATEX)(pKsFormat + 1);
+            ULONG pvalid = pwfx->wBitsPerSample;
+            ULONG psub = pwfx->wFormatTag;
+            if (pwfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+                pKsFormat->FormatSize >= sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE))
+            {
+                pvalid = ((PWAVEFORMATEXTENSIBLE)pwfx)->Samples.wValidBitsPerSample;
+                psub = ((PWAVEFORMATEXTENSIBLE)pwfx)->SubFormat.Data1;
+            }
+            Diag(DIAG_EV_PROPOSED_FORMAT,
+                ((ULONG)pwfx->nChannels << 24) | ((ULONG)(pwfx->wBitsPerSample & 0xFF) << 16) |
+                ((pvalid & 0xFF) << 8) | (pwfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE ? 1 : 0));
+            Diag(DIAG_EV_PROPOSED_SUB, ((ULONG)pwfx->wFormatTag << 16) | (psub & 0xFFFF));
+        }
         ntStatus = IsFormatSupported(kspPin->PinId, IsSystemCapturePin(kspPin->PinId) || FALSE, pKsFormat);
         Diag(DIAG_EV_PROPOSED, (ULONG)ntStatus);
         if (!NT_SUCCESS(ntStatus))

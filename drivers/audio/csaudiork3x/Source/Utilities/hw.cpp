@@ -828,6 +828,7 @@ void CCsAudioRk3xHW::diag_save() {
         L"DataRange", L"NewStreamEnter", L"NewStreamFormat", L"NewStreamRate",
         L"NewStreamStatus", L"IsFormat", L"Proposed", L"AllocSize", L"AllocStatus",
         L"SetState", L"SetStateStatus", L"GetPosition", L"StreamClosed",
+        L"NewStreamTag", L"NewStreamMask", L"NewStreamSub", L"ProposedFormat", L"ProposedSub",
     };
     for (int dir = 0; dir < 2; dir++) {
         for (int e = 0; e < DIAG_EV_COUNT; e++) {
