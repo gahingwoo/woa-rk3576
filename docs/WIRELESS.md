@@ -21,6 +21,10 @@ sequences the Wi-Fi supply, reset and LPO clock through `mmc-pwrseq`.
 
 ## Wi-Fi: not feasible at a reasonable size
 
+For the TaishanPi 3M this has been revisited: see [WIFI.md](WIFI.md) for a
+smaller plan (an Ethernet-style NDIS driver first, WiFiCx later) and the
+first two milestones, which are built but not yet run.
+
 - No Windows driver exists for these chips on ARM64. worproject's Raspberry
   Pi driver table lists the Pi 3B+/4's CYW43455 (the same family) as having
   no driver. Windows 10 IoT Core had a closed ARM32-only Broadcom SDIO driver

@@ -81,6 +81,7 @@
     <ClCompile Include="..\..\shared\acpiutil.cpp" />
     <ClCompile Include="dwcmshc.cpp" />
     <ClCompile Include="rockchip_ops.cpp" />
+    <ClCompile Include="sdiodiag.cpp" />
     <ResourceCompile Include="dwcmshc.rc" />
   </ItemGroup>
   <ItemGroup>
