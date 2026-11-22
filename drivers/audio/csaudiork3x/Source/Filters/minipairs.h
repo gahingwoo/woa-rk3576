@@ -134,12 +134,12 @@ static
 ENDPOINT_MINIPAIR HeadphoneSaiMiniports =
 {
     eOutputDevice,
-    L"TopologyHeadphones",                                  // same KSNAME as HeadphoneMiniports
+    L"TopologyHeadphonesSai",                               // own KSNAME: the INF gives it its own format
     NULL,                                                   // optional template name
     CreateMiniportTopologyCsAudioRk3x,
     &HeadphoneTopoMiniportFilterDescriptor,
     0, NULL,                                                // Interface properties
-    L"WaveHeadphones",
+    L"WaveHeadphonesSai",
     NULL,                                                   // optional template name
     CreateMiniportWaveRTCsAudioRk3x,
     &HdmiWaveMiniportFilterDescriptor,                      // 24 in 32-bit, see hdmiwavtable.h
