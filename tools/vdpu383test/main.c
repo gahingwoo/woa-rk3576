@@ -166,6 +166,9 @@ static int cmd_info(void)
            in.warmup.timed_out, in.warmup.irq, in.warmup.status);
     print_status_bits(in.warmup.status & 0xFFFF);
     printf(") polls %u buffer 0x%08x\n", in.warmup.polls, in.warmup.buffer_dma);
+    if (!in.warmup.ran)
+        printf("warm-up at D0 entry: not run (Device Parameters WarmupAtD0 is not 1); "
+               "`vdpu383test warmup` runs it now\n");
     if (in.warmup.ran) {
         int ok = !in.warmup.timed_out && (in.warmup.status & V383_STA_FRAME_RDY) &&
                  !(in.warmup.status & V383_STA_ERROR_MASK);

@@ -71,6 +71,10 @@ typedef struct _DEVICE_CONTEXT {
     ULONG           MmuLastStatus[2], MmuLastFault[2];
     ULONG           Runs, Timeouts;
 
+    /* breadcrumbs (Device Parameters), settings */
+    volatile LONG   StepSeq;
+    ULONG           WarmupAtD0;     /* Device Parameters WarmupAtD0, default 0 */
+
     /* warm-up */
     PVOID           WarmVa;
     PHYSICAL_ADDRESS WarmPa;
@@ -95,6 +99,10 @@ static __forceinline VOID V383Wr(PDEVICE_CONTEXT c, ULONG off, ULONG v)
 {
     WRITE_REGISTER_ULONG((volatile ULONG *)(c->Regs + off), v);
 }
+
+/* driver.c */
+VOID V383Crumb(_In_ PDEVICE_CONTEXT Ctx, _In_ PCWSTR Step);
+VOID V383Fact(_In_ PDEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Value);
 
 /* warmup.c */
 NTSTATUS V383WarmupInit(_In_ PDEVICE_CONTEXT Ctx);

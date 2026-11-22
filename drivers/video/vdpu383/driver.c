@@ -17,7 +17,9 @@
  * Behaviour follows mainline Linux (drivers/media/platform/rockchip/rkvdec,
  * rkvdec.c and rkvdec-vdpu383-h264.c): how a decode is started, how the
  * interrupt is acknowledged. The warm-up decode at D0 entry is the vendor
- * kernel's (warmup.c). The IOMMU is left with paging off, or turned off if
+ * kernel's (warmup.c), and runs only when the Device Parameters value
+ * WarmupAtD0 is 1 (default 0: the first board test reads registers and
+ * nothing more; `vdpu383test warmup` runs it on demand). The IOMMU is left with paging off, or turned off if
  * it is found on, so the decoder's addresses are physical; buffers are
  * therefore allocated below 4 GiB.
  *
@@ -48,6 +50,88 @@ EVT_WDF_FILE_CLEANUP V383EvtFileCleanup;
 
 #define LINK_IRQ_CLEAR      0x00030000      /* FIELD_PREP_WM16(irq | line irq, 0) */
 #define LINK_STATUS_CLEAR   0x03FF0000      /* FIELD_PREP_WM16(VDPU383_STA_INT_ALL, 0) */
+
+/* ------------------------------------------------------- breadcrumbs */
+
+/*
+ * Breadcrumbs: the step the driver is in, and what it read, in the device's
+ * hardware key (Device Parameters), flushed at once, so a hang or a bugcheck
+ * at the first register read leaves the last step readable after a reboot
+ * with the decoder off in setup:
+ *
+ *   reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters"
+ *
+ * LastStep, PrevStep, StepSeq; and DWORDs named after what they hold
+ * (Version, Mmu0Status, ...). PASSIVE_LEVEL only; at any other level the
+ * call does nothing.
+ */
+static VOID
+V383PutULong(_In_ WDFKEY Key, _In_ PCWSTR Name, _In_ ULONG Value)
+{
+    UNICODE_STRING n;
+
+    RtlInitUnicodeString(&n, Name);
+    (VOID)WdfRegistryAssignULong(Key, &n, Value);
+}
+
+static BOOLEAN
+V383OpenParams(_In_ PDEVICE_CONTEXT Ctx, _In_ ACCESS_MASK Access, _Out_ WDFKEY *Key)
+{
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return FALSE;
+    return NT_SUCCESS(WdfDeviceOpenRegistryKey(Ctx->Device, PLUGPLAY_REGKEY_DEVICE, Access,
+                                               WDF_NO_OBJECT_ATTRIBUTES, Key));
+}
+
+VOID
+V383Crumb(_In_ PDEVICE_CONTEXT Ctx, _In_ PCWSTR Step)
+{
+    WDFKEY key;
+    UNICODE_STRING n, v;
+    DECLARE_UNICODE_STRING_SIZE(prev, 64);
+
+    V383_LOG("step %ws", Step);
+    if (!V383OpenParams(Ctx, KEY_READ | KEY_WRITE, &key))
+        return;
+    RtlInitUnicodeString(&n, L"LastStep");
+    if (NT_SUCCESS(WdfRegistryQueryUnicodeString(key, &n, NULL, &prev))) {
+        RtlInitUnicodeString(&v, L"PrevStep");
+        (VOID)WdfRegistryAssignUnicodeString(key, &v, &prev);
+    }
+    RtlInitUnicodeString(&v, Step);
+    (VOID)WdfRegistryAssignUnicodeString(key, &n, &v);
+    V383PutULong(key, L"StepSeq", (ULONG)InterlockedIncrement(&Ctx->StepSeq));
+    (VOID)ZwFlushKey(WdfRegistryWdmGetHandle(key));
+    WdfRegistryClose(key);
+}
+
+VOID
+V383Fact(_In_ PDEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Value)
+{
+    WDFKEY key;
+
+    if (!V383OpenParams(Ctx, KEY_WRITE, &key))
+        return;
+    V383PutULong(key, Name, Value);
+    (VOID)ZwFlushKey(WdfRegistryWdmGetHandle(key));
+    WdfRegistryClose(key);
+}
+
+static ULONG
+V383Setting(_In_ PDEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Default)
+{
+    WDFKEY key;
+    UNICODE_STRING n;
+    ULONG v = Default;
+
+    if (V383OpenParams(Ctx, KEY_READ, &key)) {
+        RtlInitUnicodeString(&n, Name);
+        if (!NT_SUCCESS(WdfRegistryQueryULong(key, &n, &v)))
+            v = Default;
+        WdfRegistryClose(key);
+    }
+    return v;
+}
 
 /* ------------------------------------------------------------ IOMMU */
 
@@ -226,6 +310,9 @@ V383EvtPrepareHardware(
 
     UNREFERENCED_PARAMETER(ResourcesRaw);
 
+    V383Crumb(ctx, L"PrepareHardware: start");
+    ctx->WarmupAtD0 = V383Setting(ctx, L"WarmupAtD0", 0);
+
     for (i = 0; i < WdfCmResourceListGetCount(ResourcesTranslated); i++) {
         PCM_PARTIAL_RESOURCE_DESCRIPTOR d = WdfCmResourceListGetDescriptor(ResourcesTranslated, i);
 
@@ -243,6 +330,7 @@ V383EvtPrepareHardware(
     }
     if (nmem == 0 || ctx->RegsLen < V383_REG_BLOCK_SIZE) {
         V383_LOG("no register resource of 4 KiB (found %u memory resources)", nmem);
+        V383Crumb(ctx, L"PrepareHardware: no register resource");
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
@@ -253,8 +341,12 @@ V383EvtPrepareHardware(
     V383_LOG("registers at 0x%llx, SRAM %s 0x%llx+0x%x", ctx->RegsPa.QuadPart,
              ctx->SramPresent ? "at" : "absent", ctx->SramPa.QuadPart, ctx->SramLen);
 
+    V383Fact(ctx, L"RegsPa", (ULONG)ctx->RegsPa.QuadPart);
+    V383Fact(ctx, L"SramPa", ctx->SramPresent ? (ULONG)ctx->SramPa.QuadPart : 0);
+
     /* not fatal: the warm-up is then skipped */
     (VOID)V383WarmupInit(ctx);
+    V383Crumb(ctx, L"PrepareHardware: done (no register touched yet)");
     return STATUS_SUCCESS;
 }
 
@@ -284,7 +376,25 @@ V383EvtD0Entry(
 {
     PDEVICE_CONTEXT ctx = GetContext(Device);
 
+    ULONG ver, mmu0, mmu1;
+
     UNREFERENCED_PARAMETER(PreviousState);
+
+    /*
+     * The first register read of the session. If PD_VDEC or the decoder's
+     * clocks are off, this is where the bus errors out (an SError, so a
+     * bugcheck), and LastStep is left saying so.
+     */
+    V383Crumb(ctx, L"D0Entry: first register read");
+    ver = V383Rd(ctx, V383_FUNC_OFFSET);
+    mmu0 = V383Rd(ctx, V383_MMU0_OFFSET + RK_MMU_STATUS);
+    mmu1 = V383Rd(ctx, V383_MMU1_OFFSET + RK_MMU_STATUS);
+    V383Fact(ctx, L"Version", ver);
+    V383Fact(ctx, L"Mmu0Status", mmu0);
+    V383Fact(ctx, L"Mmu1Status", mmu1);
+    V383Fact(ctx, L"LinkIrqAtD0", V383Rd(ctx, V383_LINK_IRQ));
+    V383Fact(ctx, L"LinkStatusAtD0", V383Rd(ctx, V383_LINK_STATUS));
+    V383Crumb(ctx, L"D0Entry: registers read");
 
     V383_LOG("D0 entry: version 0x%08x, link irq 0x%08x status 0x%08x, mmu 0x%08x/0x%08x",
              V383Rd(ctx, V383_FUNC_OFFSET), V383Rd(ctx, V383_LINK_IRQ), V383Rd(ctx, V383_LINK_STATUS),
@@ -300,11 +410,23 @@ V383EvtD0Entry(
     V383_LOG("D0 entry: cache cfg 0x%08x max reads 0x%08x (power-on values)",
              V383Rd(ctx, V383_CACHE_OFFSET + V383_CACHE_CACHE0_CFG),
              V383Rd(ctx, V383_CACHE_OFFSET + V383_CACHE_MAX_READS));
+    V383Fact(ctx, L"CacheCfgPowerOn", V383Rd(ctx, V383_CACHE_OFFSET + V383_CACHE_CACHE0_CFG));
+    V383Fact(ctx, L"CacheMaxReadsPowerOn", V383Rd(ctx, V383_CACHE_OFFSET + V383_CACHE_MAX_READS));
     V383CacheConfig(ctx);
+    V383Crumb(ctx, L"D0Entry: IOMMU and cache set");
 
     /* rk3576_workaround_run(): probe and resume; interrupts are not yet
-     * connected here */
-    V383WarmupRun(ctx, &ctx->Warm);
+     * connected here. Off unless WarmupAtD0 = 1. */
+    if (ctx->WarmupAtD0 == 1) {
+        V383Crumb(ctx, L"D0Entry: warm-up decode");
+        V383WarmupRun(ctx, &ctx->Warm);
+        V383Fact(ctx, L"WarmupIrq", ctx->Warm.irq);
+        V383Fact(ctx, L"WarmupStatus", ctx->Warm.status);
+        V383Fact(ctx, L"WarmupTimedOut", ctx->Warm.timed_out);
+    } else {
+        RtlZeroMemory(&ctx->Warm, sizeof(ctx->Warm));
+    }
+    V383Crumb(ctx, L"D0Entry: done");
     return STATUS_SUCCESS;
 }
 
@@ -327,6 +449,7 @@ V383EvtD0ExitPreInterrupts(
 {
     UNREFERENCED_PARAMETER(TargetState);
     GetContext(Device)->InterruptsConnected = FALSE;
+    V383Crumb(GetContext(Device), L"D0Exit");
     return STATUS_SUCCESS;
 }
 
@@ -588,6 +711,8 @@ V383Run(
     }
 
     Ctx->Runs++;
+    if (Ctx->Runs == 1)
+        V383Crumb(Ctx, L"Run: first decode of the session, starting");
     KeClearEvent(&Ctx->RunDone);
     Ctx->RunIrq = 0;
     Ctx->RunStatus = 0;
@@ -656,6 +781,11 @@ V383Run(
      */
     if (timedOut)
         KeFlushQueuedDpcs();
+    if (Ctx->Runs == 1) {
+        V383Fact(Ctx, L"FirstRunResult", out->result);
+        V383Fact(Ctx, L"FirstRunStatus", out->status);
+        V383Crumb(Ctx, L"Run: first decode returned");
+    }
     return STATUS_SUCCESS;
 }
 
@@ -760,6 +890,7 @@ V383EvtIoDeviceControl(
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(*o), (PVOID *)&o, NULL);
         if (!NT_SUCCESS(status))
             break;
+        V383Crumb(ctx, L"IOCTL warm-up: starting");
         /* the warm-up masks the decoder interrupt (link 0x58 bit 15) and
          * polls; hold the interrupt lock so the ISR cannot run in between */
         if (ctx->InterruptsConnected)
@@ -767,6 +898,10 @@ V383EvtIoDeviceControl(
         V383WarmupRun(ctx, o);
         if (ctx->InterruptsConnected)
             WdfInterruptReleaseLock(ctx->DecInterrupt);
+        V383Fact(ctx, L"WarmupIrq", o->irq);
+        V383Fact(ctx, L"WarmupStatus", o->status);
+        V383Fact(ctx, L"WarmupTimedOut", o->timed_out);
+        V383Crumb(ctx, L"IOCTL warm-up: returned");
         info = sizeof(*o);
         break;
     }

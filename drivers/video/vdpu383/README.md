@@ -27,7 +27,8 @@ register builder have run on Linux with no decoder (`--null`).
 | [../../../tools/vdpu383test](../../../tools/vdpu383test) | the test program and its H.264 parser |
 | [../../../tools/vdpu383-capture](../../../tools/vdpu383-capture) | what mainline Linux does with the same clips, and a register diff |
 
-The firmware side is edk2-rk3576 branch `vdpu383-acpi`: a setup option, off
+The firmware side is edk2-rk3576 branch `vdpu383-acpi-v2` (the old
+`vdpu383-acpi` rebased onto main with the NPU option kept): a setup option, off
 by default, that powers PD_VDEC, sets the decoder clocks and installs an
 SSDT with the device.
 
@@ -39,7 +40,7 @@ SSDT with the device.
 | Start: link 0x54 = timeout, 0x58 = 0, 0x40 = 1; interrupt: read 0x48/0x4C, write 0x03FF0000 to 0x4C and 0x00030000 to 0x48 | mainline rkvdec-vdpu383-h264.c, rkvdec.c | read from source |
 | Reference read cache at +0x600: CACHE0_CFG = 0x13, MAX_READS = 0x1C at D0 entry and after every IP reset; CLR_CACHE0 = 1 before every decode | mainline "configure the reference read cache" (v3, merged) | ported; mainline measured a 2688x1520 stream at 22.5 or 65.4 ms per frame with the power-on values and 3.6 ms with these. Reprogramming after a reset is ours: mainline left open whether the reset clears them |
 | A timed-out decode always gets an IP reset (link 0x48 irq off, 0x44 = 1, wait for status bit 11, clear status), then queued DPCs are drained | mainline "Stop the VDPU383 core on timeout" (posted, compile-tested there) and "Handle interrupts without a current context" | ported; an error status still resets only with `VDPU383_RUN_RESET_ON_ERROR` |
-| Warm-up decode at D0 entry | vendor kernel mpp_hack_rk3576.c (GPL-2.0+ OR MIT) | ported unchanged; mainline does not do it, so it may be unnecessary |
+| Warm-up decode | vendor kernel mpp_hack_rk3576.c (GPL-2.0+ OR MIT) | ported unchanged; mainline does not do it, so it may be unnecessary. At D0 entry only with Device Parameters `WarmupAtD0` = 1 (default 0); `vdpu383test warmup` runs it on demand |
 | Register values, SPS/PPS/RPS bit layouts, RCB sizes, CABAC table | MPP hal_h264d_vdpu383.c and friends | ported; RCB arithmetic changed from float to integer (same values, checked in `selftest`) |
 | SPS/PPS record written both at offset 0 (MPP) and at pps_id * 176 (mainline) | the two disagree | whichever the hardware reads is covered |
 | Default reference lists P/B0/B1 from DXVA_PicParams_H264 | H.264 8.2.4.2, as mainline hands them to the hardware | written fresh |
@@ -49,13 +50,39 @@ SSDT with the device.
 | Buffers write-combined (Normal non-cacheable) for a non-coherent device | | guessed |
 | Field pictures (PAFF), FMO, 4:2:2, 10 bit, MVC | | not supported; MBAFF frames pass through untested |
 
+## Breadcrumbs and settings
+
+The driver keeps its last step and what it read in the device's hardware
+key, flushed to disk at once, so a hang or a bugcheck leaves them readable
+after the next boot (boot with the setup option off if the decoder is what
+stops Windows):
+
+```
+reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters"
+```
+
+| Value | Meaning |
+|---|---|
+| `LastStep`, `PrevStep`, `StepSeq` | the step the driver was in, the one before, and a counter. `D0Entry: first register read` as LastStep after a bugcheck means the decoder's power domain or clocks were off: the firmware did not power it |
+| `RegsPa`, `SramPa` | the resources Windows gave it (expect 0x27B00000, 0x3FF88000) |
+| `Version`, `Mmu0Status`, `Mmu1Status`, `LinkIrqAtD0`, `LinkStatusAtD0` | the first reads at D0 entry |
+| `CacheCfgPowerOn`, `CacheMaxReadsPowerOn` | the read cache before the driver set it |
+| `WarmupIrq`, `WarmupStatus`, `WarmupTimedOut` | the last warm-up, at D0 entry or from the tool |
+| `FirstRunResult`, `FirstRunStatus` | the first decode of the session (0 = ok) |
+
+One setting, a DWORD in the same key, read at each start of the device:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `WarmupAtD0` | 0 | 1: run the vendor kernel's warm-up decode at every D0 entry, as the vendor kernel does at probe and resume |
+
 ## Test plan
 
 Run in this order. Each step says what to send back if it fails.
 
 ### 0. Firmware
 
-Flash the `vdpu383-acpi` firmware (CI artifact `cm5io-firmware` or
+Flash the `vdpu383-acpi-v2` firmware (CI artifact `cm5io-firmware` or
 `tspi3m-firmware` of the edk2-rk3576 run on that branch). With the option
 still off, boot once to Windows and Linux as usual: nothing must have
 changed.
@@ -76,7 +103,7 @@ Send back on failure: the serial log from power-on to the boot manager.
 
 ### 1. Install
 
-From the WinPE workflow run of branch `vdpu383`, artifact
+From the WinPE workflow run of branch `vdpu383-v2`, artifact
 `woa-drivers-signed-arm64`: `woa-drivers\vdpu383\` (the signed package),
 `woa-drivers\signer.cer` and `woa-tools\` (vdpu383test.exe and the Linux
 capture scripts). The WinPE image of that run already contains the driver.
@@ -107,12 +134,12 @@ Expected (from the vendor code, not measured):
 
 - `version register` non-zero, the same as the firmware's `version=` line
 - both IOMMU instances `paging off`
-- `warm-up at D0 entry: ran 1 timed_out 0 irq 0x0000000? status 0x....` with
-  bit 0 of status (`frame_rdy`) set and bits 1-9 clear, and
-  `warm-up verdict: PASS`. Bits 10-15 may be set; they are not errors.
+- `warm-up at D0 entry: not run` (the default, `WarmupAtD0` 0)
 
-Then `vdpu383test warmup` (again, through the link registers, with
-interrupts live) and `vdpu383test warmup-direct` (the same 32x32 picture
+Then `vdpu383test warmup` (through the link registers, with interrupts
+live): `irq 0x0000000?`, status bit 0 (`frame_rdy`) set and bits 1-9
+clear, `verdict: PASS`. Bits 10-15 may be set; they are not errors. Then
+`vdpu383test warmup-direct` (the same 32x32 picture
 through the ordinary start path). Run `warmup-direct` three times: the
 output MD5 must be the same each time.
 
