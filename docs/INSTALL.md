@@ -151,9 +151,9 @@ firmware 0.4.0 and 0.4.1.
   `install-firmware.ps1` (it downloads it and checks its SHA-256; it cannot be
   shipped here), then the [bcm4345bt](../drivers/bluetooth/bcm4345bt/README.md)
   package. No voice (SCO) yet.
-- Audio: the headphone jack plays with rk3xi2sbus, es8323 and csaudiork3x
-  1.0.0.135 or later. Recording and HDMI audio have not been tried with that
-  build. Keep the pl330dma that is already installed.
+- Audio: the headphone jack plays and its microphone records with
+  rk3xi2sbus, es8323 and csaudiork3x 1.0.0.135 or later. HDMI audio has not
+  been tried with that build. Keep the pl330dma that is already installed.
 - Replacing a driver that is already bound and running: `pnputil /add-driver`
   followed by a restart keeps the old driver, and `/install` on a running
   audio, DMA, display or Bluetooth driver has bugchecked this board. Stage the

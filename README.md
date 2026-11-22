@@ -33,7 +33,7 @@ controllers. It needs firmware 0.2.0 or later. How to install it:
 | NVMe | PCIe | inbox stornvme | works |
 | USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
 | Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
-| Audio (TaishanPi 3M headphones) | `RKCP3004`, `RKCP8388` | rk3xi2sbus, csaudiork3x, es8323 | headphone playback works (1.0.0.135, 22 November 2026); recording and HDMI audio not yet tested ([audio](docs/AUDIO.md)) |
+| Audio (TaishanPi 3M headphones) | `RKCP3004`, `RKCP8388` | rk3xi2sbus, csaudiork3x, es8323 | headphone playback and the jack microphone work (1.0.0.135, 22 November 2026); HDMI audio not yet tested ([audio](docs/AUDIO.md)) |
 
 Most of these were measured once, on 2026-10-01.
 
@@ -59,8 +59,9 @@ controller (edk2-rk3576 `main` after 0.4.1): the radio comes up in Settings,
 pairing and file transfer work. Voice calls and headset microphones do not,
 because the module carries SCO audio over a PCM link that has no driver.
 
-Headphone playback works since 22 November 2026 (csaudiork3x 1.0.0.135);
-recording and HDMI audio have not been tried with it yet.
+Headphone playback and recording from the jack microphone work since 22
+November 2026 (csaudiork3x 1.0.0.135); HDMI audio has not been tried with
+it yet.
 
 Not available: the USB-C port (left out of the board's ACPI tables), WiFi
 and the EC20 modem.
