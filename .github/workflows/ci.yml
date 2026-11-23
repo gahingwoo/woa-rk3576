@@ -61,6 +61,39 @@ jobs:
           head -c 1000 ampak.hcd > trunc.hcd
           if ./hcdcheck trunc.hcd; then exit 1; fi
 
+  pageverify:
+    name: pageverify (Linux, gcc)
+    # The page-integrity tool is portable C. The Linux build is the one used
+    # on the PC to make pattern files that are then copied to the board, so
+    # it is built and self-tested here, then run end to end: write, verify,
+    # plant a foreign page and a misplaced page, verify again.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and check
+        run: |
+          set -eux
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -o pageverify tools/pageverify/pageverify.c
+          ./pageverify selftest
+          ./pageverify write t.bin 32 --seed 1234
+          ./pageverify verify t.bin --passes 2
+          head -c 4096 /dev/urandom | dd of=t.bin bs=4096 seek=100 conv=notrunc
+          dd if=t.bin of=t.bin bs=4096 skip=3 seek=200 count=1 conv=notrunc
+          set +e
+          ./pageverify verify t.bin > out.txt
+          rc=$?
+          set -e
+          cat out.txt
+          test "$rc" -eq 1
+          grep -q 'BAD page 100 at offset 0x64000' out.txt
+          grep -q 'BAD page 200 at offset 0xc8000.*misplaced page of THIS file.*page 3 ' out.txt
+          ./pageverify loop . 8 --rounds 2
+      - name: Upload the Linux build
+        uses: actions/upload-artifact@v4
+        with:
+          name: pageverify-linux-x64
+          path: pageverify
+
   solution:
     name: WDK build (build/RockchipDrivers.sln)
     # The drivers imported from worproject/Rockchip-Windows-Drivers build as one
@@ -104,6 +137,7 @@ jobs:
           - { name: spi,  proj: drivers/spi/rk3xspi/rk3xspi.vcxproj }
           - { name: touch, proj: drivers/input/gt9271/gt9271.vcxproj }
           - { name: bluetooth, proj: drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj }
+          - { name: pageverify, proj: tools/pageverify/pageverify.vcxproj }
     steps:
       - uses: actions/checkout@v4
 
@@ -218,4 +252,5 @@ jobs:
             **/ARM64/Release/**/*.inf
             **/ARM64/Release/**/*.cat
             **/ARM64/Release/**/*.pdb
+            **/ARM64/Release/*.exe
           if-no-files-found: warn
