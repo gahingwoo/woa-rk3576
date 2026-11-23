@@ -3416,6 +3416,28 @@ Return value:
                                   Request->Command.Length);
 
             NextLength = MIN(SDHC_ADMA2_MAX_LENGTH_PER_ENTRY, RemainingLength);
+
+            //
+            // The DesignWare MSHC cannot run one descriptor across a 128 MiB
+            // boundary of the system address (Linux sdhci-of-dwcmshc.c,
+            // BOUNDARY_OK and dwcmshc_adma_write_desc, used for the RK35xx
+            // and RK3576 controllers). The HAL merges physically adjacent
+            // pages into one scatter/gather element, so such an element
+            // happens whenever a buffer's pages run contiguously across a
+            // 128 MiB-aligned address. End the descriptor at the boundary
+            // and start the next one there.
+            //
+
+            {
+                ULONGLONG ToBoundary =
+                    SDHC_DMA_BOUNDARY -
+                    ((ULONGLONG) NextAddress.QuadPart & (SDHC_DMA_BOUNDARY - 1));
+
+                if (NextLength > ToBoundary) {
+                    NextLength = (ULONG) ToBoundary;
+                }
+            }
+
             RemainingLength -= NextLength;
 
             //
