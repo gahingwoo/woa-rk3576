@@ -55,6 +55,7 @@ edk2-rk3576 newer than 0.4.1 (its `ci` build until the next release).
 | WiFi | not working | not working | none |
 | NPU | not available | works with [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) | rknpu |
 | Video decoder (VDPU383) | not tried | hardware decoder works with vdpu383test (H.264 conformance streams match FFmpeg, 2026-11-24); players not yet ([video decode](docs/dev/video-decode.md)) | vdpu383 |
+| RTC, PMIC, pin controller, UART2 | no driver needed | no driver needed; named, no yellow mark (2026-11-24 on the TaishanPi 3M; UART2 no longer declared there) | [null](drivers/null) |
 
 Each result is from one board. Most of the CM5-IO column was seen on
 2026-10-01. Details per feature: [features](docs/features.md).

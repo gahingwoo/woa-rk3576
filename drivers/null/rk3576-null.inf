@@ -1,0 +1,66 @@
+;
+; rk3576-null.inf - names the RK3576 ACPI devices that Windows needs no
+; driver for, and installs them with no driver.
+;
+; Without an INF, Windows lists each of these as an unknown device with a
+; yellow mark (problem code 28). With this one it installs them in raw mode
+; with no function driver ("AddService = ,2" with no service name, the
+; documented null-driver install), under System devices, with a name that
+; says why. Nothing is loaded, no register is touched, and the devices'
+; resources are only recorded.
+;
+;   ACPI\HYMB0001  \_SB.I2C2.RTC0  HYM8563 RTC. Windows keeps time through
+;                  the UEFI runtime GetTime/SetTime, which the firmware
+;                  serves from this chip; a Windows driver talking to it
+;                  over I2C would race the firmware.
+;   ACPI\RKCP0806  \_SB.I2C1.PMC0  RK806 PMIC. The firmware sets the rails
+;                  and handles power-off (Rk806I2cPowerOffDxe). edk2-rk3576
+;                  gives it this _HID (with _CID PRP0001) from 2026-11-24;
+;                  older firmware names it PRP0001, which this INF does not
+;                  match on purpose: PRP0001 is generic.
+;   ACPI\RKCP3005  \_SB.PINC       pin controller (IOC). The firmware sets
+;                  the pins Windows drivers rely on. Same firmware note.
+;   ACPI\HISI0031  \_SB.UAR2       UART2, a DesignWare UART that inbox
+;                  serial.sys cannot drive (32-bit registers). Declared on
+;                  the CM5-IO; the TaishanPi 3M firmware no longer declares
+;                  it from 2026-11-24.
+;
+; Install: stage it (pnputil /add-driver rk3576-null.inf, no /install),
+; then tools\null-devices-reinstall.ps1 as SYSTEM, then restart. See
+; README.md in this directory.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = 11/24/2026,1.0.0.0
+CatalogFile = rk3576-null.cat
+PnpLockdown = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%HYM8563.DeviceDesc% = Null_Inst, ACPI\HYMB0001
+%RK806.DeviceDesc%   = Null_Inst, ACPI\RKCP0806
+%PINC.DeviceDesc%    = Null_Inst, ACPI\RKCP3005
+%UART2.DeviceDesc%   = Null_Inst, ACPI\HISI0031
+
+[Null_Inst.NT]
+; nothing to copy, nothing to register
+
+[Null_Inst.NT.Services]
+AddService = , %SPSVCINST_ASSOCSERVICE%
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ProviderName       = "woa-rk3576"
+HYM8563.DeviceDesc = "HYM8563 real-time clock (not used by Windows)"
+RK806.DeviceDesc   = "RK806 power management IC (managed by the firmware)"
+PINC.DeviceDesc    = "RK3576 pin controller (managed by the firmware)"
+UART2.DeviceDesc   = "RK3576 UART2 (no Windows driver)"
