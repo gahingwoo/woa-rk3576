@@ -8,8 +8,11 @@ Status on 2026-11-24:
   HCI link to the in-box BthMini; how is in its README.
 - Bluetooth on the CM5-IO: not written. Its module is a different chip on
   UART4.
-- Wi-Fi: not working on either board, and nothing is built. The assessment
-  below still holds.
+- Wi-Fi: not working on either board. For the TaishanPi 3M a driver is in
+  progress (branch `tspi3m-wifi-driver`, not run on a board yet); the plan
+  is [wifi.md](wifi.md). For the CM5-IO nothing is built. The assessment
+  below is the view of 2026-11-21; for the TaishanPi 3M, wifi.md
+  replaces its verdict.
 
 The assessment as written on 2026-11-21, before Bluetooth worked, is in
 [history](../history/2026-11-21-wireless-assessment.md); its Bluetooth plan

@@ -1,7 +1,11 @@
 # Wi-Fi on the TaishanPi 3M (plan and status)
 
-Status, 2026-11-22: W1 (firmware) and W2 (SD host side) are written and
-build. **Neither has been run on a board.** W3 to W6 are not started.
+Status, 2026-11-24: W1 (firmware) is on edk2-rk3576 `main`; W2 (SD host
+side) and W3 (the bring-up driver, `drivers/net/bcmwlsdio`) are written and
+build, on branch `tspi3m-wifi-driver`. **None of them has been run on a
+board.** The design from W3 on, the driver model (Ethernet-style adapter
+first, then WiFiCx) and the W2/W3 board session are in
+[docs/dev/wifi.md](dev/wifi.md), which replaces the W3 to W7 plan below.
 
 This page replaces the "do not start it" verdict in [WIRELESS.md](history/2026-11-21-wireless-assessment.md)
 for one board, the TaishanPi 3M. The estimate there was for a complete WiFiCx
@@ -168,45 +172,11 @@ Board test (full Windows on the eMMC, firmware from W1 with the option on):
    not answer under Windows although it did in W1 (clock, pins or the REG_ON
    cycle); `CmdErrors` > 0 gives `LastErrorRintsts` and `LastCmd`.
 
-### W3: firmware download, chip alive
+### W3 and later
 
-New KMDF driver `drivers/net/bcmwlsdio`, binding the hardware ID from W2,
-default disabled by a registry DWORD `Enable` = 0 under its service
-`Parameters`. Steps, following bwfm and brcmfmac: block sizes for F1 (64) and
-F2 (512), F2 watermark, ALP then HT clock, find the ARM CR4 and SOCRAM cores
-in the backplane, hold the ARM in reset, write `brcmfmac43456-sdio.bin` to RAM
-by CMD53, write the NVRAM at the top of RAM with its length token, release
-the ARM, wait for HT and `F2 ready`, upload the CLM blob (`clmload`), read
-`ver`.
-
-Board test: `install-firmware.ps1` fetches the three files; set `Enable` = 1;
-restart. Pass: breadcrumb `FwState` reaches "running" and `FwVersion` holds
-the firmware's `ver` string (for example "wl0: ... version 7.45.x"). Fail:
-`FwState` gives the last step reached.
-
-### W4: scan
-
-`escan` on all channels, results from the `E_ESCAN_RESULT` events. Board
-test: with `Enable` = 2 (scan only), the driver writes the strongest five
-SSIDs with channel and RSSI to the registry. Pass: the home network is in the
-list.
-
-### W5: WPA2 connect
-
-Join with the in-firmware supplicant (`sup_wpa` 1, `wsec` AES, `wpa_auth`
-WPA2-PSK, `wsec_pmk` from the passphrase, `C_SET_SSID`), SSID and passphrase
-from the registry. Board test: pass is `E_SET_SSID` success and
-`E_PSK_SUP` "keyed" in the breadcrumbs, and the access point lists the
-board's MAC.
-
-### W6: data path
-
-NDIS 6 Ethernet miniport over BCDC: TX with the BCDC header and firmware
-credits, RX from F2 on the card interrupt. Board test: the adapter gets a
-DHCP lease, `ping` to the gateway, then a 100 MB download (a sustained
-3 to 5 MB/s is a fair first target at 50 MHz, 4-bit).
-
-### W7 and later
-
-WiFiCx, so Windows' own Wi-Fi UI and profiles work; UHS SDR104 with tuning
-(the bus is capped at 50 MHz until then); out-of-band HOST_WAKE; power save.
+Moved to [docs/dev/wifi.md](dev/wifi.md#stages). The stages there are W3
+(SDIO access, chip identification, firmware download; code done), W4
+(control channel and events, interrupt driven, scan), W5 (WPA2-PSK
+connect and the data path, as an Ethernet-style adapter) and W6 (WiFiCx,
+so that Windows' own Wi-Fi settings work). The data path that was W6 here
+is part of W5 there, and W7 here is W6 there.
