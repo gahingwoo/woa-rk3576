@@ -613,7 +613,9 @@ jobs:
   # wants it without logging in to download Actions artifacts). A
   # pre-release, never "latest", replaced by every successful build, its
   # notes saying it is untested. The image is named as the releases name it
-  # (woa-rk3576-winpe-<tag>.img.xz) with "ci-<sha>" as the tag part.
+  # (woa-rk3576-winpe-<tag>.img.xz) with "ci-<sha>" as the tag part. The
+  # release also carries ci.yml's rk3576-tools-arm64.zip; ci-release.sh
+  # replaces only this job's files and never deletes the release.
   ci-release:
     name: Rolling "ci" release
     needs: image
@@ -621,28 +623,25 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # ci.yml's tools-release writes to the same release.
+    concurrency:
+      group: woa-ci-release
+      cancel-in-progress: false
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
       - uses: actions/download-artifact@v4
         with:
           name: winpe-arm64-${{ env.ADK_BUILD }}-img
           path: img
-      - name: Image and checksums
+      - name: Image
         run: |
           set -eu
-          sha=${GITHUB_SHA::7}
           mkdir rel
-          xz -T0 -6 -c img/winpe.img > "rel/woa-rk3576-winpe-ci-${sha}.img.xz"
-          (cd rel && sha256sum -- * > SHA256SUMS.txt)
-          cat rel/SHA256SUMS.txt
-      - name: Replace the ci release
+          xz -T0 -6 -c img/winpe.img > "rel/woa-rk3576-winpe-ci-${GITHUB_SHA::7}.img.xz"
+          ls -la rel
+      - name: Update the ci release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          sha=${GITHUB_SHA::7}
-          date=$(date -u +%Y-%m-%d)
-          printf '%s\n' "Built from ${GITHUB_SHA} on ${date} by the WinPE workflow on main." "" \
-            "Untested: this image has not been run on a board. Every successful build of main replaces this release." > notes.md
-          gh release delete ci --yes --cleanup-tag -R "$GITHUB_REPOSITORY" || true
-          gh release create ci rel/* -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
-            --title "CI build ${sha} ${date}" --notes-file notes.md
+        run: .github/scripts/ci-release.sh '^woa-rk3576-winpe-ci-.*\.img\.xz$' rel/*
