@@ -95,8 +95,10 @@ for whoever does U4/U5 (or for a `video-decode` branch from `hpd-edge`):
    the fence from the interrupt, and on timeout performs `V383IpReset`.
 4. **IOMMU.** The decoder's IOMMU (`rockchip,rk3568-iommu`, at +0x800 and
    +0x900) is the same kind as the VOP2's: the scanout.c table code gains a
-   third client. The bring-up driver runs with paging off, so V2 results do
-   not depend on it.
+   third client. The bring-up driver ran with paging off until branch
+   `vdpu383-iommu`, which runs it with its own tables (vdpu383 README,
+   section 6): physically contiguous multi-MiB buffers could not be had on
+   the board. That table code (driver.c, IOMMU section) is what V3b moves.
 
 ## Encode: scope only
 
@@ -158,7 +160,7 @@ Pass: both boot as before; Device Manager has no new device.
 
 Pass: `LastStep` is `D0Entry: done`, `Version` non-zero and equal to the
 firmware's `version=`, `RegsPa` 0x27b00000; `vdpu383test info` prints the
-same version and both IOMMUs with paging off.
+same version and both IOMMUs with paging on (off with `Iommu` 0).
 
 Send back: both outputs, and the serial log if the firmware line is
 missing.

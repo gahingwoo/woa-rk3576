@@ -122,6 +122,7 @@ static const char *run_result_name(unsigned r)
     case VDPU383_RUN_HW_ERROR: return "HW-ERROR";
     case VDPU383_RUN_BAD_ADDRESS: return "BAD-ADDRESS";
     case VDPU383_RUN_BUSY: return "BUSY";
+    case VDPU383_RUN_MMU_FAULT: return "MMU-FAULT";
     default: return "?";
     }
 }
@@ -170,6 +171,11 @@ static int cmd_info(void)
     printf("IOMMU last fault    status 0x%08x/0x%08x addr 0x%08x/0x%08x\n",
            in.mmu_last_status[0], in.mmu_last_status[1], in.mmu_last_fault_addr[0], in.mmu_last_fault_addr[1]);
     printf("runs %u, timeouts %u\n", in.runs, in.timeouts);
+    if (in.interface_version >= 2)
+        printf("buffers             %s (Iommu setting %u); directory 0x%08x, %u pages mapped, "
+               "%u IOMMU faults, paging programmed %u times, %u failed allocations\n",
+               in.iommu ? "IO addresses, IOMMU paging on" : "physical, contiguous", in.iommu_setting,
+               in.iommu_dt_dma, in.iova_pages, in.mmu_faults, in.mmu_enables, in.alloc_failures);
     printf("warm-up at D0 entry: ran %u timed_out %u irq 0x%08x status 0x%08x (", in.warmup.ran,
            in.warmup.timed_out, in.warmup.irq, in.warmup.status);
     print_status_bits(in.warmup.status & 0xFFFF);
@@ -578,6 +584,8 @@ static int decode_cb(void *ctx, const H264Picture *pic)
         if (out.result == VDPU383_RUN_BAD_ADDRESS)
             printf("    rejected: register %u = 0x%08x is not in a buffer of this process\n",
                    out.bad_reg, out.bad_reg < V383_NUM_REGS ? in->regs[out.bad_reg] : 0);
+        if (out.result == VDPU383_RUN_MMU_FAULT)
+            printf("    IOMMU fault at IO address 0x%08x\n", out.bad_reg);
         printf("    mmu status 0x%08x/0x%08x rawstat 0x%08x/0x%08x reset_status 0x%08x\n",
                out.mmu_status[0], out.mmu_status[1], out.mmu_int_rawstat[0], out.mmu_int_rawstat[1],
                out.reset_status);
@@ -808,6 +816,8 @@ static int decode_cb_hevc(void *ctx, const HevcPicture *pic)
         if (out.result == VDPU383_RUN_BAD_ADDRESS)
             printf("    rejected: register %u = 0x%08x is not in a buffer of this process\n",
                    out.bad_reg, out.bad_reg < V383_NUM_REGS ? in->regs[out.bad_reg] : 0);
+        if (out.result == VDPU383_RUN_MMU_FAULT)
+            printf("    IOMMU fault at IO address 0x%08x\n", out.bad_reg);
         printf("    mmu status 0x%08x/0x%08x rawstat 0x%08x/0x%08x reset_status 0x%08x\n",
                out.mmu_status[0], out.mmu_status[1], out.mmu_int_rawstat[0], out.mmu_int_rawstat[1],
                out.reset_status);

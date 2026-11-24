@@ -48,7 +48,7 @@ SSDT with the device.
 | Default reference lists P/B0/B1 from DXVA_PicParams_H264 | H.264 8.2.4.2, as mainline hands them to the hardware | written fresh |
 | profile_idc, seq_parameter_set_id, constraint_set3_flag | not in DXVA | the tool passes the real ones; `--dxva-only` passes guesses, to find out whether the hardware cares |
 | DXVA_Qmatrix_H264 in zig-zag order | the DXVA spec as FFmpeg's dxva2_h264.c reads it | not checked against a Windows decoder |
-| IOMMU left with paging off, so decoder addresses are physical | rockchip-iommu.c semantics | guessed safe; mainline runs with paging on |
+| IOMMU paging on with the driver's own v2 tables (one directory for both instances +0x800/+0x900, 4 KiB pages, 32-bit IO addresses from 16 MiB up, SRAM and warm-up buffer at their physical addresses); enable/disable/fault sequences of rk_iommu_enable/disable/irq, no FORCE_RESET (rockchip,disable-mmu-reset); paging restored after every IP reset and decode error | mainline rockchip-iommu.c (rk3576.dtsi: "rockchip,rk3576-iommu", "rockchip,rk3568-iommu" = v2), rkvdec.c rkvdec_iommu_restore(), rkvdec-rcb.c; the VOP2 scan-out of wddm-mali-g52 runs the same IOMMU type with the same entry format on the board | ported, not run on the board yet. Device Parameters `Iommu` 0 gives the old path (paging off, physical addresses, contiguous buffers below 4 GiB), which failed for 4 MiB surfaces with error 1450 on 2026-11-25 |
 | Buffers write-combined (Normal non-cacheable) for a non-coherent device | | guessed |
 | Field pictures (PAFF), FMO, 4:2:2, 10 bit, MVC | | not supported; MBAFF frames pass through untested |
 
@@ -71,12 +71,15 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters"
 | `CacheCfgPowerOn`, `CacheMaxReadsPowerOn` | the read cache before the driver set it |
 | `WarmupIrq`, `WarmupStatus`, `WarmupTimedOut` | the last warm-up, at D0 entry or from the tool |
 | `FirstRunResult`, `FirstRunStatus` | the first decode of the session (0 = ok) |
+| `IommuSetting`, `IommuOn`, `MmuDte0`, `MmuEnableStatus0/1` | the `Iommu` setting read, whether paging came on at D0 entry (1) or the driver fell back to physical addresses (0), the directory register and both statuses after enabling (bit 0 = paging) |
+| `LastMmuFaultAddr` | the IO address of the last decode failed with an IOMMU fault |
 
-One setting, a DWORD in the same key, read at each start of the device:
+Settings, DWORDs in the same key, read at each start of the device:
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `WarmupAtD0` | 0 | 1: run the vendor kernel's warm-up decode at every D0 entry, as the vendor kernel does at probe and resume |
+| `Iommu` | 1 | 1: buffers are any pages, mapped through the decoder's IOMMU, and `dma` is an IO address. 0: the old path, physically contiguous buffers below 4 GiB, paging off. Takes effect at the next start of the device (disable/enable or reboot) |
 
 ## Test plan
 
@@ -135,7 +138,7 @@ vdpu383test info
 Expected (from the vendor code, not measured):
 
 - `version register` non-zero, the same as the firmware's `version=` line
-- both IOMMU instances `paging off`
+- both IOMMU instances `paging ON` with the same `dte` (`paging off` with Device Parameters `Iommu` 0, and with drivers before branch `vdpu383-iommu`)
 - `warm-up at D0 entry: not run` (the default, `WarmupAtD0` 0)
 
 Then `vdpu383test warmup` (through the link registers, with interrupts
@@ -215,13 +218,17 @@ Send back on failure, for the first stream that fails:
    output for the first picture that differs
 4. `vdpu383test info` after the failure
 
-### 5. HEVC Main conformance (not run yet)
+### 5. HEVC Main conformance
 
 Streams: FFmpeg's fate-suite copies of the JCT-VC conformance streams,
 `https://fate-suite.ffmpeg.org/hevc-conformance/NAME.bit`, the 75 8-bit 4:2:0
 ones listed in [hevc-conformance.txt](../../../tools/vdpu383test/hevc-conformance.txt)
 with the frame count and the MD5 of FFmpeg 6.1.1's I420 output for each
-(made 2026-11-25). On Linux every one of them goes through the parser and
+(made 2026-11-25, `-flags unaligned` as in fate: CONFWIN_A_Sony_1's
+reference was first made without it, 414 wide, and is corrected). Board
+2026-11-25 with the contiguous buffers: 60/75 MATCH, 0 hardware errors;
+the 14 large or 4 MiB-stream ones failed to allocate (error 1450) before
+picture 0, and CONFWIN_A_Sony_1's output is the corrected reference's. On Linux every one of them goes through the parser and
 the register builder with `--null`: FFmpeg's frame count, and every
 picture's reference sets derived from its slice headers (as the decoder
 derives them) equal to DXVA's, with the SPS's sets and with the table
@@ -250,6 +257,49 @@ Send back on failure: `hevc-results\hevc-results.txt` and the first failing
 stream's `NAME.txt`, then `vdpu383test decode NAME.bit --frame-md5 --regs -n 4 > win.txt`
 and `vdpu383test info`. FFmpeg's per-frame MD5s for comparing `--frame-md5`
 are in the streams folder of the bundle (`framemd5\NAME.framemd5`).
+
+### 6. IOMMU buffers (branch `vdpu383-iommu`)
+
+The driver of that branch maps every buffer through the decoder's IOMMU.
+Install it staged, not hot: add it to the driver store, mark the device for
+reinstall, reboot. As administrator, from the WinPE workflow run's
+`woa-drivers-signed-arm64` (`woa-drivers\vdpu383\`, `woa-drivers\signer.cer`,
+`woa-tools\vdpu383test.exe`; the CI workflow's `rk3576-woa-vdpu383-arm64` is
+unsigned). The test certificate changes with every run, so import this
+run's:
+
+```
+certutil -addstore -f Root signer.cer
+certutil -addstore -f TrustedPublisher signer.cer
+pnputil /add-driver vdpu383\vdpu383.inf
+reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0" /v ConfigFlags /t REG_DWORD /d 0x20 /f
+shutdown /r /t 0
+```
+
+(Without a `signer.cer`, export the certificate from the `.cat`:
+Properties, *Digital Signatures*, *Details*, *View Certificate*, *Copy to
+File*.) After the reboot `pnputil /enum-devices /instanceid "ACPI\RKCP0383\0" /drivers`
+shows the new driver version, and `vdpu383test info` ends with
+`buffers IO addresses, IOMMU paging on`, both IOMMU lines say `paging ON`
+with the same `dte`.
+
+Then, in this order:
+
+1. `vdpu383test warmup` and `vdpu383test warmup-direct`: as before (the
+   warm-up buffer is mapped at its physical address).
+2. The six H.264 streams of section 4: all MATCH.
+3. `hevc-conformance.ps1` with all 75 streams, then `-DxvaOnly`: 75 MATCH
+   expected (NUT_A_ericsson_5 and RPS_D_ericsson_6 may differ, see the
+   list). `vdpu383test info` afterwards: `0 IOMMU faults`, `0 failed
+   allocations`, and `pages mapped` back to the SRAM's and warm-up
+   buffer's 122.
+4. Fallback: `reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters" /v Iommu /t REG_DWORD /d 0 /f`,
+   reboot, `vdpu383test info` says `physical, contiguous`, and BA1_Sony_D
+   still MATCHes. Delete the value afterwards.
+
+A decode that faults prints `MMU-FAULT` and `IOMMU fault at IO address
+0x...`, the next decode runs normally. Send back on failure: `vdpu383test
+info`, the failing stream's `NAME.txt`, and the Device Parameters key.
 
 ### Linux reference capture
 

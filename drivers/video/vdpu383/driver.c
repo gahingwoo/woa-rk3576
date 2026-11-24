@@ -19,9 +19,17 @@
  * interrupt is acknowledged. The warm-up decode at D0 entry is the vendor
  * kernel's (warmup.c), and runs only when the Device Parameters value
  * WarmupAtD0 is 1 (default 0: the first board test reads registers and
- * nothing more; `vdpu383test warmup` runs it on demand). The IOMMU is left with paging off, or turned off if
- * it is found on, so the decoder's addresses are physical; buffers are
- * therefore allocated below 4 GiB.
+ * nothing more; `vdpu383test warmup` runs it on demand).
+ *
+ * The decoder's own IOMMU is run with paging on and this driver's page
+ * tables (Device Parameters Iommu, default 1): a buffer is any pages of
+ * DRAM, mapped at a free run of 32-bit IO addresses, and the address the
+ * caller is given (VDPU383_ALLOC_OUT.dma) is that IO address. Physically
+ * contiguous buffers of several MiB could not be had on a running system.
+ * The SRAM and the warm-up buffer are mapped at their physical addresses.
+ * An IOMMU page fault fails the decode (VDPU383_RUN_MMU_FAULT) and resets
+ * the core. Iommu 0, or paging that does not come on, gives the old path:
+ * paging off, physical addresses, contiguous buffers below 4 GiB.
  *
  * Only administrators and SYSTEM can open the device, and one handle at a
  * time. Every address register of a decode is checked against the
@@ -44,6 +52,8 @@ EVT_WDF_DEVICE_D0_EXIT_PRE_INTERRUPTS_DISABLED V383EvtD0ExitPreInterrupts;
 EVT_WDF_INTERRUPT_ISR V383EvtDecIsr;
 EVT_WDF_INTERRUPT_DPC V383EvtDecDpc;
 EVT_WDF_INTERRUPT_ISR V383EvtMmuIsr;
+EVT_WDF_INTERRUPT_DPC V383EvtMmuDpc;
+EVT_WDF_OBJECT_CONTEXT_CLEANUP V383EvtDeviceCleanup;
 EVT_WDF_IO_IN_CALLER_CONTEXT V383EvtIoInCallerContext;
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL V383EvtIoDeviceControl;
 EVT_WDF_FILE_CLEANUP V383EvtFileCleanup;
@@ -135,6 +145,44 @@ V383Setting(_In_ PDEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Default)
 
 /* ------------------------------------------------------------ IOMMU */
 
+/*
+ * The decoder's IOMMU: two instances (+0x800, +0x900) that are given the
+ * same directory, as mainline gives them one domain. RK3576 has the v2
+ * format ("rockchip,rk3576-iommu", "rockchip,rk3568-iommu": 40-bit page
+ * addresses in 32-bit entries). Sequences follow rockchip-iommu.c
+ * (rk_iommu_enable(), rk_iommu_disable(), rk_iommu_irq()); there is no
+ * FORCE_RESET, because the node has rockchip,disable-mmu-reset. The tables
+ * are this driver's own, not the OS's: Windows does not know the IOMMU.
+ */
+static const ULONG V383MmuBase[2] = { V383_MMU0_OFFSET, V383_MMU1_OFFSET };
+
+#define V383_DTE_VALID      0x1
+#define V383_PTE_RW_VALID   0x7     /* writable, readable, valid */
+
+/* rk_mk_dte_v2() / rk_mk_pte_v2(): address bits 31:12 in place, 35:32 in
+ * 11:8, 39:36 in 7:4 */
+static __forceinline ULONG
+V383MmuEntry(_In_ ULONG64 Pa, _In_ ULONG Flags)
+{
+    return (ULONG)(Pa & 0xFFFFF000u) | (((ULONG)(Pa >> 32) & 0xF) << 8) |
+           (((ULONG)(Pa >> 36) & 0xF) << 4) | Flags;
+}
+
+static BOOLEAN
+V383MmuWaitBase(_In_ PDEVICE_CONTEXT Ctx, _In_ ULONG Base, _In_ ULONG Mask, _In_ ULONG Want)
+{
+    ULONG i;
+
+    for (i = 0; i < 1000; i++) {
+        if ((V383Rd(Ctx, Base + RK_MMU_STATUS) & Mask) == Want)
+            return TRUE;
+        KeStallExecutionProcessor(1);
+    }
+    return FALSE;
+}
+
+/* rk_iommu_disable() for one instance, if it has paging on. Used with the
+ * IOMMU setting 0 at D0 entry, and at D0 exit with paging on. */
 static VOID
 V383MmuPagingOff(
     _In_ PDEVICE_CONTEXT Ctx,
@@ -142,21 +190,300 @@ V383MmuPagingOff(
     )
 {
     ULONG st = V383Rd(Ctx, Base + RK_MMU_STATUS);
-    ULONG i;
 
     if (!(st & RK_MMU_STATUS_PAGING))
         return;
 
-    /* rk_iommu_disable(): stall, paging off, unstall */
     V383_LOG("IOMMU at +0x%x has paging on (status 0x%08x); turning it off", Base, st);
+    if (st & RK_MMU_STATUS_FAULT)
+        V383Wr(Ctx, Base + RK_MMU_COMMAND, RK_MMU_CMD_PAGE_FAULT_DONE);
     V383Wr(Ctx, Base + RK_MMU_COMMAND, RK_MMU_CMD_ENABLE_STALL);
-    for (i = 0; i < 1000 && !(V383Rd(Ctx, Base + RK_MMU_STATUS) & RK_MMU_STATUS_STALL); i++)
-        KeStallExecutionProcessor(1);
+    (VOID)V383MmuWaitBase(Ctx, Base, RK_MMU_STATUS_STALL, RK_MMU_STATUS_STALL);
     V383Wr(Ctx, Base + RK_MMU_COMMAND, RK_MMU_CMD_DISABLE_PAGING);
-    for (i = 0; i < 1000 && (V383Rd(Ctx, Base + RK_MMU_STATUS) & RK_MMU_STATUS_PAGING); i++)
-        KeStallExecutionProcessor(1);
+    (VOID)V383MmuWaitBase(Ctx, Base, RK_MMU_STATUS_PAGING, 0);
+    V383Wr(Ctx, Base + RK_MMU_INT_MASK, 0);
     V383Wr(Ctx, Base + RK_MMU_COMMAND, RK_MMU_CMD_DISABLE_STALL);
     V383_LOG("IOMMU at +0x%x: status now 0x%08x", Base, V383Rd(Ctx, Base + RK_MMU_STATUS));
+}
+
+/*
+ * rk_iommu_enable(): stall (only possible with paging on), directory,
+ * TLB zap, fault interrupts on, the "iommu blocked" workaround bit, paging
+ * on, unstall. At D0 entry, after an IP reset (which resets the IOMMU with
+ * the core; mainline's rkvdec_iommu_restore()), and before a decode if
+ * paging is found off. TRUE if both instances have paging on. MmuLock held.
+ */
+static BOOLEAN
+V383MmuEnable(
+    _In_ PDEVICE_CONTEXT Ctx
+    )
+{
+    ULONG dte = V383MmuEntry((ULONG64)Ctx->DtPa.QuadPart, V383_DTE_VALID);
+    BOOLEAN ok = TRUE;
+    ULONG i, st;
+
+    KeMemoryBarrier();
+    __dsb(_ARM64_BARRIER_SY);          /* table writes (non-cached) before the walk */
+    for (i = 0; i < 2; i++) {
+        ULONG b = V383MmuBase[i];
+
+        st = V383Rd(Ctx, b + RK_MMU_STATUS);
+        if (st & RK_MMU_STATUS_PAGING) {
+            if (st & RK_MMU_STATUS_FAULT)
+                V383Wr(Ctx, b + RK_MMU_COMMAND, RK_MMU_CMD_PAGE_FAULT_DONE);
+            V383Wr(Ctx, b + RK_MMU_COMMAND, RK_MMU_CMD_ENABLE_STALL);
+            if (!V383MmuWaitBase(Ctx, b, RK_MMU_STATUS_STALL, RK_MMU_STATUS_STALL))
+                V383_LOG("IOMMU +0x%x: stall timed out, status 0x%08x", b, V383Rd(Ctx, b + RK_MMU_STATUS));
+        }
+        V383Wr(Ctx, b + RK_MMU_DTE_ADDR, dte);
+        V383Wr(Ctx, b + RK_MMU_COMMAND, RK_MMU_CMD_ZAP_CACHE);
+        V383Wr(Ctx, b + RK_MMU_INT_CLEAR, RK_MMU_IRQ_MASK);
+        V383Wr(Ctx, b + RK_MMU_INT_MASK, RK_MMU_IRQ_MASK);
+        V383Wr(Ctx, b + RK_MMU_AUTO_GATING,
+               V383Rd(Ctx, b + RK_MMU_AUTO_GATING) | RK_MMU_AUTO_GATING_DISABLE_FETCH_DTE_TIME_LIMIT);
+    }
+    for (i = 0; i < 2; i++) {
+        ULONG b = V383MmuBase[i];
+
+        if (!(V383Rd(Ctx, b + RK_MMU_STATUS) & RK_MMU_STATUS_PAGING))
+            V383Wr(Ctx, b + RK_MMU_COMMAND, RK_MMU_CMD_ENABLE_PAGING);
+        if (!V383MmuWaitBase(Ctx, b, RK_MMU_STATUS_PAGING, RK_MMU_STATUS_PAGING)) {
+            V383_LOG("IOMMU +0x%x: paging did not come on, status 0x%08x dte 0x%08x (wrote 0x%08x)", b,
+                     V383Rd(Ctx, b + RK_MMU_STATUS), V383Rd(Ctx, b + RK_MMU_DTE_ADDR), dte);
+            ok = FALSE;
+        }
+    }
+    for (i = 0; i < 2; i++) {
+        ULONG b = V383MmuBase[i];
+
+        if (V383Rd(Ctx, b + RK_MMU_STATUS) & RK_MMU_STATUS_STALL) {
+            V383Wr(Ctx, b + RK_MMU_COMMAND, RK_MMU_CMD_DISABLE_STALL);
+            (VOID)V383MmuWaitBase(Ctx, b, RK_MMU_STATUS_STALL, 0);
+        }
+    }
+    Ctx->MmuEnables++;
+    return ok;
+}
+
+/* TLB shoot-down after the tables changed. MmuLock held. */
+static VOID
+V383MmuZap(
+    _In_ PDEVICE_CONTEXT Ctx
+    )
+{
+    KeMemoryBarrier();
+    __dsb(_ARM64_BARRIER_SY);
+    if (!Ctx->MmuLive)
+        return;
+    V383Wr(Ctx, V383_MMU0_OFFSET + RK_MMU_COMMAND, RK_MMU_CMD_ZAP_CACHE);
+    V383Wr(Ctx, V383_MMU1_OFFSET + RK_MMU_COMMAND, RK_MMU_CMD_ZAP_CACHE);
+}
+
+/* One page, non-cached, below 4 GiB (v2 could take 40 bits; the VOP2's
+ * tables, the same IOMMU, are below 4 GiB and work). */
+static PVOID
+V383TablePage(
+    _Out_ PHYSICAL_ADDRESS *Pa
+    )
+{
+    PHYSICAL_ADDRESS low, high, skip;
+    PVOID va;
+
+    low.QuadPart = 0;
+    high.QuadPart = 0xFFFFFFFF;
+    skip.QuadPart = 0;
+    va = MmAllocateContiguousNodeMemory(PAGE_SIZE, low, high, skip, PAGE_READWRITE | PAGE_NOCACHE,
+                                        MM_ANY_NODE_OK);
+    if (va) {
+        RtlZeroMemory(va, PAGE_SIZE);
+        *Pa = MmGetPhysicalAddress(va);
+    } else {
+        Pa->QuadPart = 0;
+    }
+    return va;
+}
+
+/* The page table for an IO address, made and entered in the directory on
+ * first use. MmuLock held. */
+static PULONG
+V383MmuPt(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _In_ ULONG Iova
+    )
+{
+    ULONG d = Iova >> 22;
+    PHYSICAL_ADDRESS pa;
+
+    if (!Ctx->PtVa[d]) {
+        Ctx->PtVa[d] = (PULONG)V383TablePage(&pa);
+        if (!Ctx->PtVa[d])
+            return NULL;
+        Ctx->PtPa[d] = (ULONG64)pa.QuadPart;
+        Ctx->Dt[d] = V383MmuEntry(Ctx->PtPa[d], V383_DTE_VALID);
+    }
+    return Ctx->PtVa[d];
+}
+
+/* Entries for Pages pages from Iova on cleared. MmuLock held. */
+static VOID
+V383MmuClear(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _In_ ULONG Iova,
+    _In_ ULONG Pages
+    )
+{
+    ULONG i;
+
+    for (i = 0; i < Pages; i++) {
+        ULONG va = Iova + (i << PAGE_SHIFT);
+        PULONG pt = Ctx->PtVa[va >> 22];
+
+        if (pt && (pt[(va >> PAGE_SHIFT) & 0x3FF] & 1)) {
+            pt[(va >> PAGE_SHIFT) & 0x3FF] = 0;
+            Ctx->IovaPagesMapped--;
+        }
+    }
+}
+
+/* Pages pages entered from Iova on: page i at physical Pfns[i], or at
+ * Pa + i pages when Pfns is NULL. All or nothing. MmuLock held. */
+static NTSTATUS
+V383MmuEnter(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _In_ ULONG Iova,
+    _In_opt_ PPFN_NUMBER Pfns,
+    _In_ ULONG64 Pa,
+    _In_ ULONG Pages
+    )
+{
+    ULONG i;
+
+    for (i = 0; i < Pages; i++) {
+        ULONG va = Iova + (i << PAGE_SHIFT);
+        ULONG64 pa = Pfns ? ((ULONG64)Pfns[i] << PAGE_SHIFT) : Pa + ((ULONG64)i << PAGE_SHIFT);
+        PULONG pt = V383MmuPt(Ctx, va);
+
+        if (!pt || pa >= (1ull << 40)) {
+            V383MmuClear(Ctx, Iova, i);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        pt[(va >> PAGE_SHIFT) & 0x3FF] = V383MmuEntry(pa, V383_PTE_RW_VALID);
+        Ctx->IovaPagesMapped++;
+    }
+    return STATUS_SUCCESS;
+}
+
+/* A free run of IO addresses; 0 if there is none. Allocation goes on from
+ * where the last one ended, so a freed range is not handed out again at
+ * once (a stale address faults instead of hitting the next buffer).
+ * MmuLock held. */
+static ULONG
+V383IovaAlloc(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _In_ ULONG Pages
+    )
+{
+    ULONG idx = RtlFindClearBitsAndSet(&Ctx->IovaMap, Pages, Ctx->IovaHint);
+
+    if (idx == 0xFFFFFFFF)
+        return 0;
+    Ctx->IovaHint = (idx + Pages) % V383_IOVA_PAGES;
+    return idx << PAGE_SHIFT;
+}
+
+/* Pa..Pa+Size at the same IO address (the SRAM, the warm-up buffer): the
+ * register values the decoder is given for them stay what they were. */
+static NTSTATUS
+V383MmuIdentityMap(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _In_ ULONG64 Pa,
+    _In_ SIZE_T Size
+    )
+{
+    ULONG first, pages;
+    NTSTATUS status;
+
+    if ((Pa & (PAGE_SIZE - 1)) || Size == 0 || Pa + Size > 0x100000000ull || Pa < V383_IOVA_FIRST)
+        return STATUS_INVALID_PARAMETER;
+    first = (ULONG)(Pa >> PAGE_SHIFT);
+    pages = (ULONG)((Size + PAGE_SIZE - 1) >> PAGE_SHIFT);
+    ExAcquireFastMutex(&Ctx->MmuLock);
+    if (!RtlAreBitsClear(&Ctx->IovaMap, first, pages)) {
+        ExReleaseFastMutex(&Ctx->MmuLock);
+        return STATUS_CONFLICTING_ADDRESSES;
+    }
+    RtlSetBits(&Ctx->IovaMap, first, pages);
+    status = V383MmuEnter(Ctx, (ULONG)Pa, NULL, Pa, pages);
+    if (!NT_SUCCESS(status))
+        RtlClearBits(&Ctx->IovaMap, first, pages);
+    V383MmuZap(Ctx);
+    ExReleaseFastMutex(&Ctx->MmuLock);
+    return status;
+}
+
+static VOID
+V383MmuUnmapRange(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _In_ ULONG Iova,
+    _In_ SIZE_T Size
+    )
+{
+    ULONG pages = (ULONG)((Size + PAGE_SIZE - 1) >> PAGE_SHIFT);
+
+    ExAcquireFastMutex(&Ctx->MmuLock);
+    V383MmuClear(Ctx, Iova, pages);
+    V383MmuZap(Ctx);
+    RtlClearBits(&Ctx->IovaMap, Iova >> PAGE_SHIFT, pages);
+    ExReleaseFastMutex(&Ctx->MmuLock);
+}
+
+/* The directory and the IO address bitmap; page tables come on demand.
+ * Kept until the device object goes (V383EvtDeviceCleanup), so buffers
+ * that outlive a ReleaseHardware are still unmapped safely. */
+static NTSTATUS
+V383MmuTablesInit(
+    _In_ PDEVICE_CONTEXT Ctx
+    )
+{
+    if (Ctx->Dt)
+        return STATUS_SUCCESS;
+    Ctx->IovaBits = (PULONG)ExAllocatePool2(POOL_FLAG_NON_PAGED, V383_IOVA_PAGES / 8, V383_POOL_TAG);
+    if (!Ctx->IovaBits)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Ctx->Dt = (PULONG)V383TablePage(&Ctx->DtPa);
+    if (!Ctx->Dt) {
+        ExFreePoolWithTag(Ctx->IovaBits, V383_POOL_TAG);
+        Ctx->IovaBits = NULL;
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlInitializeBitMap(&Ctx->IovaMap, Ctx->IovaBits, V383_IOVA_PAGES);
+    RtlClearAllBits(&Ctx->IovaMap);
+    RtlSetBits(&Ctx->IovaMap, 0, V383_IOVA_FIRST >> PAGE_SHIFT);
+    RtlSetBits(&Ctx->IovaMap, V383_IOVA_PAGES - 1, 1);     /* no buffer ends at 2^32 */
+    Ctx->IovaHint = V383_IOVA_FIRST >> PAGE_SHIFT;
+    return STATUS_SUCCESS;
+}
+
+static VOID
+V383MmuTablesFree(
+    _In_ PDEVICE_CONTEXT Ctx
+    )
+{
+    ULONG i;
+
+    for (i = 0; i < V383_PT_COUNT; i++)
+        if (Ctx->PtVa[i]) {
+            MmFreeContiguousMemory(Ctx->PtVa[i]);
+            Ctx->PtVa[i] = NULL;
+        }
+    if (Ctx->Dt) {
+        MmFreeContiguousMemory(Ctx->Dt);
+        Ctx->Dt = NULL;
+    }
+    if (Ctx->IovaBits) {
+        ExFreePoolWithTag(Ctx->IovaBits, V383_POOL_TAG);
+        Ctx->IovaBits = NULL;
+    }
 }
 
 /* ------------------------------------------------------------ cache */
@@ -214,11 +541,26 @@ V383IpReset(
     V383_LOG("IP reset: status 0x%08x after %u polls%s", st, i,
              (st & V383_STA_IP_RST_RDY) ? "" : " (not ready)");
 
-    /* An IP reset resets the IOMMU too; it comes back with paging off,
-     * which is how this driver runs it. Mainline reprograms its page
-     * table here (rkvdec_iommu_restore()); there is none to restore. */
+    /* An IP reset resets the IOMMU too. Mainline reprograms its page
+     * table afterwards (rkvdec_iommu_restore()); the callers do that here
+     * (V383MmuRestore), outside the interrupt lock. */
     V383CacheConfig(Ctx);
     return st;
+}
+
+/* After an IP reset or a decode error: paging back on with the tables
+ * (with the IOMMU in use), PASSIVE_LEVEL. */
+static VOID
+V383MmuRestore(
+    _In_ PDEVICE_CONTEXT Ctx
+    )
+{
+    if (!Ctx->IommuOn || !Ctx->MmuLive)
+        return;
+    ExAcquireFastMutex(&Ctx->MmuLock);
+    if (!V383MmuEnable(Ctx))
+        V383_LOG("IOMMU: paging could not be restored");
+    ExReleaseFastMutex(&Ctx->MmuLock);
 }
 
 /* -------------------------------------------------------- interrupts */
@@ -269,6 +611,15 @@ V383EvtDecDpc(
         KeSetEvent(&ctx->RunDone, IO_NO_INCREMENT, FALSE);
 }
 
+/*
+ * rk_iommu_irq(): a page fault is logged, the TLB zapped and the fault
+ * acknowledged, so the core is not left stalled. With a decode pending the
+ * fault also ends the wait (the DPC), and the decode is failed and the
+ * core reset (V383Run): the IO address was not one of the caller's
+ * buffers, so the picture is wrong whatever else happens. A core that
+ * keeps faulting has the IOMMU interrupt masked after
+ * V383_MMU_FAULTS_PER_RUN; V383MmuEnable unmasks it.
+ */
 BOOLEAN
 V383EvtMmuIsr(
     _In_ WDFINTERRUPT Interrupt,
@@ -276,24 +627,62 @@ V383EvtMmuIsr(
     )
 {
     PDEVICE_CONTEXT ctx = GetContext(WdfInterruptGetDevice(Interrupt));
-    static const ULONG base[2] = { V383_MMU0_OFFSET, V383_MMU1_OFFSET };
     BOOLEAN ours = FALSE;
     ULONG i;
 
     UNREFERENCED_PARAMETER(MessageID);
 
     for (i = 0; i < 2; i++) {
-        ULONG st = V383Rd(ctx, base[i] + RK_MMU_INT_STATUS);
+        ULONG b = V383MmuBase[i];
+        ULONG st = V383Rd(ctx, b + RK_MMU_INT_STATUS);
+        ULONG mst, addr;
+
         if (!st)
             continue;
-        ctx->MmuLastStatus[i] = V383Rd(ctx, base[i] + RK_MMU_STATUS);
-        ctx->MmuLastFault[i] = V383Rd(ctx, base[i] + RK_MMU_PAGE_FAULT_ADDR);
-        V383Wr(ctx, base[i] + RK_MMU_INT_CLEAR, st);
+        mst = V383Rd(ctx, b + RK_MMU_STATUS);
+        addr = V383Rd(ctx, b + RK_MMU_PAGE_FAULT_ADDR);
+        ctx->MmuLastStatus[i] = mst;
+        ctx->MmuLastFault[i] = addr;
+        if (st & RK_MMU_IRQ_PAGE_FAULT) {
+            V383Wr(ctx, b + RK_MMU_COMMAND, RK_MMU_CMD_ZAP_CACHE);
+            V383Wr(ctx, b + RK_MMU_COMMAND, RK_MMU_CMD_PAGE_FAULT_DONE);
+        }
+        V383Wr(ctx, b + RK_MMU_INT_CLEAR, st);
+        InterlockedIncrement(&ctx->MmuFaults);
+        if (ctx->RunPending) {
+            if (InterlockedIncrement(&ctx->RunMmuFaults) == 1) {
+                ctx->RunFaultAddr = addr;
+                ctx->RunFaultStatus = mst;
+            }
+            if (ctx->RunMmuFaults > V383_MMU_FAULTS_PER_RUN) {
+                V383Wr(ctx, V383_MMU0_OFFSET + RK_MMU_INT_MASK, 0);
+                V383Wr(ctx, V383_MMU1_OFFSET + RK_MMU_INT_MASK, 0);
+            }
+        }
         ours = TRUE;
     }
-    if (ours)
+    if (ours) {
         InterlockedIncrement(&ctx->MmuIrqCount);
+        WdfInterruptQueueDpcForIsr(Interrupt);
+    }
     return ours;
+}
+
+VOID
+V383EvtMmuDpc(
+    _In_ WDFINTERRUPT Interrupt,
+    _In_ WDFOBJECT AssociatedObject
+    )
+{
+    PDEVICE_CONTEXT ctx = GetContext(WdfInterruptGetDevice(Interrupt));
+
+    UNREFERENCED_PARAMETER(AssociatedObject);
+
+    if (ctx->RunMmuFaults)
+        V383_LOG("IOMMU fault at IO address 0x%08x (status 0x%08x), %d in this decode",
+                 ctx->RunFaultAddr, ctx->RunFaultStatus, ctx->RunMmuFaults);
+    if (ctx->RunMmuFaults && InterlockedExchange(&ctx->RunPending, 0))
+        KeSetEvent(&ctx->RunDone, IO_NO_INCREMENT, FALSE);
 }
 
 /* ---------------------------------------------------------- hardware */
@@ -312,6 +701,7 @@ V383EvtPrepareHardware(
 
     V383Crumb(ctx, L"PrepareHardware: start");
     ctx->WarmupAtD0 = V383Setting(ctx, L"WarmupAtD0", 0);
+    ctx->IommuSetting = V383Setting(ctx, L"Iommu", 1);
 
     for (i = 0; i < WdfCmResourceListGetCount(ResourcesTranslated); i++) {
         PCM_PARTIAL_RESOURCE_DESCRIPTOR d = WdfCmResourceListGetDescriptor(ResourcesTranslated, i);
@@ -344,8 +734,35 @@ V383EvtPrepareHardware(
     V383Fact(ctx, L"RegsPa", (ULONG)ctx->RegsPa.QuadPart);
     V383Fact(ctx, L"SramPa", ctx->SramPresent ? (ULONG)ctx->SramPa.QuadPart : 0);
 
+    /* The IOMMU's tables (the hardware is not touched until D0 entry).
+     * Without them, the contiguous physical path as with Iommu 0. */
+    if (ctx->IommuSetting != 0) {
+        NTSTATUS st = V383MmuTablesInit(ctx);
+        if (!NT_SUCCESS(st)) {
+            V383_LOG("IOMMU tables: 0x%08x; buffers will be physically contiguous", st);
+            ctx->IommuSetting = 0;
+        }
+    }
+    V383Fact(ctx, L"IommuSetting", ctx->IommuSetting);
+
     /* not fatal: the warm-up is then skipped */
     (VOID)V383WarmupInit(ctx);
+
+    /* The SRAM and the warm-up buffer at their physical addresses, so the
+     * addresses given to the decoder for them are the same either way
+     * (mainline maps the SRAM into the decoder's domain the same way,
+     * rkvdec-rcb.c). */
+    if (ctx->IommuSetting != 0) {
+        if (ctx->SramPresent && !ctx->SramMapped) {
+            NTSTATUS st = V383MmuIdentityMap(ctx, (ULONG64)ctx->SramPa.QuadPart, ctx->SramLen);
+            ctx->SramMapped = NT_SUCCESS(st);
+            if (!ctx->SramMapped)
+                V383_LOG("SRAM 0x%llx: not mapped (0x%08x); a decode using it will fault",
+                         ctx->SramPa.QuadPart, st);
+        }
+        if (ctx->WarmVa && NT_SUCCESS(V383MmuIdentityMap(ctx, (ULONG64)ctx->WarmPa.QuadPart, 2 * PAGE_SIZE)))
+            ctx->WarmMappedIova = (ULONG)ctx->WarmPa.QuadPart;
+    }
     V383Crumb(ctx, L"PrepareHardware: done (no register touched yet)");
     return STATUS_SUCCESS;
 }
@@ -360,6 +777,10 @@ V383EvtReleaseHardware(
 
     UNREFERENCED_PARAMETER(ResourcesTranslated);
 
+    if (ctx->WarmMappedIova) {
+        V383MmuUnmapRange(ctx, ctx->WarmMappedIova, 2 * PAGE_SIZE);
+        ctx->WarmMappedIova = 0;
+    }
     V383WarmupFree(ctx);
     if (ctx->Regs) {
         MmUnmapIoSpace(ctx->Regs, V383_REG_BLOCK_SIZE);
@@ -400,8 +821,34 @@ V383EvtD0Entry(
              V383Rd(ctx, V383_FUNC_OFFSET), V383Rd(ctx, V383_LINK_IRQ), V383Rd(ctx, V383_LINK_STATUS),
              V383Rd(ctx, V383_MMU0_OFFSET + RK_MMU_STATUS), V383Rd(ctx, V383_MMU1_OFFSET + RK_MMU_STATUS));
 
-    V383MmuPagingOff(ctx, V383_MMU0_OFFSET);
-    V383MmuPagingOff(ctx, V383_MMU1_OFFSET);
+    /*
+     * IOMMU: paging on with this driver's tables (Iommu 1, the default), or
+     * off as the firmware should have left it (Iommu 0). If paging does not
+     * come on, the driver falls back to contiguous physical buffers for
+     * every buffer allocated from now on.
+     */
+    if (ctx->IommuSetting != 0 && ctx->Dt) {
+        BOOLEAN ok;
+
+        ExAcquireFastMutex(&ctx->MmuLock);
+        ok = V383MmuEnable(ctx);
+        ExReleaseFastMutex(&ctx->MmuLock);
+        V383Fact(ctx, L"MmuDte0", V383Rd(ctx, V383_MMU0_OFFSET + RK_MMU_DTE_ADDR));
+        V383Fact(ctx, L"MmuEnableStatus0", V383Rd(ctx, V383_MMU0_OFFSET + RK_MMU_STATUS));
+        V383Fact(ctx, L"MmuEnableStatus1", V383Rd(ctx, V383_MMU1_OFFSET + RK_MMU_STATUS));
+        if (!ok) {
+            V383_LOG("IOMMU: paging did not come on; falling back to physical addresses");
+            V383MmuPagingOff(ctx, V383_MMU0_OFFSET);
+            V383MmuPagingOff(ctx, V383_MMU1_OFFSET);
+        }
+        ctx->IommuOn = ok;
+        ctx->MmuLive = ok;
+    } else {
+        V383MmuPagingOff(ctx, V383_MMU0_OFFSET);
+        V383MmuPagingOff(ctx, V383_MMU1_OFFSET);
+        ctx->IommuOn = FALSE;
+    }
+    V383Fact(ctx, L"IommuOn", ctx->IommuOn);
 
     /* stale interrupt state from the firmware or a previous OS */
     V383Wr(ctx, V383_LINK_IRQ, 0xFFFF0000);
@@ -447,9 +894,20 @@ V383EvtD0ExitPreInterrupts(
     _In_ WDF_POWER_DEVICE_STATE TargetState
     )
 {
+    PDEVICE_CONTEXT ctx = GetContext(Device);
+
     UNREFERENCED_PARAMETER(TargetState);
-    GetContext(Device)->InterruptsConnected = FALSE;
-    V383Crumb(GetContext(Device), L"D0Exit");
+    ctx->InterruptsConnected = FALSE;
+    /* rk_iommu_disable(); the tables and the mappings stay, and D0 entry
+     * programs them again. IommuOn stays: buffers keep their IO addresses. */
+    if (ctx->MmuLive) {
+        ExAcquireFastMutex(&ctx->MmuLock);
+        ctx->MmuLive = FALSE;
+        V383MmuPagingOff(ctx, V383_MMU0_OFFSET);
+        V383MmuPagingOff(ctx, V383_MMU1_OFFSET);
+        ExReleaseFastMutex(&ctx->MmuLock);
+    }
+    V383Crumb(ctx, L"D0Exit");
     return STATUS_SUCCESS;
 }
 
@@ -457,12 +915,16 @@ V383EvtD0ExitPreInterrupts(
 
 static VOID
 V383FreeAlloc(
+    _In_ PDEVICE_CONTEXT Ctx,
     _In_ PV383_ALLOC A
     )
 {
     KAPC_STATE apc;
     BOOLEAN attach = (A->Process && A->Process != PsGetCurrentProcess());
 
+    /* the decoder loses the pages before anything else does */
+    if (A->Iova && A->Dma)
+        V383MmuUnmapRange(Ctx, A->Dma, A->Size);
     if (A->UserVa && A->Mdl) {
         if (attach)
             KeStackAttachProcess(A->Process, &apc);
@@ -470,13 +932,85 @@ V383FreeAlloc(
         if (attach)
             KeUnstackDetachProcess(&apc);
     }
-    if (A->Mdl)
-        IoFreeMdl(A->Mdl);
+    if (A->Mdl) {
+        if (A->Iova) {
+            MmFreePagesFromMdl(A->Mdl);
+            ExFreePool(A->Mdl);
+        } else {
+            IoFreeMdl(A->Mdl);
+        }
+    }
     if (A->Kva)
         MmFreeContiguousMemory(A->Kva);
     if (A->Process)
         ObDereferenceObject(A->Process);
     ExFreePoolWithTag(A, V383_POOL_TAG);
+}
+
+/*
+ * The pages of a buffer. With the IOMMU on: any pages of DRAM (the v2
+ * entries take 40-bit addresses), entered in the decoder's tables at a
+ * free run of IO addresses, so a multi-megabyte buffer does not need
+ * physically contiguous memory, which a running system often does not
+ * have (ERROR_NO_SYSTEM_RESOURCES, 1450, on the board for 4 MiB surfaces).
+ * Without it: physically contiguous below 4 GiB, as before.
+ *
+ * Write-combined is Normal non-cacheable on ARM64: no stale cache lines
+ * for a device that is not coherent (_CCA 0), and unaligned CPU access
+ * still works.
+ */
+static NTSTATUS
+V383AllocPages(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _Inout_ PV383_ALLOC A
+    )
+{
+    PHYSICAL_ADDRESS low, high, skip;
+    NTSTATUS status;
+    ULONG iova;
+
+    low.QuadPart = 0;
+    skip.QuadPart = 0;
+    if (!Ctx->IommuOn) {
+        high.QuadPart = 0xFFFFFFFF;
+        A->Kva = MmAllocateContiguousNodeMemory(A->Size, low, high, skip,
+                                                PAGE_READWRITE | PAGE_WRITECOMBINE, MM_ANY_NODE_OK);
+        if (!A->Kva)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        RtlZeroMemory(A->Kva, A->Size);
+        A->Pa = MmGetPhysicalAddress(A->Kva);
+        A->Dma = (ULONG)A->Pa.QuadPart;
+        A->Mdl = IoAllocateMdl(A->Kva, (ULONG)A->Size, FALSE, FALSE, NULL);
+        if (!A->Mdl)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        MmBuildMdlForNonPagedPool(A->Mdl);
+        return STATUS_SUCCESS;
+    }
+
+    high.QuadPart = (1ll << 40) - 1;
+    /* zeroed by Mm (no MM_DONT_ZERO_ALLOCATION) */
+    A->Mdl = MmAllocatePagesForMdlEx(low, high, skip, A->Size, MmWriteCombined, MM_ALLOCATE_FULLY_REQUIRED);
+    if (!A->Mdl)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    A->Iova = TRUE;
+    if (MmGetMdlByteCount(A->Mdl) != A->Size)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    ExAcquireFastMutex(&Ctx->MmuLock);
+    iova = V383IovaAlloc(Ctx, (ULONG)(A->Size >> PAGE_SHIFT));
+    if (!iova) {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+    } else {
+        status = V383MmuEnter(Ctx, iova, MmGetMdlPfnArray(A->Mdl), 0, (ULONG)(A->Size >> PAGE_SHIFT));
+        if (NT_SUCCESS(status))
+            A->Dma = iova;
+        else
+            RtlClearBits(&Ctx->IovaMap, iova >> PAGE_SHIFT, (ULONG)(A->Size >> PAGE_SHIFT));
+        /* a previous mapping of these addresses may still be in the TLB */
+        V383MmuZap(Ctx);
+    }
+    ExReleaseFastMutex(&Ctx->MmuLock);
+    return status;
 }
 
 /* In the caller's context: the mapping goes into its address space. */
@@ -489,7 +1023,6 @@ V383Alloc(
 {
     VDPU383_ALLOC_IN *in;
     VDPU383_ALLOC_OUT *out;
-    PHYSICAL_ADDRESS low, high, skip;
     PV383_ALLOC a;
     SIZE_T size;
     NTSTATUS status;
@@ -508,28 +1041,14 @@ V383Alloc(
     a = (PV383_ALLOC)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*a), V383_POOL_TAG);
     if (!a)
         return STATUS_INSUFFICIENT_RESOURCES;
-
-    low.QuadPart = 0;
-    high.QuadPart = 0xFFFFFFFF;
-    skip.QuadPart = 0;
-    /* Write-combined is Normal non-cacheable on ARM64: no stale cache lines
-     * for a device that is not coherent (_CCA 0), and unaligned CPU access
-     * still works. */
-    a->Kva = MmAllocateContiguousNodeMemory(size, low, high, skip,
-                                            PAGE_READWRITE | PAGE_WRITECOMBINE, MM_ANY_NODE_OK);
-    if (!a->Kva) {
-        ExFreePoolWithTag(a, V383_POOL_TAG);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    RtlZeroMemory(a->Kva, size);
     a->Size = size;
-    a->Pa = MmGetPhysicalAddress(a->Kva);
-    a->Mdl = IoAllocateMdl(a->Kva, (ULONG)size, FALSE, FALSE, NULL);
-    if (!a->Mdl) {
-        V383FreeAlloc(a);
-        return STATUS_INSUFFICIENT_RESOURCES;
+    status = V383AllocPages(Ctx, a);
+    if (!NT_SUCCESS(status)) {
+        Ctx->AllocFailures++;
+        V383_LOG("alloc of %Iu bytes (%s) failed: 0x%08x", size, Ctx->IommuOn ? "IOMMU" : "contiguous", status);
+        V383FreeAlloc(Ctx, a);
+        return status;
     }
-    MmBuildMdlForNonPagedPool(a->Mdl);
 
     __try {
         a->UserVa = MmMapLockedPagesSpecifyCache(a->Mdl, UserMode, MmWriteCombined, NULL, FALSE,
@@ -538,7 +1057,7 @@ V383Alloc(
         a->UserVa = NULL;
     }
     if (!a->UserVa) {
-        V383FreeAlloc(a);
+        V383FreeAlloc(Ctx, a);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     a->Process = PsGetCurrentProcess();
@@ -551,9 +1070,9 @@ V383Alloc(
     WdfWaitLockRelease(Ctx->AllocLock);
 
     out->handle = a->Handle;
-    out->dma = (ULONG)a->Pa.QuadPart;
+    out->dma = a->Dma;
     out->size = (ULONG)size;
-    out->reserved = 0;
+    out->flags = a->Iova ? VDPU383_ALLOC_IOVA : 0;
     out->user_va = (ULONGLONG)(ULONG_PTR)a->UserVa;
     *Info = sizeof(*out);
     return STATUS_SUCCESS;
@@ -587,7 +1106,7 @@ V383Free(
     WdfWaitLockRelease(Ctx->AllocLock);
     if (!found)
         return STATUS_INVALID_HANDLE;
-    V383FreeAlloc(found);
+    V383FreeAlloc(Ctx, found);
     return STATUS_SUCCESS;
 }
 
@@ -612,7 +1131,7 @@ V383EvtFileCleanup(
     }
     WdfWaitLockRelease(ctx->AllocLock);
     while (!IsListEmpty(&mine))
-        V383FreeAlloc(CONTAINING_RECORD(RemoveHeadList(&mine), V383_ALLOC, Link));
+        V383FreeAlloc(ctx, CONTAINING_RECORD(RemoveHeadList(&mine), V383_ALLOC, Link));
 }
 
 /* Is [addr] inside a buffer this file allocated, or the SRAM? Lock held. */
@@ -631,7 +1150,7 @@ V383AddrOk(
         return TRUE;
     for (e = Ctx->Allocs.Flink; e != &Ctx->Allocs; e = e->Flink) {
         PV383_ALLOC a = CONTAINING_RECORD(e, V383_ALLOC, Link);
-        if (a->Owner == Fo && Addr >= a->Pa.QuadPart && Addr < a->Pa.QuadPart + a->Size)
+        if (a->Owner == Fo && Addr >= a->Dma && (ULONG64)Addr < (ULONG64)a->Dma + a->Size)
             return TRUE;
     }
     return FALSE;
@@ -670,7 +1189,7 @@ V383Run(
     WDFFILEOBJECT fo = WdfRequestGetFileObject(Request);
     LARGE_INTEGER timeout, t0, t1, freq;
     NTSTATUS status, wait;
-    BOOLEAN timedOut;
+    BOOLEAN timedOut, faulted;
     ULONG r;
 
     *Info = 0;
@@ -710,12 +1229,25 @@ V383Run(
             return STATUS_SUCCESS;
     }
 
+    /* Paging lost (an IP reset, or a core that reset itself after an
+     * error): back on before the decoder is given IO addresses. */
+    if (Ctx->IommuOn && Ctx->MmuLive &&
+        (!(V383Rd(Ctx, V383_MMU0_OFFSET + RK_MMU_STATUS) & RK_MMU_STATUS_PAGING) ||
+         !(V383Rd(Ctx, V383_MMU1_OFFSET + RK_MMU_STATUS) & RK_MMU_STATUS_PAGING))) {
+        V383_LOG("IOMMU paging found off before a decode (0x%08x/0x%08x); restoring",
+                 V383Rd(Ctx, V383_MMU0_OFFSET + RK_MMU_STATUS), V383Rd(Ctx, V383_MMU1_OFFSET + RK_MMU_STATUS));
+        V383MmuRestore(Ctx);
+    }
+
     Ctx->Runs++;
     if (Ctx->Runs == 1)
         V383Crumb(Ctx, L"Run: first decode of the session, starting");
     KeClearEvent(&Ctx->RunDone);
     Ctx->RunIrq = 0;
     Ctx->RunStatus = 0;
+    InterlockedExchange(&Ctx->RunMmuFaults, 0);
+    Ctx->RunFaultAddr = 0;
+    Ctx->RunFaultStatus = 0;
 
     for (r = 0; r < V383_NUM_REGS; r++)
         if (in->write_mask[r / 32] & (1u << (r % 32)))
@@ -742,7 +1274,18 @@ V383Run(
     /* The DPC may have taken RunPending between the wait timing out and
      * here: then the decode did finish. */
     timedOut = (wait == STATUS_TIMEOUT && InterlockedExchange(&Ctx->RunPending, 0)) ? TRUE : FALSE;
-    if (timedOut) {
+    faulted = Ctx->RunMmuFaults != 0;
+    if (faulted) {
+        /* the IOMMU DPC ended the wait, or the fault came with the decoder's
+         * interrupt or before the timeout: the core is stopped below */
+        InterlockedExchange(&Ctx->RunPending, 0);
+        if (timedOut)
+            Ctx->Timeouts++;
+        out->result = VDPU383_RUN_MMU_FAULT;
+        out->bad_reg = Ctx->RunFaultAddr;
+        out->irq = Ctx->RunIrq ? Ctx->RunIrq : V383Rd(Ctx, V383_LINK_IRQ);
+        out->status = Ctx->RunStatus ? Ctx->RunStatus : V383Rd(Ctx, V383_LINK_STATUS);
+    } else if (timedOut) {
         Ctx->Timeouts++;
         out->result = VDPU383_RUN_TIMEOUT;
         out->irq = V383Rd(Ctx, V383_LINK_IRQ);
@@ -768,10 +1311,15 @@ V383Run(
      * "Stop the VDPU383 core on timeout"; before it, a timed-out core kept
      * running there too). An error status resets only when asked.
      */
-    if (timedOut || (out->result != VDPU383_RUN_OK && (in->flags & VDPU383_RUN_RESET_ON_ERROR))) {
+    if (timedOut || faulted || (out->result != VDPU383_RUN_OK && (in->flags & VDPU383_RUN_RESET_ON_ERROR))) {
         WdfInterruptAcquireLock(Ctx->DecInterrupt);
         out->reset_status = V383IpReset(Ctx);
         WdfInterruptReleaseLock(Ctx->DecInterrupt);
+        /* the reset took the IOMMU with it; on a fault, also unmasks its
+         * interrupt (rkvdec_iommu_restore() after every vdpu383 error) */
+        V383MmuRestore(Ctx);
+    } else if (out->result != VDPU383_RUN_OK) {
+        V383MmuRestore(Ctx);
     }
     /*
      * An interrupt taken just before the reset may still have its DPC
@@ -779,8 +1327,10 @@ V383Run(
      * "Handle interrupts without a current context" closes the same race
      * between its watchdog and its interrupt thread).
      */
-    if (timedOut)
+    if (timedOut || faulted)
         KeFlushQueuedDpcs();
+    if (faulted)
+        V383Fact(Ctx, L"LastMmuFaultAddr", out->bad_reg);
     if (Ctx->Runs == 1) {
         V383Fact(Ctx, L"FirstRunResult", out->result);
         V383Fact(Ctx, L"FirstRunStatus", out->status);
@@ -853,8 +1403,11 @@ V383EvtIoDeviceControl(
 
     switch (IoControlCode) {
     case IOCTL_VDPU383_GET_INFO: {
-        VDPU383_INFO *o;
-        status = WdfRequestRetrieveOutputBuffer(Request, sizeof(*o), (PVOID *)&o, NULL);
+        VDPU383_INFO info2, *o = &info2;
+        PVOID ob;
+        size_t olen;
+        /* a version 1 program passes the structure without the IOMMU fields */
+        status = WdfRequestRetrieveOutputBuffer(Request, FIELD_OFFSET(VDPU383_INFO, iommu), &ob, &olen);
         if (!NT_SUCCESS(status))
             break;
         RtlZeroMemory(o, sizeof(*o));
@@ -882,7 +1435,17 @@ V383EvtIoDeviceControl(
         o->runs = ctx->Runs;
         o->timeouts = ctx->Timeouts;
         o->warmup = ctx->Warm;
-        info = sizeof(*o);
+        o->iommu = ctx->IommuOn;
+        o->iommu_setting = ctx->IommuSetting;
+        o->iommu_dt_dma = (ULONG)ctx->DtPa.QuadPart;
+        o->iova_pages = ctx->IovaPagesMapped;
+        o->mmu_faults = (ULONG)ctx->MmuFaults;
+        o->mmu_enables = ctx->MmuEnables;
+        o->alloc_failures = ctx->AllocFailures;
+        if (olen > sizeof(*o))
+            olen = sizeof(*o);
+        RtlCopyMemory(ob, o, olen);
+        info = olen;
         break;
     }
     case IOCTL_VDPU383_WARMUP: {
@@ -915,6 +1478,7 @@ V383EvtIoDeviceControl(
         *o = V383IpReset(ctx);
         if (ctx->InterruptsConnected)
             WdfInterruptReleaseLock(ctx->DecInterrupt);
+        V383MmuRestore(ctx);
         info = sizeof(*o);
         break;
     }
@@ -1015,6 +1579,7 @@ V383EvtDeviceAdd(
         return status;
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attr, DEVICE_CONTEXT);
+    attr.EvtCleanupCallback = V383EvtDeviceCleanup;
     status = WdfDeviceCreate(&DeviceInit, &attr, &device);
     if (!NT_SUCCESS(status))
         return status;
@@ -1023,6 +1588,7 @@ V383EvtDeviceAdd(
     ctx->Device = device;
     InitializeListHead(&ctx->Allocs);
     KeInitializeEvent(&ctx->RunDone, NotificationEvent, FALSE);
+    ExInitializeFastMutex(&ctx->MmuLock);
     status = WdfWaitLockCreate(WDF_NO_OBJECT_ATTRIBUTES, &ctx->AllocLock);
     if (!NT_SUCCESS(status))
         return status;
@@ -1037,7 +1603,7 @@ V383EvtDeviceAdd(
     status = WdfInterruptCreate(device, &icfg, WDF_NO_OBJECT_ATTRIBUTES, &ctx->DecInterrupt);
     if (!NT_SUCCESS(status))
         return status;
-    WDF_INTERRUPT_CONFIG_INIT(&icfg, V383EvtMmuIsr, NULL);
+    WDF_INTERRUPT_CONFIG_INIT(&icfg, V383EvtMmuIsr, V383EvtMmuDpc);
     status = WdfInterruptCreate(device, &icfg, WDF_NO_OBJECT_ATTRIBUTES, &ctx->MmuInterrupt);
     if (!NT_SUCCESS(status))
         return status;
@@ -1048,6 +1614,15 @@ V383EvtDeviceAdd(
     attr.ExecutionLevel = WdfExecutionLevelPassive;     /* RUN waits */
     status = WdfIoQueueCreate(device, &qcfg, &attr, &ctx->Queue);
     return status;
+}
+
+/* After every file object, so after every buffer: the IOMMU tables. */
+VOID
+V383EvtDeviceCleanup(
+    _In_ WDFOBJECT Object
+    )
+{
+    V383MmuTablesFree(GetContext((WDFDEVICE)Object));
 }
 
 NTSTATUS

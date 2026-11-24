@@ -4,7 +4,8 @@
 #   powershell -ExecutionPolicy Bypass -File hevc-conformance.ps1 -Dir D:\hevc\streams [-DxvaOnly] [-Only RPS_]
 #
 # Writes NAME.txt (vdpu383test's output) next to the script's results file
-# hevc-results.txt, and prints one line per stream.
+# hevc-results.txt, then info-after.txt (`vdpu383test info`), and prints one
+# line per stream.
 #
 # Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
 # SPDX-License-Identifier: GPL-2.0-only
@@ -46,6 +47,9 @@ foreach ($line in Get-Content $list) {
     Write-Host $r
     $results += $r
 }
+# the driver's counters afterwards: IOMMU faults, failed allocations, pages
+# still mapped (the SRAM's and the warm-up buffer's when nothing leaked)
+& $Exe info > (Join-Path $Out "info-after.txt") 2>&1
 $results += "streams not matching: $bad"
 $results | Set-Content (Join-Path $Out "hevc-results.txt")
 Write-Host "streams not matching: $bad"
