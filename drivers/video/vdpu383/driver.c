@@ -1015,9 +1015,13 @@ V383EvtDeviceAdd(
      * D3D11 video) reaches it; 2: also low-integrity processes (a browser's
      * GPU process). Off by default: the bring-up interface lets the caller
      * program the decoder's registers, checked only as far as V383Run's
-     * address check goes. */
+     * address check goes. 2 also grants RESTRICTED (RC) and ALL
+     * APPLICATION PACKAGES (AC): Chromium's GPU process runs with a
+     * restricted token (the restricting SIDs are checked too) and may run
+     * in an AppContainer. */
     DECLARE_CONST_UNICODE_STRING(sddl_users, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;WD)");
-    DECLARE_CONST_UNICODE_STRING(sddl_low, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;WD)S:(ML;;NW;;;LW)");
+    DECLARE_CONST_UNICODE_STRING(sddl_low,
+        L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;WD)(A;;GRGW;;;RC)(A;;GRGW;;;AC)S:(ML;;NW;;;LW)");
     ULONG userAccess = 0;
 
     UNREFERENCED_PARAMETER(Driver);
