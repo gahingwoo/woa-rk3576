@@ -1,5 +1,7 @@
 # gt9271: Goodix GT9271 touch screen (Windows on ARM)
 
+English | [简体中文](README.zh-CN.md)
+
 The touch controller of LCKFB's 10.1 inch 800x1280 MIPI DSI screen for the
 TaishanPi 3M. A KMDF driver that reads the controller over I2C and presents
 it to Windows as a HID touch screen through the Virtual HID Framework (VHF).

@@ -1,5 +1,7 @@
 # null: names for the devices Windows needs no driver for
 
+English | [简体中文](README.zh-CN.md)
+
 `rk3576-null.inf` installs four ACPI devices with no driver, so Device
 Manager lists them under *System devices* by name instead of as unknown
 devices with a yellow mark (problem code 28). No binary, no service: the

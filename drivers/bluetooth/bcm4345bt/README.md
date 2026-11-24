@@ -1,5 +1,7 @@
 # bcm4345bt: Bluetooth on the TaishanPi 3M (Windows on ARM)
 
+English | [简体中文](README.zh-CN.md)
+
 The Bluetooth half of the board's Ampak AP6256 module, a Broadcom BCM4345C5
 on UART6, for the Windows Bluetooth stack. A KMDF bus driver that runs the
 UART itself, powers the controller, loads its patchram and hands the HCI

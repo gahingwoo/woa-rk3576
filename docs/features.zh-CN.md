@@ -38,7 +38,7 @@ DSI 屏的 GT9271 配合 [gt9271](../drivers/input/gt9271) 可用，支持十点
 - HDMI 音频：wddm-mali-g52 驱动 HDMI 时可用（它的 `HdmiHpd` 设为 3），2026-11-23 确认过。
 - CM5-IO 上固件声明了 HDMI 音频，但还没试过。
 
-细节见[音频](dev/audio.md)（英文）。
+细节见[音频](dev/audio.zh-CN.md)。
 
 ## 蓝牙（泰山派 3M，ci 固件）
 
@@ -49,14 +49,14 @@ DSI 屏的 GT9271 配合 [gt9271](../drivers/input/gt9271) 可用，支持十点
 
 ## 不支持
 
-- 两块板的 WiFi（见[无线](dev/wireless.md)，英文）。
+- 两块板的 WiFi（见[无线](dev/wireless.zh-CN.md)）。
 - CM5-IO 的蓝牙。
 - 泰山派 3M 上 EC20 模块的网络接口。
 - 泰山派 3M 上有效的 RTC 时间（见[故障排查](troubleshooting.zh-CN.md#每次启动后时间都不对)）。
 
 ## 视频解码器
 
-RK3576 的 VDPU383 在 Windows 下可以解码 H.264，用的是早期调试驱动 [vdpu383](../drivers/video/vdpu383) 和它的测试工具 `vdpu383test`：2026-11-24 在泰山派 3M 上试过的 H.264 一致性码流，输出全部与 FFmpeg 逐位一致。需要 edk2-rk3576 并在设置里打开 *Video Decoder (VDPU383)*（默认关闭）。视频播放器还用不上它，计划见[视频解码](dev/video-decode.md)（英文）。
+RK3576 的 VDPU383 在 Windows 下可以解码 H.264，用的是早期调试驱动 [vdpu383](../drivers/video/vdpu383) 和它的测试工具 `vdpu383test`：2026-11-24 在泰山派 3M 上试过的 H.264 一致性码流，输出全部与 FFmpeg 逐位一致。需要 edk2-rk3576 并在设置里打开 *Video Decoder (VDPU383)*（默认关闭）。视频播放器还用不上它，计划见[视频解码](dev/video-decode.zh-CN.md)。
 
 ## NPU
 
@@ -64,4 +64,4 @@ RK3576 的 VDPU383 在 Windows 下可以解码 H.264，用的是早期调试驱�
 
 ## 负载和温度
 
-Windows 11 23H2 的任务管理器不显示 NPU，也不显示温度。rk-monitor 可以：托盘图标显示最高温度，点开有弹窗，还有一个桌面挂件，显示 CPU 各簇、GPU（占用、温度、频率）、NPU 各核心和各温区。用 RK3576 工具包安装，即 CI 产物 `rk3576-tools-arm64`：解压后运行 `install.cmd`。它把 rk-monitor、`rknputest` 和 `charsiu_run` 放进 `%ProgramFiles%\RK3576`，让 rk-monitor 在每次登录时启动并默认打开挂件，并在每次驱动更新后重新注册 GPU 和 NPU 的性能计数器。`uninstall.cmd` 会全部删除。详情（英文）：[tools/rk3576-tools](../tools/rk3576-tools/README.md)、[tools/rk-monitor](../tools/rk-monitor/README.md)。
+Windows 11 23H2 的任务管理器不显示 NPU，也不显示温度。rk-monitor 可以：托盘图标显示最高温度，点开有弹窗，还有一个桌面挂件，显示 CPU 各簇、GPU（占用、温度、频率）、NPU 各核心和各温区。用 RK3576 工具包安装，即 CI 产物 `rk3576-tools-arm64`：解压后运行 `install.cmd`。它把 rk-monitor、`rknputest` 和 `charsiu_run` 放进 `%ProgramFiles%\RK3576`，让 rk-monitor 在每次登录时启动并默认打开挂件，并在每次驱动更新后重新注册 GPU 和 NPU 的性能计数器。`uninstall.cmd` 会全部删除。详情：[tools/rk3576-tools](../tools/rk3576-tools/README.zh-CN.md)、[tools/rk-monitor](../tools/rk-monitor/README.zh-CN.md)。

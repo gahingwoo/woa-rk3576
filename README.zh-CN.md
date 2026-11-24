@@ -15,7 +15,7 @@ Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 �
 
 也可以用 [Maskrom Studio](https://github.com/gahingwoo/maskrom-studio) 在电脑上直接安装，不用 U 盘（截至 2026-11-24 还没有在板子上跑过）。
 
-之后：[在 Windows 下使用硬件](docs/features.zh-CN.md)（CPU、GPU、NPU 负载和温度：见 [RK3576 工具](tools/rk3576-tools/README.md)）、[添加和替换驱动](docs/drivers.zh-CN.md)、[故障排查](docs/troubleshooting.zh-CN.md)。
+之后：[在 Windows 下使用硬件](docs/features.zh-CN.md)（CPU、GPU、NPU 负载和温度：见 [RK3576 工具](tools/rk3576-tools/README.zh-CN.md)）、[添加和替换驱动](docs/drivers.zh-CN.md)、[故障排查](docs/troubleshooting.zh-CN.md)。
 
 ## 状态
 
@@ -37,7 +37,7 @@ Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 �
 | 蓝牙 | 没写驱动 | 可用：配对、传文件；不能通话（ci 固件） | bcm4345bt |
 | WiFi | 不能用 | 不能用 | 无 |
 | NPU | 不支持 | 配合 [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) 可用 | rknpu |
-| 视频解码器（VDPU383） | 未试 | 用 vdpu383test 硬件解码可用（H.264 一致性码流与 FFmpeg 逐位一致，2026-11-24）；播放器尚不能用（[视频解码](docs/dev/video-decode.md)） | vdpu383 |
+| 视频解码器（VDPU383） | 未试 | 用 vdpu383test 硬件解码可用（H.264 一致性码流与 FFmpeg 逐位一致，2026-11-24）；播放器尚不能用（[视频解码](docs/dev/video-decode.zh-CN.md)） | vdpu383 |
 | RTC、PMIC、引脚控制器、UART2 | 不需要驱动 | 不需要驱动；有名称，没有黄色感叹号（2026-11-24 在泰山派 3M 上；那里已不再声明 UART2） | [null](drivers/null) |
 
 每项结果都来自同一块板子。CM5-IO 一栏大部分是 2026-10-01 看到的。各项功能的细节见[硬件功能](docs/features.zh-CN.md)。
@@ -48,9 +48,9 @@ Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 �
 
 标签为 [`ci`](https://github.com/gahingwoo/woa-rk3576/releases/tag/ci) 的预发布版是 `main` 最近一次成功构建的 WinPE 映像（`woa-rk3576-winpe-ci-<sha>.img.xz` 和 `SHA256SUMS.txt`）。它不会被标为最新版，每次构建成功都会被替换，整体也没有测试过。除非需要只在 `main` 上的改动，否则请用正式版。Maskrom Studio 的 CI 档用的就是这个 `ci` 版本。
 
-## 开发文档（英文）
+## 开发文档
 
-[架构](docs/dev/architecture.md)、[编译](docs/dev/building.md)、[调试](docs/dev/debugging.md)、[音频](docs/dev/audio.md)、[显示](docs/dev/display.md)、[无线](docs/dev/wireless.md)、[历史记录](docs/history/README.md)。
+[架构](docs/dev/architecture.zh-CN.md)、[编译](docs/dev/building.zh-CN.md)、[调试](docs/dev/debugging.zh-CN.md)、[音频](docs/dev/audio.zh-CN.md)、[显示](docs/dev/display.zh-CN.md)、[无线](docs/dev/wireless.zh-CN.md)、[历史记录](docs/history/README.md)。
 
 ## 致谢
 
@@ -60,4 +60,4 @@ Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 �
 
 ## 许可证
 
-为本仓库编写的代码采用 GPL-2.0-only（[LICENSE](LICENSE)）。在此之前的正式版是 MIT，仍保持 MIT。移植的驱动保留各自的许可证，对它们的 RK3576 改动沿用所改驱动的许可证；见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+为本仓库编写的代码采用 GPL-2.0-only（[LICENSE](LICENSE)）。在此之前的正式版是 MIT，仍保持 MIT。移植的驱动保留各自的许可证，对它们的 RK3576 改动沿用所改驱动的许可证；见 [THIRD_PARTY.md](THIRD_PARTY.zh-CN.md)。

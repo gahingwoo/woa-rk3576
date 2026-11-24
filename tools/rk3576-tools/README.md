@@ -1,5 +1,7 @@
 # RK3576 tools
 
+English | [简体中文](README.zh-CN.md)
+
 The user-facing programs for RK3576 boards under Windows on Arm, in one
 bundle that installs into `%ProgramFiles%\RK3576`:
 

@@ -1,5 +1,7 @@
 # rk3xspi: Rockchip SPI controller (Windows on ARM)
 
+English | [简体中文](README.zh-CN.md)
+
 An SpbCx controller driver for the Rockchip SPI master (device-tree
 `rockchip,rk3576-spi` / `rockchip,rk3066-spi`). Same SpbCx shape as the
 [I²C driver](../../i2c/rk3xi2c); SPI adds full-duplex.

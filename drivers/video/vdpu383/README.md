@@ -1,5 +1,7 @@
 # vdpu383: RK3576 video decoder, bring-up
 
+English | [简体中文](README.zh-CN.md)
+
 The RK3576's H.264/HEVC/VP9/AV1 decoder (RKVDEC, VDPU383 in Rockchip's
 naming), driven from Windows. This is the prototype: a KMDF driver that
 exposes the block to a test program, and the program, which parses H.264,

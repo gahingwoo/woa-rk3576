@@ -1,5 +1,7 @@
 # Third-party code
 
+English | [简体中文](THIRD_PARTY.zh-CN.md)
+
 `build/` and most of `drivers/` come from
 [worproject/Rockchip-Windows-Drivers](https://github.com/worproject/Rockchip-Windows-Drivers),
 the Windows on Arm drivers for RK3588, imported at commit `e00e70d`

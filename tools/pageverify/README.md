@@ -1,5 +1,7 @@
 # pageverify
 
+English | [简体中文](README.zh-CN.md)
+
 Finds 4 KiB pages of a file that hold someone else's data.
 
 Every page the tool writes carries a magic, the seed, its own page index and a

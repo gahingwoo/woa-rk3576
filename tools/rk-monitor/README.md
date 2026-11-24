@@ -1,5 +1,7 @@
 # rk-monitor
 
+English | [简体中文](README.zh-CN.md)
+
 A tray icon for RK3576 boards under Windows on Arm. Windows 11 23H2, the
 newest release these boards run, has no NPU page in Task Manager and shows
 no temperatures; this shows them, with CPU and GPU state next to them.
