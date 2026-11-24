@@ -28,7 +28,9 @@
  *   rk-monitor.exe              tray icon; left click: the popup, right click:
  *                               the menu (desktop widget, start with Windows, exit)
  *   rk-monitor.exe --autostart  the same, started at logon: exits quietly if
- *                               one is already running
+ *                               one is already running; shows "..." and takes
+ *                               its first sample after 5 s, and runs in
+ *                               background mode for its first minute
  *   rk-monitor.exe --once       print one sample as text and exit
  *
  * Settings: HKCU\Software\RK3576\Monitor (Widget, WidgetClickThrough,
@@ -782,12 +784,42 @@ static void BuildRows(void)
 }
 
 static int g_tick;
+static BOOL g_warm = TRUE;          /* no sample yet: every value shows as "..." */
+
+/* Before the first sample: the rows with their labels and an ellipsis, so
+ * the tray icon and the widget are there at once. */
+static void BuildWarmRows(void)
+{
+    static const wchar_t *const sec[3] = { L"CPU", L"GPU", L"NPU" };
+    static const wchar_t *const wl[4] = { L"CPU", L"GPU", L"NPU", L"Temp" };
+    Row *r;
+    int i;
+
+    g_nrows = 0;
+    for (i = 0; i < 3; i++) {
+        AddRow(R_HEAD, sec[i], NULL);
+        r = AddRow(R_ROW, L"Starting", NULL);
+        wcscpy_s(r->value, 112, L"\x2026");
+    }
+    memset(g_wrows, 0, sizeof(g_wrows));
+    g_nwrows = 4;
+    for (i = 0; i < 4; i++) {
+        wcscpy_s(g_wrows[i].label, 48, wl[i]);
+        wcscpy_s(g_wrows[i].value, 112, L"\x2026");
+    }
+    swprintf(g_tip, 128, L"%ls\nstarting\x2026", APP_NAME);
+}
 
 static void Sample(void)
 {
+    if (!g_query && PdhOpenQueryW(NULL, 0, &g_query) != ERROR_SUCCESS) {
+        g_query = NULL;
+        return;
+    }
     if (g_tick % RETRY_TICKS == 0)
         CtrAddMissing();
     g_tick++;
+    g_warm = FALSE;
     PdhCollectQueryData(g_query);
     SampleCpu();
     SampleThermal();
@@ -973,9 +1005,16 @@ static BOOL AutostartGet(void)
                         NULL, NULL, NULL) == ERROR_SUCCESS;
 }
 
-/* The installer starts it for every user (HKLM Run); then the per-user entry is not offered. */
+/* The installer starts it for every user (its logon task, which it notes
+ * as AutostartTask = 1, or the HKLM Run entry of an offline install before
+ * its first boot); then the per-user entry is not offered. */
 static BOOL AutostartMachine(void)
 {
+    DWORD v = 0, sz = sizeof(v);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, SET_KEY, L"AutostartTask", RRF_RT_REG_DWORD, NULL, &v, &sz) == ERROR_SUCCESS &&
+        v != 0)
+        return TRUE;
     return RegGetValueW(HKEY_LOCAL_MACHINE, RUN_KEY, RUN_VALUE, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
                         NULL, NULL, NULL) == ERROR_SUCCESS;
 }
@@ -1215,6 +1254,8 @@ static void PopupHide(void)
 static HWND g_widget, g_widgetHost;
 static BOOL g_widgetOn, g_clickThrough, g_widgetDrag;
 static BOOL g_childFailed;          /* the desktop refused a child: stay top-level */
+static ULONGLONG g_startTick;       /* GetTickCount64 at start */
+static BOOL g_autostart;            /* started at logon (--autostart) */
 static POINT g_dragOff;
 static UINT g_wdpi;
 static HFONT g_wfBody, g_wfHead;
@@ -1527,6 +1568,10 @@ static void WidgetCreate(void)
 
     if (g_widget)
         return;
+    /* at logon Explorer may not have made the desktop yet: wait for it
+     * (WidgetTick tries every second) rather than show the fallback */
+    if (!host && GetTickCount64() - g_startTick < 60000)
+        return;
     if (host && !g_childFailed) {
         /* a child of the desktop's icon window (see DesktopHost); a layered
          * child needs the Windows 8+ entry in the manifest, which it has */
@@ -1693,6 +1738,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
     case WM_TIMER:
         if (wp == TIMER_SAMPLE) {
+            ULONGLONG up = GetTickCount64() - g_startTick;
+
+            /* started at logon: the first minute is the busiest of the
+             * session, so the first PDH open waits a few seconds, and the
+             * process runs in background mode (CPU, I/O and memory
+             * priority) for the minute */
+            if (g_autostart && up >= 60000) {
+                SetPriorityClass(GetCurrentProcess(), PROCESS_MODE_BACKGROUND_END);
+                g_autostart = FALSE;
+            }
+            if (g_warm && g_autostart && up < 5000) {
+                TrayUpdate(FALSE);
+                WidgetTick();
+                return 0;
+            }
             Sample();
             TrayUpdate(FALSE);
             WidgetTick();
@@ -1851,8 +1911,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     (void)prev;
     (void)show;
 
-    if (PdhOpenQueryW(NULL, 0, &g_query) != ERROR_SUCCESS)
-        return 1;
+    g_startTick = GetTickCount64();
     ClustersInit();
     ThemeRead();
 
@@ -1890,7 +1949,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     g_dpi = GetDpiForWindow(g_hwnd);
     FontsMake();
 
-    Sample();
+    g_autostart = cmd && wcsstr(cmd, L"--autostart") != NULL;
+    if (g_autostart) {
+        SetPriorityClass(GetCurrentProcess(), PROCESS_MODE_BACKGROUND_BEGIN);
+        BuildWarmRows();
+    } else {
+        Sample();
+    }
     TrayUpdate(TRUE);
     g_clickThrough = SettingGet(L"WidgetClickThrough", 0) != 0;
     if (SettingGet(L"Widget", 0)) {
@@ -1903,7 +1968,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
-    PdhCloseQuery(g_query);
+    if (g_query)
+        PdhCloseQuery(g_query);
     if (mutex)
         CloseHandle(mutex);
     return 0;

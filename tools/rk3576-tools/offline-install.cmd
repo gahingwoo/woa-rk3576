@@ -20,8 +20,10 @@ rem        Microsoft\Windows\CurrentVersion\Uninstall\RK3576Tools
 rem   3. with /hook: SetupComplete.cmd gets
 rem        call "%%ProgramFiles%%\RK3576\setup\firstboot.cmd"
 rem Without /hook, the image's own first-boot script must run that line
-rem as SYSTEM; that step adds the Start menu, the counter task and the
-rem counter registrations, which need the running system.
+rem as SYSTEM; that step adds the Start menu, the two tasks and the
+rem counter registrations, which need the running system. Its logon task
+rem then replaces the Run entry (which only waits out Explorer's startup
+rem delay; the Run entry is the fallback should the first-boot step never run).
 rem
 rem Copyright (c) 2026 Ga Hing Woo ^<gahing@gahingwoo.com^>
 rem SPDX-License-Identifier: GPL-2.0-only

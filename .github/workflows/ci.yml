@@ -273,13 +273,22 @@ jobs:
                          'setup\firstboot.cmd', 'VERSION.txt', 'LICENSE.txt') {
             if (-not (Test-Path (Join-Path $dir $f))) { throw "missing $f" }
           }
-          $run = (Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run').GetValue('RK3576 Monitor', $null, 'DoNotExpandEnvironmentNames')
-          if ($run -ne '"%ProgramFiles%\RK3576\rk-monitor.exe" --autostart') { throw "Run: $run" }
+          # rk-monitor starts from a logon task for the Users group, not from a Run entry
+          if ((Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run').GetValue('RK3576 Monitor')) { throw 'a Run entry next to the logon task' }
+          $lt = Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'RK3576 Monitor'
+          $lt.Principal | Format-List | Out-String | Write-Host
+          if ($lt.Principal.GroupId -notmatch 'S-1-5-32-545|Users') { throw "logon task principal: $($lt.Principal.GroupId)" }
+          if ($lt.Principal.RunLevel -ne 'Limited') { throw 'logon task elevated' }
+          if ($lt.Triggers[0].CimClass.CimClassName -ne 'MSFT_TaskLogonTrigger' -or $lt.Triggers[0].UserId) { throw 'logon trigger is not for any user' }
+          if ($lt.Actions[0].Execute -ne (Join-Path $dir 'rk-monitor.exe') -or $lt.Actions[0].Arguments -ne '--autostart') { throw 'logon task action' }
+          if ((Get-ItemProperty 'HKLM:\SOFTWARE\RK3576\Monitor').AutostartTask -ne 1) { throw 'AutostartTask' }
           if ((Get-ItemProperty 'HKLM:\SOFTWARE\RK3576\Monitor').Widget -ne 1) { throw 'Widget default' }
           if (-not (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RK3576Tools').UninstallString) { throw 'ARP' }
           foreach ($l in 'RK3576 Monitor.lnk', 'RK3576 tools folder.lnk', 'Uninstall RK3576 tools.lnk') {
             if (-not (Test-Path (Join-Path $menu $l))) { throw "missing shortcut $l" }
           }
+          # an offline install's Run entry, which the install must replace with the task
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'RK3576 Monitor' -Value 'x' -Force | Out-Null
           $t = Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Performance counters'
           if ($t.Principal.UserId -ne 'SYSTEM') { throw 'task principal' }
           Get-Content "$env:ProgramData\RK3576\counters.log"
@@ -292,6 +301,7 @@ jobs:
           # upgrade in place
           & test\rk3576-tools\install.cmd /quiet /nostart
           if ($LASTEXITCODE -ne 0) { throw "second install.cmd exited $LASTEXITCODE" }
+          if ((Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run').GetValue('RK3576 Monitor')) { throw 'the upgrade kept the Run entry' }
 
           & "$dir\setup\uninstall.cmd" /quiet
           if ($LASTEXITCODE -ne 0) { throw "uninstall.cmd exited $LASTEXITCODE" }

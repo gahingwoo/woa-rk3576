@@ -70,9 +70,15 @@ install it for every user with the RK3576 tools bundle
 GPU and NPU counters. Right-click the icon for **Start with Windows** (an
 entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, pointing
 at the exe where it is now; shown checked and greyed when the installer
-already starts it for all users) and **Exit**. A second start opens the popup of
+already starts it for all users, from its logon task) and **Exit**. A second start opens the popup of
 the one already running. It follows the light or dark app mode, and the
 taskbar's mode for the icon.
+
+`rk-monitor.exe --autostart` is how the logon task and the Start with
+Windows entry start it: quiet if one is already running, the tray icon and
+widget at once with "..." values, the first sample after 5 s, and the first
+minute in background mode (low CPU, I/O and memory priority), since the
+first minute of a session is its busiest.
 
 `rk-monitor.exe --once` prints one sample as text, followed by which
 counter sets were found, and exits:

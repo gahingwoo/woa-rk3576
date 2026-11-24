@@ -24,7 +24,14 @@ administrator rights). It:
 - copies `RK3576\` to `%ProgramFiles%\RK3576` (again: an upgrade in place;
   a running rk-monitor is stopped first and started again for you);
 - starts rk-monitor at every logon, for all users, with the desktop widget
-  on (each user can turn it off in the tray menu);
+  on (each user can turn it off in the tray menu). That is the task
+  `\RK3576\RK3576 Monitor`: triggered at the logon of any user, run as
+  that user (the Users group, not elevated, only while signed in), with no
+  delay. A Run entry would wait for Explorer's startup delay, about 30 s.
+  rk-monitor started this way waits 5 s before its first sample and runs in
+  background mode for its first minute, so it adds nothing to the busy
+  start of a session; the tray icon and the widget are there at once, with
+  "..." until the first sample;
 - adds `Start menu\Programs\RK3576`: RK3576 Monitor, RK3576 tools folder,
   Uninstall RK3576 tools; and the entry in Settings, Apps;
 - registers the GPU (`RK3576 GPU`, maliwddm) and NPU (`RK3576 NPU`, rknpu)
@@ -40,8 +47,9 @@ starting rk-monitor now. Log: `%ProgramData%\RK3576\setup.log`.
 
 Settings, Apps, RK3576 tools; or the Start menu's Uninstall RK3576 tools; or
 `uninstall.cmd` (next to `install.cmd`, or in `%ProgramFiles%\RK3576\setup`).
-It removes everything the install added: the folder, the shortcuts, the Run
-entry, `HKLM\SOFTWARE\RK3576`, the Apps entry, the task and its folder, the
+It removes everything the install added: the folder, the shortcuts, the
+logon task (and the Run entry of an offline install), `HKLM\SOFTWARE\RK3576`,
+the Apps entry, the counter task and the task folder, the
 counter registrations it made, `%ProgramData%\RK3576`, and every user's
 rk-monitor settings (`HKCU\Software\RK3576` and a per-user Run entry,
 through the profiles' `NTUSER.DAT` for users who are not signed in). The
@@ -77,7 +85,10 @@ want to do the same itself:
 | `Microsoft\Windows\CurrentVersion\Uninstall\RK3576Tools` | `DisplayName` `RK3576 tools`, `DisplayVersion`, `Publisher` `woa-rk3576`, `InstallLocation`, `DisplayIcon`, `UninstallString` `"%ProgramFiles%\RK3576\setup\uninstall.cmd"`, `NoModify` 1, `NoRepair` 1 | | |
 
 The `%ProgramFiles%` in the data is literal (REG_EXPAND_SZ), so the value
-is right whatever drive letter the image has at install time.
+is right whatever drive letter the image has at install time. The Run entry
+only covers the time until the first-boot step has run: that step creates
+the logon task `\RK3576\RK3576 Monitor`, sets `RK3576\Monitor`
+`AutostartTask` = 1 and deletes the Run entry.
 
 **3. First boot.** Once, as SYSTEM, after Windows setup, run
 
@@ -89,8 +100,8 @@ The natural place is `<root>\Windows\Setup\Scripts\SetupComplete.cmd`.
 `/hook` appends that line to it (or creates it). An installer that writes
 its own `SetupComplete.cmd` after calling `offline-install.cmd` (Maskrom
 Studio copies its own over it) should leave out `/hook` and put the line in
-its file. The step adds the shortcuts and the counter task and registers
-the counters; it always exits 0, logs to `%ProgramData%\RK3576`, and
+its file. The step adds the shortcuts, the logon task and the counter task and
+registers the counters; it always exits 0, logs to `%ProgramData%\RK3576`, and
 `install.cmd` on the running system repairs anything it could not do.
 
 `offline-install.cmd` exits 0 on success, 1 for usage, 2 when `<root>` is
@@ -101,12 +112,15 @@ failed (the hive is unloaded again).
 
 1. `install.cmd`. The tray icon and the widget (top right of the main
    screen) appear. Start menu, RK3576 has three entries.
-2. `Get-ScheduledTask -TaskPath \RK3576\` lists the task;
+2. `Get-ScheduledTask -TaskPath \RK3576\` lists both tasks;
    `Get-Counter -ListSet "RK3576 NPU","RK3576 GPU"` lists both sets;
    `%ProgramData%\RK3576\counters.log` says what was registered.
 3. Win+D: the widget stays. Drag it, sign out and in: it comes back where
    it was. Tray menu, Widget click-through: clicks go to the desktop.
-4. Reboot: rk-monitor starts by itself, widget on. `counters.log` gets a
+4. Reboot and sign in: rk-monitor is there within a few seconds of the
+   desktop (tray icon and widget, "..." for about 5 s), widget on;
+   `reg query HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` has
+   no "RK3576 Monitor". `counters.log` gets a
    new "already registered" line per driver.
 5. A driver update (stage a new rknpu or maliwddm package, reinstall flag,
    reboot): `counters.log` shows the new driver store folder registered and

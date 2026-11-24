@@ -7,7 +7,8 @@ rem   install.cmd /quiet     no pause at the end
 rem   install.cmd /nostart   do not start rk-monitor now (it starts at logon)
 rem
 rem It copies the RK3576 folder next to this file, starts rk-monitor at every
-rem logon for all users with the desktop widget on, adds Start menu
+rem logon for all users (a logon task, no startup delay) with the desktop
+rem widget on, adds Start menu
 rem shortcuts and the Settings, Apps entry, and registers the GPU and NPU
 rem performance counters, with a task that registers them again after a
 rem driver update. Running it again upgrades in place. README.md has the

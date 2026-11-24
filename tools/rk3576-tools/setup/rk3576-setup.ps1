@@ -3,20 +3,25 @@
 #   -Action Install -Source <dir>   copy <dir> (the bundle's RK3576 folder) to
 #                                   %ProgramFiles%\RK3576, then everything below
 #   -Action FirstBoot               what an offline install could not do: the
-#                                   Start menu, the counter task, the counters
+#                                   Start menu, the two tasks, the counters
 #                                   (run as SYSTEM from SetupComplete.cmd)
 #   -Action Uninstall               remove all of it again
 #
 # What an install leaves on the system, and nothing else:
 #   %ProgramFiles%\RK3576\                          the files
-#   HKLM\...\CurrentVersion\Run  "RK3576 Monitor"   rk-monitor at every logon, all users
+#   Task Scheduler \RK3576\RK3576 Monitor           rk-monitor at every logon, any user, as
+#                                                   that user, not elevated, no delay
 #   HKLM\SOFTWARE\RK3576                            InstallDir, Version, Counters\ (state)
 #   HKLM\SOFTWARE\RK3576\Monitor  Widget = 1        the desktop widget on by default
+#                                  AutostartTask = 1 the logon task exists (rk-monitor's menu)
 #   HKLM\...\Uninstall\RK3576Tools                  the entry in Settings, Apps
 #   Start menu\Programs\RK3576\                     three shortcuts (all users)
 #   Task Scheduler \RK3576\Performance counters     SYSTEM, at start: rk3576-counters.ps1
 #   the GPU and NPU counter registrations (lodctr), and %ProgramData%\RK3576 (logs)
-# Uninstall removes those, and each user's HKCU\Software\RK3576 and HKCU Run
+# An offline install starts rk-monitor through the HKLM Run entry
+# "RK3576 Monitor" until its first boot; the task replaces it then (Run
+# entries wait for Explorer's startup delay, about 30 s; a logon task does
+# not). Uninstall removes all of those, and each user's HKCU\Software\RK3576 and HKCU Run
 # "RK3576 Monitor" (rk-monitor's own settings).
 #
 # Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
@@ -37,6 +42,7 @@ $Arp      = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RK3576Too
 $Menu     = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\RK3576'
 $TaskPath = '\RK3576\'
 $TaskName = 'Performance counters'
+$LogonTask = 'RK3576 Monitor'
 $LogDir   = Join-Path $env:ProgramData 'RK3576'
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -62,10 +68,6 @@ function Set-MachineRegistry {
     $vf = Join-Path $Dir 'VERSION.txt'
     if (Test-Path $vf) { $ver = (Get-Content $vf -TotalCount 1).Trim() }
 
-    New-Item -Path $RunKey -Force -ErrorAction SilentlyContinue | Out-Null
-    New-ItemProperty -Path $RunKey -Name $RunName -PropertyType ExpandString -Force `
-        -Value '"%ProgramFiles%\RK3576\rk-monitor.exe" --autostart' | Out-Null
-
     New-Item -Path "$Base\Monitor" -Force | Out-Null
     if ($null -eq (Get-ItemProperty -Path "$Base\Monitor" -Name Widget -ErrorAction SilentlyContinue)) {
         New-ItemProperty -Path "$Base\Monitor" -Name Widget -PropertyType DWord -Value 1 | Out-Null
@@ -87,7 +89,26 @@ function Set-MachineRegistry {
     foreach ($k in $vals.Keys) { New-ItemProperty -Path $Arp -Name $k -PropertyType String -Value $vals[$k] -Force | Out-Null }
     foreach ($k in 'NoModify', 'NoRepair') { New-ItemProperty -Path $Arp -Name $k -PropertyType DWord -Value 1 -Force | Out-Null }
     New-ItemProperty -Path $Arp -Name EstimatedSize -PropertyType DWord -Value $kb -Force | Out-Null
-    Say "registry: Run, Monitor\Widget, RK3576, Uninstall\RK3576Tools ($ver)"
+    Say "registry: Monitor\Widget, RK3576, Uninstall\RK3576Tools ($ver)"
+}
+
+# rk-monitor at logon: a task for the Users group (any user, in that
+# user's session, not elevated), started at once, not after Explorer's
+# startup delay as a Run entry is. It replaces the offline install's Run
+# entry.
+function Set-LogonTask {
+    $exe = Join-Path $Dir 'rk-monitor.exe'
+    $a = New-ScheduledTaskAction -Execute $exe -Argument '--autostart' -WorkingDirectory $Dir
+    $t = New-ScheduledTaskTrigger -AtLogOn
+    $p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
+    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+           -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel -Priority 6
+    Register-ScheduledTask -TaskPath $TaskPath -TaskName $LogonTask -Action $a -Trigger $t -Principal $p `
+        -Settings $s -Description 'Starts the RK3576 Monitor tray app and desktop widget at logon.' `
+        -Force | Out-Null
+    New-ItemProperty -Path "$Base\Monitor" -Name AutostartTask -PropertyType DWord -Value 1 -Force | Out-Null
+    Remove-ItemProperty -Path $RunKey -Name $RunName -ErrorAction SilentlyContinue
+    Say "task: $TaskPath$LogonTask (Users, at logon); no Run entry"
 }
 
 function New-Shortcut([string]$lnk, [string]$target, [string]$arguments, [string]$desc) {
@@ -133,6 +154,7 @@ function Invoke-Counters([string[]]$extra) {
 function Complete-Setup {
     Set-MachineRegistry
     Set-Shortcuts
+    Set-LogonTask
     Set-CounterTask
     Invoke-Counters @('-Force')
     Remove-ItemProperty -Path $Base -Name FirstBootPending -ErrorAction SilentlyContinue
@@ -198,7 +220,9 @@ switch ($Action) {
     'Uninstall' {
         Stop-Monitor
         Invoke-Counters @('-Remove')
-        Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+        foreach ($n in $TaskName, $LogonTask) {
+            Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue
+        }
         try {
             $svc = New-Object -ComObject Schedule.Service
             $svc.Connect()

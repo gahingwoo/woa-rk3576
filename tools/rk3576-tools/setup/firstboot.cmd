@@ -4,8 +4,9 @@ rem first start. Run once as SYSTEM, from %WINDIR%\Setup\Scripts\SetupComplete.c
 rem
 rem   call "%ProgramFiles%\RK3576\setup\firstboot.cmd"
 rem
-rem It adds the Start menu shortcuts and the "RK3576\Performance counters"
-rem task and registers the GPU and NPU counters. It returns 0 even when that
+rem It adds the Start menu shortcuts, the "RK3576\RK3576 Monitor" logon task
+rem (which replaces the offline install's Run entry) and the
+rem "RK3576\Performance counters" task, and registers the GPU and NPU counters. It returns 0 even when that
 rem fails, so it never holds up Windows setup; the log is
 rem %ProgramData%\RK3576\setup.log, and install.cmd repairs it later.
 rem
