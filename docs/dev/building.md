@@ -5,10 +5,10 @@ in CI, not on Linux.
 
 ## From CI
 
-- [ci.yml](../.github/workflows/ci.yml) builds `build/RockchipDrivers.sln`,
-  `rk3xspi` and `gt9271` on every push with WDK 10.0.26100 and fails on any
-  error. Its packages are not signed.
-- [winpe.yml](../.github/workflows/winpe.yml) builds the same drivers,
+- [ci.yml](../../.github/workflows/ci.yml) builds `build/RockchipDrivers.sln`,
+  `rk3xspi`, `gt9271`, `bcm4345bt` and `tools/pageverify` on every push with
+  WDK 10.0.26100 and fails on any error. Its packages are not signed.
+- [winpe.yml](../../.github/workflows/winpe.yml) builds the same drivers,
   test-signs them with a throwaway certificate, injects them into an ADK 22621
   WinPE and uploads the image. The signed packages are in its `woa-drivers\`
   folder. That is the set to install.
@@ -22,6 +22,7 @@ ARM64 build tools and Spectre-mitigated ARM64 libraries, and WDK 10.0.26100.
 msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64
 msbuild drivers\spi\rk3xspi\rk3xspi.vcxproj /p:Configuration=Release /p:Platform=ARM64
 msbuild drivers\input\gt9271\gt9271.vcxproj /p:Configuration=Release /p:Platform=ARM64
+msbuild drivers\bluetooth\bcm4345bt\bcm4345bt.vcxproj /p:Configuration=Release /p:Platform=ARM64
 ```
 
 Packages land in `build\ARM64\Release\Output\<driver>\`. Sign them the way
@@ -35,15 +36,13 @@ signature that does not chain to a trusted root is then accepted; an unsigned
 driver still is not.
 
 - New installation: `tools/woa-deploy/deploy-windows.cmd` injects the drivers.
-  See [INSTALL.md](INSTALL.md).
+  See [INSTALL.md](../INSTALL.md).
 - Existing installation, offline from WinPE: `tools/woa-deploy/add-drivers.cmd`.
-- Existing installation, one driver, online: `pnputil /add-driver x.inf
-  /install` stages it, but Windows may keep the version already installed.
-  `tools/woa-debug/net-update.cmd` shows how to remove the old one.
+- Existing installation, one driver, online: see [drivers](../drivers.md).
 
 ## Headers without a WDK
 
-The [wdk-headers](../.github/workflows/wdk-headers.yml) workflow exports the
+The [wdk-headers](../../.github/workflows/wdk-headers.yml) workflow exports the
 runner's `Include\10.0.26100.0\{km,shared}` tree as an artifact, the same
 headers CI compiles against. Grep that instead of guessing at an identifier.
 
@@ -64,3 +63,10 @@ Each of these was a build failure first.
 
 `_KERNEL_MODE` is predefined by the WDK toolset. Defining it again is C4117,
 which `/WX` turns into an error in every file.
+
+## What a push runs
+
+`ci.yml` runs on every push. `winpe.yml` runs on a push that changes
+`tools/woa-debug/**`, `tools/woa-deploy/**`, `drivers/bluetooth/**` or the
+workflow itself; on `main` that also replaces the rolling `ci` pre-release
+with a new WinPE image.

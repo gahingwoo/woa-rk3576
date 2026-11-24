@@ -1,21 +1,24 @@
 # Display
 
-Windows draws on the framebuffer the firmware sets up. The firmware brings up
-VOP2 and the HDMI PHY and hands over a UEFI GOP framebuffer, and the inbox
-BasicDisplay driver scans it out. Nothing in this repo is involved, and there
-is no display device in the ACPI tables.
+Status on 2026-11-24.
 
-That gives the resolution UEFI chose and nothing else: no mode changes, no
-hotplug, no acceleration.
+Without a GPU driver, Windows draws on the framebuffer the firmware sets up.
+The firmware brings up VOP2 and the HDMI PHY (or the TaishanPi 3M's DSI
+screen) and hands over a UEFI GOP framebuffer, and the inbox BasicDisplay
+driver scans it out. That gives the mode UEFI chose and nothing else: no mode
+changes, no hot-plug, no acceleration.
 
-## What a real driver would take
+[wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52) is a WDDM driver
+for the Mali-G52 that also owns the display: the desktop is composed on the
+GPU and scanned out by VOP2, with rotation, DSI brightness, HDMI hot-plug at
+the monitor's own timing, and HDMI audio. It binds the firmware's ACPI
+devices `RKCP7402` (GPU) and `RKCP7403` (display). It has run on the
+TaishanPi 3M. Nothing in this repository is involved.
 
-A KMDOD (kernel-mode display-only driver) is the smallest step up: it owns a
-framebuffer and programs VOP2, the DW-HDMI-QP controller and the HDPTX PHY
-itself, reports modes from EDID, and presents in software. That means porting
-what Linux does in `drivers/gpu/drm/rockchip/` (`rockchip_vop2.c`,
-`dw_hdmi_qp`, the HDPTX PHY driver), plus adding an ACPI device for it to bind
-to. A full WDDM driver with the Mali GPU is out of reach.
+The notes from before that driver existed are in
+[history](../history/2026-10-01-display-notes.md).
+
+## Display blocks
 
 | Block | Base | Compatible |
 |---|---|---|

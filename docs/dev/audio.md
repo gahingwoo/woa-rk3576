@@ -1,17 +1,23 @@
 # Audio
 
-Nothing here has run on a board yet. A USB audio device works with Windows'
-inbox USB Audio Class driver. On branch `audio` of this repository, with
-firmware from branches `hdmi-audio-on` or `audio-acpi` of edk2-rk3576, there
-are two endpoints to try:
+How the audio drivers drive the RK3576 SAI, and what the firmware does for
+them. Status on 2026-11-24:
 
-| Endpoint | Boards | Firmware | Windows drivers |
-|---|---|---|---|
-| HDMI output, 48 kHz stereo | CM5-IO, TaishanPi 3M | `PcdHdmiAudioPreset` | rk3xi2sbus, csaudiork3x, pl330dma |
-| Headphone jack and onboard microphone (ES8388) | TaishanPi 3M | `PcdAnalogAudioPreset` | the same, and es8323 |
+| Endpoint | Boards | Firmware setting | Windows drivers | State |
+|---|---|---|---|---|
+| Headphone jack and jack microphone (ES8388) | TaishanPi 3M | `PcdAnalogAudioPreset` (TRUE on this board) | rk3xi2sbus, csaudiork3x 1.0.0.135 or later, es8323, pl330dma | works since 2026-11-22 |
+| HDMI output, 48 kHz stereo | TaishanPi 3M | `PcdHdmiAudioPreset` (TRUE) | the same, and wddm-mali-g52 driving HDMI | works since 2026-11-23 |
+| HDMI output | CM5-IO | `PcdHdmiAudioPreset` (TRUE) | the same | not tried |
+
+These need edk2-rk3576 firmware newer than 0.4.1 (the `ci` build until the
+next release). A USB audio device works with Windows' inbox USB Audio Class
+driver.
 
 The CM5-IO's ES8388 goes only to a 3-pin header (CN3) with no jack, and its
 wiring is not in any device tree this project has; it is not described.
+
+The plan this page grew from, written before audio worked, is in
+[history](../history/2026-11-21-audio-plan.md).
 
 ## The hardware
 
@@ -94,29 +100,23 @@ to Windows yet: the headphone endpoint always shows as connected.
   16-bit formats.
 - The CM5-IO's ES8388.
 
-## Trying it
+## Installing
 
-1. Firmware: the TaishanPi 3M image from the edk2-rk3576 CI run of branch
-   `audio-acpi` (HDMI and analog), or `hdmi-audio-on` (HDMI only); for the
-   CM5-IO, `hdmi-audio-on`.
-2. Windows drivers: `woa-audio\` on the media of a WinPE workflow run of
-   branch `audio`. Those packages are signed with that run's test certificate,
-   which is next to them as `woa-test-signing.cer`. On the board, from an
-   administrator prompt, with test signing on:
-
-   ```
-   certutil -addstore -f Root woa-test-signing.cer
-   certutil -addstore -f TrustedPublisher woa-test-signing.cer
-   pnputil /add-driver woa-audio\rk3xi2sbus\rk3xi2sbus.inf /install
-   pnputil /add-driver woa-audio\csaudiork3x\csaudiork3x.inf /install
-   pnputil /add-driver woa-audio\es8323\es8323.inf /install
-   ```
-
+1. Firmware: edk2-rk3576 newer than 0.4.1 (see above).
+2. The signed packages are on the WinPE media in `woa-audio\`, next to the
+   run's test certificate. They are not injected by the deploy script.
+   Install them as in [drivers](../drivers.md): trust the certificate, then
+   `pnputil /add-driver ... /install` for rk3xi2sbus, csaudiork3x and es8323.
    `pl330dma` is already installed from `woa-drivers\`. The CI workflow's
    artifacts carry unsigned catalogs and do not install.
-3. Device Manager should show "Rockchip SAI Bus" once per SAI the DSDT
-   publishes, "Rockchip I2S Audio (WDM)" under each, and (TaishanPi 3M,
-   analog) "Everest 8388 Audio Codec (RK3576 SAI)".
-4. Sound settings: "Rockchip HDMI" (with an HDMI monitor that has
-   speakers), and on the TaishanPi 3M also "Rockchip Headphones" and
-   "Rockchip Microphone".
+3. Device Manager shows "Rockchip SAI Bus" once per SAI the DSDT publishes,
+   "Rockchip I2S Audio (WDM)" under each, and on the TaishanPi 3M "Everest
+   8388 Audio Codec (RK3576 SAI)".
+4. Sound settings show "Rockchip HDMI" (with an HDMI monitor that has
+   speakers) and, on the TaishanPi 3M, "Rockchip Headphones" and "Rockchip
+   Microphone".
+
+Before 2026-11-21 Windows drove the SAI with the RK3588 I2S-TDM register
+layout and never started TX (XFER 0x3 instead of 0x7, DMACR 0x70010 instead
+of 0xF0110 as Linux has on the same board); csaudiork3x 1.0.0.135 uses the
+RK3576 SAI layout.
