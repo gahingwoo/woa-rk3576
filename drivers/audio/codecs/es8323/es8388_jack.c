@@ -81,7 +81,7 @@ typedef struct {
 	UINT16 frequency;
 	UINT16 bitsPerSample;
 	UINT16 validBitsPerSample;
-	BOOL force32BitOutputContainer;
+	INT32 force32BitOutputContainer;     // BOOL in hw.h; no BOOL in a WDM build
 } ES_CSAUDIO_FORMAT_OVERRIDE;
 
 typedef struct {
