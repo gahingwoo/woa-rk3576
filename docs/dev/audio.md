@@ -1,5 +1,7 @@
 # Audio
 
+English | [简体中文](audio.zh-CN.md)
+
 How the audio drivers drive the RK3576 SAI, and what the firmware does for
 them. Status on 2026-11-24:
 

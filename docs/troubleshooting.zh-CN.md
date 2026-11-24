@@ -2,7 +2,7 @@
 
 [English](troubleshooting.md) | 简体中文
 
-固件方面的问题（MaskROM、刷写、设置）见 edk2-rk3576 的[故障排查](https://edk2.gahingwoo.com/troubleshooting.zh-CN.html)。要从 Windows 收集数据，见[调试](dev/debugging.md)（英文）。
+固件方面的问题（MaskROM、刷写、设置）见 edk2-rk3576 的[故障排查](https://edk2.gahingwoo.com/troubleshooting.zh-CN.html)。要从 Windows 收集数据，见[调试](dev/debugging.zh-CN.md)。
 
 ## INACCESSIBLE_BOOT_DEVICE（0x7B）
 

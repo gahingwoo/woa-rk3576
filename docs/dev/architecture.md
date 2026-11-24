@@ -1,5 +1,7 @@
 # Architecture
 
+English | [简体中文](architecture.zh-CN.md)
+
 How the drivers fit together, and where they come from.
 
 ## How Windows finds the hardware

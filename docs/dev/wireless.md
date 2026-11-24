@@ -1,5 +1,7 @@
 # Wi-Fi and Bluetooth
 
+English | [简体中文](wireless.zh-CN.md)
+
 Status on 2026-11-24:
 
 - Bluetooth works on the TaishanPi 3M with [bcm4345bt](../../drivers/bluetooth/bcm4345bt)

@@ -1,5 +1,7 @@
 # Building and installing the drivers
 
+English | [简体中文](building.zh-CN.md)
+
 These are Windows ARM64 kernel drivers. They build with the WDK on Windows or
 in CI, not on Linux.
 

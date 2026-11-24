@@ -1,5 +1,7 @@
 # Hardware video decode (and encode) on Windows: plan
 
+English | [简体中文](video-decode.zh-CN.md)
+
 Written 2026-11-22. Nothing in this plan has run on hardware. Board order:
 LCKFB TaishanPi 3M first, then CM5-IO, then ROCK 4D (same SoC, same
 firmware option).

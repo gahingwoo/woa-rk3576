@@ -1,5 +1,7 @@
 # Getting data out of Windows on this board
 
+English | [简体中文](debugging.zh-CN.md)
+
 Windows has no serial console here: SAC needs `sacdrv.sys`, which WinPE does
 not have, and SPCR only marks a debug port. Everything below either writes its
 results to the USB stick, to be read from Linux afterwards, or goes over the

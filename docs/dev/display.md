@@ -1,5 +1,7 @@
 # Display
 
+English | [简体中文](display.zh-CN.md)
+
 Status on 2026-11-24.
 
 Without a GPU driver, Windows draws on the framebuffer the firmware sets up.
