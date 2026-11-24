@@ -130,7 +130,10 @@ and puts them in a WinPE image. Details: [docs/BUILDING.md](docs/BUILDING.md).
 Debugging tools: [docs/DEBUGGING.md](docs/DEBUGGING.md). A tray monitor
 for CPU, GPU and NPU use and the temperatures, since 23H2's Task Manager
 shows neither the NPU nor a temperature:
-[tools/rk-monitor](tools/rk-monitor/README.md).
+[tools/rk-monitor](tools/rk-monitor/README.md). It, the NPU tools and the
+counter registration install together from the CI artifact
+`rk3576-tools-arm64` ([tools/rk3576-tools](tools/rk3576-tools/README.md),
+which also describes the offline install an image installer can use).
 
 ## Layout
 
@@ -152,7 +155,8 @@ tools/
   woa-deploy/           install Windows to the eMMC from WinPE
   woa-debug/            collect data in WinPE and in the installed system
   make-woa-usb.sh       a Windows Setup stick that boots without NVRAM
-  rk-monitor/           tray app: CPU, GPU and NPU use, temperatures
+  rk-monitor/           tray app and desktop widget: CPU, GPU and NPU use, temperatures
+  rk3576-tools/         installer of the user tools (rk-monitor, rknputest, charsiu_run)
 docs/
 .github/workflows/      CI and the WinPE image
 ```
