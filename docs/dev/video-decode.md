@@ -49,6 +49,16 @@ serves avc1 to a browser that asks for it. HEVC next (mainline has
 `rkvdec-vdpu383-hevc.c`), then VP9 and AV1 (MPP only; not in mainline for
 VDPU383).
 
+## 2026-11-25: HEVC Main register builder (not run on the board)
+
+Branch `vdpu383-hevc`: `lib/vdpu383_hevc.c` (from MPP's VDPU383 HEVC HAL,
+checked against mainline's rkvdec-vdpu383-hevc.c) and an HEVC parser in
+vdpu383test. The decoder reads the SPS's short-term reference picture sets
+from a table, which DXVA does not carry; the builder rebuilds a table from
+DXVA alone that makes every slice derive the picture's sets, and checks it.
+75 JCT-VC conformance streams (FFmpeg fate-suite) pass the parser and those
+checks on Linux; the board test is in the driver README, section 5.
+
 ## Milestones
 
 | | Goal | Where | State | Effort |

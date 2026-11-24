@@ -227,6 +227,8 @@ picture's reference sets derived from its slice headers (as the decoder
 derives them) equal to DXVA's, with the SPS's sets and with the table
 rebuilt from DXVA alone. CI does that for nine of them.
 
+vdpu383test with HEVC: CI artifact `rk3576-woa-vdpu383test-arm64` of
+branch `vdpu383-hevc` (run 45383528190 or later); vdpu383.sys as for H.264.
 On the board, as administrator, the streams in one folder:
 
 ```
