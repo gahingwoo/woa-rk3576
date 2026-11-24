@@ -1,6 +1,9 @@
 # HEVC conformance streams (FFmpeg fate-suite hevc-conformance/NAME.bit) and FFmpeg 6.1.1's output:
 # name frames md5-of-the-I420-output width,height,format. Made 2026-11-25 with
-#   ffmpeg -i NAME.bit -f rawvideo -pix_fmt yuv420p - | md5sum
+#   ffmpeg -flags unaligned -i NAME.bit -f rawvideo -pix_fmt yuv420p - | md5sum
+# (fate's own flag: without it FFmpeg keeps a left crop that would misalign
+# the planes, and CONFWIN_A_Sony_1 comes out 414 wide instead of 412; it is
+# the only stream here that changes)
 # NUT_A_ericsson_5 and RPS_D_ericsson_6 name pictures that are not there on purpose;
 # FFmpeg makes one up, so those two may differ without the decoder being wrong.
 AMP_A_Samsung_6 60 86afaedd98cbc5f11da775121bf12dd5 2560,1600,yuv420p
@@ -13,7 +16,7 @@ CAINIT_A_SHARP_4 50 550c5a918fecda6a284aa5f44c0e2f33 832,480,yuv420p
 CAINIT_E_SHARP_3 50 55af76d5527af999d12ccc37b1f6b7ae 832,480,yuv420p
 CAINIT_H_SHARP_3 50 cfdd3ce0f4cf1eafd012dcb266311d06 832,480,yuv420p
 CIP_A_Panasonic_3 2 4cbf601ba98d63f642defab5eaa12c8d 416,240,yuv420p
-CONFWIN_A_Sony_1 60 c0a13e81b3a68c4263f240eb99a281b0 412,236,yuv420p
+CONFWIN_A_Sony_1 60 a3ce3f936ff69ff1ec2621a622dd37ac 412,236,yuv420p
 DBLK_A_SONY_3 30 42486a48ea12d5ab6cd98ed2e2807cfe 832,480,yuv420p
 DBLK_B_SONY_3 30 cf5de25a94a33e2d4237b8d1c773db06 832,480,yuv420p
 DBLK_C_SONY_3 30 41f89edc63b1175ffc1fae909f4fed82 832,480,yuv420p
