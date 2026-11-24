@@ -80,8 +80,32 @@ widget at once with "..." values, the first sample after 5 s, and the first
 minute in background mode (low CPU, I/O and memory priority), since the
 first minute of a session is its busiest.
 
+## Headphones
+
+Tray menu, **自动切换耳机** (auto-switch to headphones), on by default: when
+a plug goes into the board's 3.5 mm jack, the "Headphones" endpoint of the
+Rockchip audio driver becomes the default playback device (console,
+multimedia and communications); when it comes out, the device that was the
+default before (HDMI, usually) is made the default again. Windows itself does
+not move the default between two audio adapters on a jack event. It needs the
+jack detection of es8323 and csaudiork3x ([docs/dev/audio.md](../../docs/dev/audio.md)),
+so that the endpoint goes unplugged and active; it only looks at a
+Headphones endpoint whose adapter name contains "Rockchip", never at a USB or
+Bluetooth headset. Started with headphones already in, it switches to them.
+
+Windows has no public API for setting the default device. This uses the
+undocumented `IPolicyConfig` interface (the one the Sound control panel and
+tools such as SoundSwitch use), which Microsoft may change in any release.
+So it is enabled only on Windows builds 10240 to 26999 (set
+`AutoSwitchAnyBuild` = 1 to try another), the item is greyed when the
+interface cannot be created, and a fault in the call turns the feature off
+for the session instead of stopping rk-monitor. Settings:
+`AutoSwitchHeadphones` (1/0), and `AutoSwitchPrevious`, the device to go
+back to, which rk-monitor keeps itself.
+
 `rk-monitor.exe --once` prints one sample as text, followed by which
-counter sets were found, and exits:
+counter sets were found and a line on the headphone switch (it never changes
+the default device), and exits:
 
 ```
 rk-monitor.exe --once > R:\rk-monitor.txt
@@ -93,7 +117,8 @@ rk-monitor.exe --once > R:\rk-monitor.txt
 msbuild tools\rk-monitor\rk-monitor.vcxproj /p:Configuration=Release /p:Platform=ARM64
 ```
 
-C and Win32 only (PDH, GDI, the shell's notification area), with the C
-runtime linked statically. CI builds ARM64 and x64 on every push, runs the
+C and Win32 (PDH, GDI, the shell's notification area), one C++ file for the
+audio endpoint notifications (MMDevice API), with the C runtime linked
+statically. CI builds ARM64 and x64 on every push, runs the
 x64 build with `--once`, and uploads `rk-monitor-arm64` and
 `rk-monitor-x64`.

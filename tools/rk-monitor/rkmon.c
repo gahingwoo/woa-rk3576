@@ -33,8 +33,14 @@
  *                               background mode for its first minute
  *   rk-monitor.exe --once       print one sample as text and exit
  *
+ * Tray menu, auto-switch to headphones (on by default; the item's label is
+ * Chinese, "zi dong qie huan er ji", written as \u escapes in MenuShow):
+ * when a plug goes into the board's headphone jack the headphones become the
+ * default playback device, and the previous one comes back on unplug
+ * (audioswitch.cpp; it uses an undocumented interface, see there).
+ *
  * Settings: HKCU\Software\RK3576\Monitor (Widget, WidgetClickThrough,
- * WidgetX, WidgetY); a value missing there is read from
+ * WidgetX, WidgetY, AutoSwitchHeadphones); a value missing there is read from
  * HKLM\Software\RK3576\Monitor, which the installer sets (Widget = 1).
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
@@ -64,6 +70,8 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "audioswitch.h"
+
 #define APP_NAME        L"RK3576 Monitor"
 #define APP_CLASS       L"Rk3576MonitorPopup"
 #define APP_MUTEX       L"Local\\Rk3576MonitorSingleInstance"
@@ -72,6 +80,7 @@
 
 #define WM_TRAY         (WM_APP + 1)
 #define WM_SHOWPOPUP    (WM_APP + 2)
+#define WM_AUDIOSWITCH  (WM_APP + 3)     /* an audio endpoint changed state */
 #define TIMER_SAMPLE    1
 #define SAMPLE_MS       1000
 #define RETRY_TICKS     30
@@ -82,6 +91,7 @@
 #define IDM_EXIT        102
 #define IDM_WIDGET      103
 #define IDM_CLICKTHRU   104
+#define IDM_AUDIOSWITCH 105
 
 #define SET_KEY         L"Software\\RK3576\\Monitor"
 #define WIDGET_CLASS    L"Rk3576MonitorWidget"
@@ -1680,6 +1690,8 @@ static LRESULT CALLBACK WidgetProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 }
 
+static BOOL g_audioSwitch;          /* AutoSwitchHeadphones */
+
 static void MenuShow(int x, int y)
 {
     HMENU m = CreatePopupMenu();
@@ -1689,6 +1701,9 @@ static void MenuShow(int x, int y)
     AppendMenuW(m, MF_STRING | (g_widgetOn ? MF_CHECKED : 0), IDM_WIDGET, L"Desktop widget");
     AppendMenuW(m, MF_STRING | (g_clickThrough ? MF_CHECKED : 0) | (g_widgetOn ? 0 : MF_GRAYED), IDM_CLICKTHRU,
                 L"Widget click-through");
+    /* greyed where setting the default device cannot work (audioswitch.cpp) */
+    AppendMenuW(m, MF_STRING | (g_audioSwitch ? MF_CHECKED : 0) | (AudioSwitchAvailable() ? 0 : MF_GRAYED),
+                IDM_AUDIOSWITCH, L"\u81ea\u52a8\u5207\u6362\u8033\u673a");
     if (AutostartMachine())
         AppendMenuW(m, MF_STRING | MF_CHECKED | MF_GRAYED, IDM_AUTOSTART, L"Start with Windows (all users, installed)");
     else
@@ -1715,6 +1730,11 @@ static void MenuShow(int x, int y)
         g_clickThrough = !g_clickThrough;
         SettingSet(L"WidgetClickThrough", g_clickThrough ? 1 : 0);
         WidgetApplyClickThrough();
+        break;
+    case IDM_AUDIOSWITCH:
+        g_audioSwitch = !g_audioSwitch;
+        SettingSet(L"AutoSwitchHeadphones", g_audioSwitch ? 1 : 0);
+        AudioSwitchSetEnabled(g_audioSwitch);
         break;
     case IDM_EXIT:
         DestroyWindow(g_hwnd);
@@ -1788,6 +1808,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SHOWPOPUP:
         PopupShow();
         return 0;
+    case WM_AUDIOSWITCH:
+        AudioSwitchPoll();
+        return 0;
     case WM_ACTIVATE:
         if (LOWORD(wp) == WA_INACTIVE)
             PopupHide();
@@ -1835,6 +1858,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_DESTROY:
+        AudioSwitchStop();
         KillTimer(hwnd, TIMER_SAMPLE);
         WidgetDestroy();
         TrayRemove();
@@ -1896,6 +1920,14 @@ static int RunOnce(void)
     for (i = 0; i < C_COUNT; i++) {
         swprintf(line, 256, L"  %-8ls %ls\r\n", g_ctr[i].ok ? L"found" : L"absent", g_ctr[i].paths[0]);
         Out(line);
+    }
+    {
+        /* reports only: --once never changes the default device */
+        wchar_t sw[512];
+        AudioSwitchDescribe(SettingGet(L"AutoSwitchHeadphones", 1) != 0, sw, 512);
+        Out(L"\r\n");
+        Out(sw);
+        Out(L"\r\n");
     }
     return 0;
 }
@@ -1963,6 +1995,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
         WidgetCreate();
     }
     SetTimer(g_hwnd, TIMER_SAMPLE, SAMPLE_MS, NULL);
+    g_audioSwitch = SettingGet(L"AutoSwitchHeadphones", 1) != 0;
+    AudioSwitchStart(g_hwnd, WM_AUDIOSWITCH, g_audioSwitch);
 
     while (GetMessageW(&m, NULL, 0, 0) > 0) {
         TranslateMessage(&m);

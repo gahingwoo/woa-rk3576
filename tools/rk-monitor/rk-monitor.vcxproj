@@ -64,12 +64,14 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>pdh.lib;dwmapi.lib;shell32.lib;gdi32.lib;user32.lib;advapi32.lib;shcore.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ole32.lib;pdh.lib;dwmapi.lib;shell32.lib;gdi32.lib;user32.lib;advapi32.lib;shcore.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
     <ClCompile Include="rkmon.c" />
+    <ClCompile Include="audioswitch.cpp" />
+    <ClInclude Include="audioswitch.h" />
     <ResourceCompile Include="rk-monitor.rc" />
     <None Include="rk-monitor.manifest" />
   </ItemGroup>
