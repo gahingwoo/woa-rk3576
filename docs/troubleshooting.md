@@ -1,6 +1,6 @@
 # Troubleshooting Windows
 
-[简体中文](zh-CN/troubleshooting.md)
+English | [简体中文](troubleshooting.zh-CN.md)
 
 Firmware problems (MaskROM, flashing, settings) are on edk2-rk3576's
 [troubleshooting](https://edk2.gahingwoo.com/troubleshooting.html). To

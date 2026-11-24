@@ -1,7 +1,9 @@
 # Using the hardware under Windows
 
+English | [简体中文](features.zh-CN.md)
+
 What works on each board under Windows 11 23H2, and what a feature needs.
-As of 2026-11-24. [简体中文](zh-CN/features.md)
+As of 2026-11-24.
 
 "ci firmware" means the edk2-rk3576
 [`ci` build](https://edk2.gahingwoo.com/flash.html#the-rolling-ci-build): on

@@ -1,14 +1,15 @@
 # 添加和替换驱动
 
+[English](drivers.md) | 简体中文
+
 怎样把驱动装进这些板子上已安装的 Windows，以及怎样替换一个正在运行的驱动。本仓库、
 [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52) 和
 [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) 的驱动都按这些规则来。
-[English](../drivers.md)（本页对应 2026-11-24 的英文版）
 
 ## 先校准时钟
 
 先同步时间（`w32tm /resync /force`）。泰山派 3M 的 RTC 里没有有效时间，pnputil 会拒绝"签名时间在未来"的驱动目录，
-提示"a required certificate is not within its validity period"。见[故障排查](troubleshooting.md#每次启动后时间都不对)。
+提示"a required certificate is not within its validity period"。见[故障排查](troubleshooting.zh-CN.md#每次启动后时间都不对)。
 
 ## 在 WinPE 下离线安装
 

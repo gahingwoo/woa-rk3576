@@ -1,6 +1,6 @@
 # woa-rk3576
 
-[English](README.md)（本页对应 2026-11-24 的英文版）
+[English](README.md) | 简体中文
 
 Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 装到板子上的 WinPE 映像和脚本。在 ArmSoM CM5-IO 和立创泰山派 3M 上跑过。
 
@@ -11,11 +11,11 @@ Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 �
 ## 安装
 
 1. 把 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576) 固件以完整映像写到 eMMC。
-2. 按 [安装说明](docs/zh-CN/install.md) 操作：[最新正式版](https://github.com/gahingwoo/woa-rk3576/releases/latest)的 WinPE U 盘，Windows 11 23H2 ARM64 ISO 里的 `install.wim`，运行一个脚本。
+2. 按 [安装说明](docs/INSTALL.zh-CN.md) 操作：[最新正式版](https://github.com/gahingwoo/woa-rk3576/releases/latest)的 WinPE U 盘，Windows 11 23H2 ARM64 ISO 里的 `install.wim`，运行一个脚本。
 
 也可以用 [Maskrom Studio](https://github.com/gahingwoo/maskrom-studio) 在电脑上直接安装，不用 U 盘（截至 2026-11-24 还没有在板子上跑过）。
 
-之后：[在 Windows 下使用硬件](docs/zh-CN/features.md)、[添加和替换驱动](docs/zh-CN/drivers.md)、[故障排查](docs/zh-CN/troubleshooting.md)。
+之后：[在 Windows 下使用硬件](docs/features.zh-CN.md)（CPU、GPU、NPU 负载和温度：见 [RK3576 工具](tools/rk3576-tools/README.md)）、[添加和替换驱动](docs/drivers.zh-CN.md)、[故障排查](docs/troubleshooting.zh-CN.md)。
 
 ## 状态
 
@@ -38,8 +38,9 @@ Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 �
 | WiFi | 不能用 | 不能用 | 无 |
 | NPU | 不支持 | 配合 [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) 可用 | rknpu |
 | 视频解码器（VDPU383） | 未试 | 用 vdpu383test 硬件解码可用（H.264 一致性码流与 FFmpeg 逐位一致，2026-11-24）；播放器尚不能用（[视频解码](docs/dev/video-decode.md)） | vdpu383 |
+| RTC、PMIC、引脚控制器、UART2 | 不需要驱动 | 不需要驱动；有名称，没有黄色感叹号（2026-11-24 在泰山派 3M 上；那里已不再声明 UART2） | [null](drivers/null) |
 
-每项结果都来自同一块板子。CM5-IO 一栏大部分是 2026-10-01 看到的。各项功能的细节见[硬件功能](docs/zh-CN/features.md)。
+每项结果都来自同一块板子。CM5-IO 一栏大部分是 2026-10-01 看到的。各项功能的细节见[硬件功能](docs/features.zh-CN.md)。
 
 ## 正式版和滚动的 ci 构建
 

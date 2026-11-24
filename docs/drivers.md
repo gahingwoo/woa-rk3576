@@ -1,10 +1,11 @@
 # Adding and replacing drivers
 
+English | [简体中文](drivers.zh-CN.md)
+
 How to put a driver into an installed Windows on these boards, and how to
 replace one that is already running. The same rules apply to the drivers of
 this repository, [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)
 and [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu).
-[简体中文](zh-CN/drivers.md)
 
 ## Before anything: the clock
 

@@ -1,9 +1,9 @@
 # woa-rk3576
 
+English | [简体中文](README.zh-CN.md)
+
 [![CI](https://github.com/gahingwoo/woa-rk3576/actions/workflows/ci.yml/badge.svg)](https://github.com/gahingwoo/woa-rk3576/actions/workflows/ci.yml)
 [![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
-
-[简体中文](README.zh-CN.md)
 
 Windows on Arm drivers for Rockchip RK3576 boards, and the WinPE image and
 scripts to install Windows 11 23H2 on one. Run on the ArmSoM CM5-IO and the

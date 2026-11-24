@@ -1,8 +1,9 @@
 # Installing Windows
 
+English | [简体中文](INSTALL.zh-CN.md)
+
 How to install Windows 11 23H2 on the eMMC of an ArmSoM CM5-IO or an LCKFB
 TaishanPi 3M with the WinPE stick from this repository.
-[简体中文](zh-CN/install.md)
 
 New to these boards? Start at
 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576#from-a-new-board-to-windows-or-linux).

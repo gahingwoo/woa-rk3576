@@ -1,8 +1,8 @@
 # Windows 故障排查
 
-[English](../troubleshooting.md)（本页对应 2026-11-24 的英文版）
+[English](troubleshooting.md) | 简体中文
 
-固件方面的问题（MaskROM、刷写、设置）见 edk2-rk3576 的[故障排查](https://edk2.gahingwoo.com/zh-CN/troubleshooting.html)。要从 Windows 收集数据，见[调试](../dev/debugging.md)（英文）。
+固件方面的问题（MaskROM、刷写、设置）见 edk2-rk3576 的[故障排查](https://edk2.gahingwoo.com/troubleshooting.zh-CN.html)。要从 Windows 收集数据，见[调试](dev/debugging.md)（英文）。
 
 ## INACCESSIBLE_BOOT_DEVICE（0x7B）
 
@@ -37,7 +37,7 @@
 
 ## Windows 安装程序看不到 eMMC
 
-这是正常的：安装程序没有 eMMC 控制器的驱动。请用 WinPE U 盘安装（见[安装](install.md)）。
+这是正常的：安装程序没有 eMMC 控制器的驱动。请用 WinPE U 盘安装（见[安装](INSTALL.zh-CN.md)）。
 
 ## 用 Ventoy 做的 WinPE U 盘启动不了
 
@@ -51,4 +51,4 @@
 
 ## 重装音频驱动后没声音
 
-检查任务栏声音菜单里的默认播放设备（见[驱动](drivers.md#替换已经绑定并在运行的驱动)）。
+检查任务栏声音菜单里的默认播放设备（见[驱动](drivers.zh-CN.md#替换已经绑定并在运行的驱动)）。

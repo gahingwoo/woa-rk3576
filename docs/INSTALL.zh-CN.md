@@ -1,7 +1,8 @@
 # 安装 Windows
 
+[English](INSTALL.md) | 简体中文
+
 用本仓库的 WinPE U 盘，把 Windows 11 23H2 装到 ArmSoM CM5-IO 或立创泰山派 3M 的 eMMC 上。
-[English](../INSTALL.md)（本页对应 2026-11-24 的英文版）
 
 第一次接触这些板子？请从 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/blob/main/README.zh-CN.md) 开始。
 [Maskrom Studio](https://github.com/gahingwoo/maskrom-studio) 可以在电脑上通过 USB 完成同样的安装，不用 U 盘；截至 2026-11-24 还没有在板子上跑过。
@@ -30,7 +31,7 @@ CM5-IO 上还会因为 eMMC 小于 64 GB 而拒绝。装好的系统从第一次
 
 - [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/releases/latest) 的固件，**以完整映像**写到 eMMC
   （这样才会建立脚本要检查的固件分区）。用浏览器：[flash.gahingwoo.com](https://flash.gahingwoo.com/)，选
-  "UEFI firmware, whole image"。方法见 [edk2-rk3576 刷写固件](https://edk2.gahingwoo.com/zh-CN/flash.html)。
+  "UEFI firmware, whole image"。方法见 [edk2-rk3576 刷写固件](https://edk2.gahingwoo.com/flash.zh-CN.html)。
 - 本仓库[最新正式版](https://github.com/gahingwoo/woa-rk3576/releases/latest)（0.1.1 或更新）的 WinPE 映像，以及一个装得下它和 `install.wim` 的 U 盘。
 - Windows 11 23H2 ARM64 ISO 里的 `install.wim` 或 `install.esd`。
 - 一个 USB 键盘。泰山派 3M 还需要 HDMI 显示器或立创的 DSI 屏。
@@ -39,7 +40,7 @@ CM5-IO 上还会因为 eMMC 小于 64 GB 而拒绝。装好的系统从第一次
 而不是 52 MHz，Windows 下写入的文件可能读回来就变了，却不报任何错。
 
 在泰山派 3M 上，触摸、蓝牙、耳机孔、HDMI 音频和 USB-C 需要 0.4.1 之后的固件：下一个正式版发布前，用 edk2-rk3576
-的 [`ci` 构建](https://edk2.gahingwoo.com/zh-CN/flash.html#滚动的-ci-构建)。安装本身用 0.4.1 就可以。
+的 [`ci` 构建](https://edk2.gahingwoo.com/flash.zh-CN.html#滚动的-ci-构建)。安装本身用 0.4.1 就可以。
 
 装好后的布局：eMMC 第 1 分区是固件（不动），eMMC 其余部分是 Windows，NVMe（如果有）不动。
 
@@ -77,10 +78,10 @@ Windows 会完成初始设置（不联网也能完成），进入桌面，右下
 
 第一次启动后：
 
-- 按[故障排查](troubleshooting.md#每次启动后时间都不对)设置时钟（泰山派 3M）；
-- 按需加装驱动：[硬件功能](features.md)，GPU 驱动见 [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)。
+- 按[故障排查](troubleshooting.zh-CN.md#每次启动后时间都不对)设置时钟（泰山派 3M）；
+- 按需加装驱动：[硬件功能](features.zh-CN.md)，GPU 驱动见 [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)。
 
-`tools/woa-deploy/add-drivers.cmd` 可以在 WinPE 下给已安装的系统添加或更新驱动，不会清除任何东西。其他方法见[驱动](drivers.md)。
+`tools/woa-deploy/add-drivers.cmd` 可以在 WinPE 下给已安装的系统添加或更新驱动，不会清除任何东西。其他方法见[驱动](drivers.zh-CN.md)。
 
 ## 各板说明
 
@@ -98,4 +99,4 @@ Windows 会完成初始设置（不联网也能完成），进入桌面，右下
 - 接着立创的 DSI 屏时，固件用屏幕而不是 HDMI，Windows 也在屏幕上以竖屏显示（装 wddm-mali-g52 后可横屏）。2026-11-13 那次是通过 HDMI 安装的；想照做，先断电拔下屏幕排线。
 - WinPE 和第一次设置时，手边准备一个 USB 键盘。
 
-启动不了时：见[故障排查](troubleshooting.md)。
+启动不了时：见[故障排查](troubleshooting.zh-CN.md)。
