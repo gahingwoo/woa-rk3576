@@ -46,6 +46,9 @@ typedef struct _V383_ALLOC {
     PVOID           UserVa;
 } V383_ALLOC, *PV383_ALLOC;
 
+/* Contiguous memory one open handle may hold (V383Alloc). */
+#define V383_MAX_PER_FILE   (384u * 1024 * 1024)
+
 typedef struct _DEVICE_CONTEXT {
     WDFDEVICE       Device;
     PUCHAR          Regs;
@@ -74,6 +77,7 @@ typedef struct _DEVICE_CONTEXT {
     /* breadcrumbs (Device Parameters), settings */
     volatile LONG   StepSeq;
     ULONG           WarmupAtD0;     /* Device Parameters WarmupAtD0, default 0 */
+    ULONG           UserAccess;     /* Device Parameters UserAccess, default 0 (EvtDeviceAdd) */
 
     /* warm-up */
     PVOID           WarmVa;

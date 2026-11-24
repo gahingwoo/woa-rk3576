@@ -70,11 +70,21 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters"
 | `WarmupIrq`, `WarmupStatus`, `WarmupTimedOut` | the last warm-up, at D0 entry or from the tool |
 | `FirstRunResult`, `FirstRunStatus` | the first decode of the session (0 = ok) |
 
-One setting, a DWORD in the same key, read at each start of the device:
+Two settings, DWORDs in the same key, read at each start of the device:
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `WarmupAtD0` | 0 | 1: run the vendor kernel's warm-up decode at every D0 entry, as the vendor kernel does at probe and resume |
+| `UserAccess` | 0 | 0: SYSTEM and administrators only, one handle at a time (vdpu383test). 1: every user may open `\\.\VDPU383`, many handles at once, so that a video player's process reaches it through the display driver's user-mode part (wddm-mali-g52 `video-decode`, D3D11 video decode milestone V3a); 2: low-integrity processes too (a browser's GPU process). With 1 or 2 `VDPU383_RUN_NO_ADDR_CHECK` is ignored, and each handle may hold at most 384 MiB of decoder buffers. Read when the device starts: set it, then restart the device or the board |
+
+Security note on `UserAccess`: the bring-up interface lets the caller write
+the decoder's registers. The driver checks that every address register of
+a run points into a buffer that handle allocated (or the SRAM), but not
+that the decoder stays inside it, and the decoder's IOMMU is off. A process
+that can open the device can therefore make the decoder read or write
+memory past the end of its own buffers. That is why the value is 0 by
+default and meant for a test board only; the product path is the decode
+node inside maliwddm with the IOMMU on (docs/dev/video-decode.md, V3b).
 
 ## Test plan
 

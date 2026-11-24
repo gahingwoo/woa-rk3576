@@ -505,6 +505,24 @@ V383Alloc(
     if (size == 0 || size > 256u * 1024 * 1024)
         return STATUS_INVALID_PARAMETER;
 
+    /* At most V383_MAX_PER_FILE of contiguous memory per open handle: a
+     * 1080p H.264 decoder with 32 surfaces needs about 160 MiB. */
+    {
+        PLIST_ENTRY e;
+        SIZE_T held = 0;
+        WDFFILEOBJECT fo = WdfRequestGetFileObject(Request);
+
+        WdfWaitLockAcquire(Ctx->AllocLock, NULL);
+        for (e = Ctx->Allocs.Flink; e != &Ctx->Allocs; e = e->Flink) {
+            PV383_ALLOC h = CONTAINING_RECORD(e, V383_ALLOC, Link);
+            if (h->Owner == fo)
+                held += h->Size;
+        }
+        WdfWaitLockRelease(Ctx->AllocLock);
+        if (held + size > V383_MAX_PER_FILE)
+            return STATUS_QUOTA_EXCEEDED;
+    }
+
     a = (PV383_ALLOC)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*a), V383_POOL_TAG);
     if (!a)
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -694,7 +712,8 @@ V383Run(
         return STATUS_SUCCESS;
     }
 
-    if (!(in->flags & VDPU383_RUN_NO_ADDR_CHECK)) {
+    /* With users let in, nobody may skip the check. */
+    if (!(in->flags & VDPU383_RUN_NO_ADDR_CHECK) || Ctx->UserAccess) {
         WdfWaitLockAcquire(Ctx->AllocLock, NULL);
         for (r = 0; r < V383_NUM_REGS; r++) {
             if (!(in->write_mask[r / 32] & (1u << (r % 32))) || !V383IsAddrReg(r))
@@ -991,8 +1010,30 @@ V383EvtDeviceAdd(
     DECLARE_CONST_UNICODE_STRING(name, L"\\Device\\VDPU383");
     DECLARE_CONST_UNICODE_STRING(link, VDPU383_DOS_NAME);
     DECLARE_CONST_UNICODE_STRING(sddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)");
+    /* UserAccess 1: users may open the device too, so that a video
+     * player's process (the display driver's user-mode part decoding for
+     * D3D11 video) reaches it; 2: also low-integrity processes (a browser's
+     * GPU process). Off by default: the bring-up interface lets the caller
+     * program the decoder's registers, checked only as far as V383Run's
+     * address check goes. */
+    DECLARE_CONST_UNICODE_STRING(sddl_users, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;WD)");
+    DECLARE_CONST_UNICODE_STRING(sddl_low, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;WD)S:(ML;;NW;;;LW)");
+    ULONG userAccess = 0;
 
     UNREFERENCED_PARAMETER(Driver);
+
+    {
+        WDFKEY key;
+        DECLARE_CONST_UNICODE_STRING(n, L"UserAccess");
+        if (NT_SUCCESS(WdfFdoInitOpenRegistryKey(DeviceInit, PLUGPLAY_REGKEY_DEVICE, KEY_READ,
+                                                 WDF_NO_OBJECT_ATTRIBUTES, &key))) {
+            if (!NT_SUCCESS(WdfRegistryQueryULong(key, &n, &userAccess)))
+                userAccess = 0;
+            WdfRegistryClose(key);
+        }
+        if (userAccess > 2)
+            userAccess = 0;
+    }
 
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = V383EvtPrepareHardware;
@@ -1005,12 +1046,16 @@ V383EvtDeviceAdd(
     WDF_FILEOBJECT_CONFIG_INIT(&fcfg, WDF_NO_EVENT_CALLBACK, WDF_NO_EVENT_CALLBACK, V383EvtFileCleanup);
     WdfDeviceInitSetFileObjectConfig(DeviceInit, &fcfg, WDF_NO_OBJECT_ATTRIBUTES);
     WdfDeviceInitSetIoInCallerContextCallback(DeviceInit, V383EvtIoInCallerContext);
-    WdfDeviceInitSetExclusive(DeviceInit, TRUE);
+    /* Exclusive for the test tool alone; with UserAccess every player
+     * process opens it for itself. */
+    WdfDeviceInitSetExclusive(DeviceInit, userAccess ? FALSE : TRUE);
 
     status = WdfDeviceInitAssignName(DeviceInit, &name);
     if (!NT_SUCCESS(status))
         return status;
-    status = WdfDeviceInitAssignSDDLString(DeviceInit, &sddl);
+    status = WdfDeviceInitAssignSDDLString(DeviceInit,
+                                           userAccess == 2 ? &sddl_low :
+                                           userAccess == 1 ? &sddl_users : &sddl);
     if (!NT_SUCCESS(status))
         return status;
 
@@ -1021,6 +1066,7 @@ V383EvtDeviceAdd(
 
     ctx = GetContext(device);
     ctx->Device = device;
+    ctx->UserAccess = userAccess;
     InitializeListHead(&ctx->Allocs);
     KeInitializeEvent(&ctx->RunDone, NotificationEvent, FALSE);
     status = WdfWaitLockCreate(WDF_NO_OBJECT_ATTRIBUTES, &ctx->AllocLock);
