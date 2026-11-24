@@ -54,6 +54,7 @@ edk2-rk3576 newer than 0.4.1 (its `ci` build until the next release).
 | Bluetooth | not written | works: pairing, file transfer; no voice (ci firmware) | bcm4345bt |
 | WiFi | not working | not working | none |
 | NPU | not available | works with [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) | rknpu |
+| RTC, PMIC, pin controller, UART2 | no driver needed | no driver needed; named, no yellow mark (not yet run) | [null](drivers/null) |
 
 Each result is from one board. Most of the CM5-IO column was seen on
 2026-10-01. Details per feature: [features](docs/features.md).

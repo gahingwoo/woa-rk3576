@@ -350,6 +350,70 @@ jobs:
           path: stage/rk3576-tools
           if-no-files-found: error
 
+  null-devices:
+    name: rk3576-null.inf (no-driver devices, test-signed)
+    # An INF-only package: no binary to build, but Windows will not stage
+    # it without a signed catalog. infverif /v must pass; DriverVer is
+    # stamped with the run number so a newer package always outranks an
+    # older one at a CONFIGFLAG_REINSTALL restart.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Script parses in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $tok = $null; $err = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path drivers\null\null-devices-reinstall.ps1), [ref]$tok, [ref]$err)
+          if ($err) { $err | Out-Host; throw 'null-devices-reinstall.ps1 does not parse' }
+      - name: Validate, stamp, catalog, sign, verify
+        shell: pwsh
+        run: |
+          $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
+          $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
+          $iv   = (Get-ChildItem $kits -Recurse -Filter infverif.exe -ErrorAction SilentlyContinue |
+                     Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
+          if (-not $iv) { throw 'infverif.exe not found' }
+          $pkg = Join-Path $env:RUNNER_TEMP 'rk3576-null-arm64'
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item drivers\null\rk3576-null.inf, drivers\null\null-devices-reinstall.ps1, drivers\null\README.md $pkg
+          $inf = Join-Path $pkg 'rk3576-null.inf'
+          $dv = 'DriverVer   = {0},1.0.{1}.{2}' -f (Get-Date -Format 'MM/dd/yyyy'), $env:GITHUB_RUN_NUMBER, $env:GITHUB_RUN_ATTEMPT
+          (Get-Content $inf) -replace '^DriverVer\s*=.*$', $dv | Set-Content -Encoding ascii $inf
+          Select-String -Path $inf -Pattern '^DriverVer' | Out-Host
+          & $iv /v $inf
+          if ($LASTEXITCODE) { throw "infverif /v failed: $LASTEXITCODE" }
+          & $iv /w $inf
+          Write-Host "infverif /w: exit $LASTEXITCODE (informational)"
+          $global:LASTEXITCODE = 0
+          $pw = [guid]::NewGuid().ToString()
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=woa-rk3576 null-devices test signing' `
+                    -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(5)
+          $pfx = Join-Path $env:RUNNER_TEMP 'n.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $pw -Force -AsPlainText) | Out-Null
+          Export-Certificate -Cert $cert -FilePath (Join-Path $pkg 'rk3576-null-test.cer') | Out-Null
+          # 23H2 is 10_NI; the INF's floor is 16299 (10_RS3).
+          & $i2c /driver:"$pkg" /os:10_RS3_ARM64,10_RS4_ARM64,10_RS5_ARM64,10_19H1_ARM64,10_VB_ARM64,10_CO_ARM64,10_NI_ARM64
+          if ($LASTEXITCODE) { throw "inf2cat failed: $LASTEXITCODE" }
+          $cat = Join-Path $pkg 'rk3576-null.cat'
+          & $st sign /fd sha256 /f $pfx /p $pw $cat
+          if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
+          Remove-Item $pfx
+          certutil -f -addstore Root (Join-Path $pkg 'rk3576-null-test.cer') | Out-Null
+          & $st verify /pa /q /c $cat $inf
+          if ($LASTEXITCODE) { throw 'the INF is not in the catalog, or the catalog does not verify' }
+          certutil -delstore Root $cert.Thumbprint | Out-Null
+          $global:LASTEXITCODE = 0
+          "DriverVer $dv`r`nCI run $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID`r`nCommit $env:GITHUB_SHA`r`nCertificate SHA1 $($cert.Thumbprint)" |
+            Set-Content -Encoding ascii (Join-Path $pkg 'BUILD.txt')
+          Get-ChildItem $pkg | Format-Table Name, Length | Out-Host
+          "NULLPKG=$pkg" >> $env:GITHUB_ENV
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rk3576-null-arm64
+          path: ${{ env.NULLPKG }}
+          if-no-files-found: error
+
   solution:
     name: WDK build (build/RockchipDrivers.sln)
     # The drivers imported from worproject/Rockchip-Windows-Drivers build as one
