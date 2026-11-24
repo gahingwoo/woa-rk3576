@@ -1,3 +1,7 @@
+> Historical copy, 2026-11-21: docs/WIRELESS.md as it was before the 2026-11-24 rewrite,
+> unchanged except that its links into this repository now point at commit
+> f8c3a47, where they resolve. It may not match main; the current page is [dev/wireless.md](../dev/wireless.md).
+
 # Wi-Fi and Bluetooth
 
 Neither works under Windows on either board, and nothing for them is built.
