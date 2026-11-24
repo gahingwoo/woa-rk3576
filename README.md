@@ -127,7 +127,10 @@ msbuild drivers\bluetooth\bcm4345bt\bcm4345bt.vcxproj /p:Configuration=Release /
 
 CI builds all of them on every push. The WinPE workflow also test-signs the drivers
 and puts them in a WinPE image. Details: [docs/BUILDING.md](docs/BUILDING.md).
-Debugging tools: [docs/DEBUGGING.md](docs/DEBUGGING.md).
+Debugging tools: [docs/DEBUGGING.md](docs/DEBUGGING.md). A tray monitor
+for CPU, GPU and NPU use and the temperatures, since 23H2's Task Manager
+shows neither the NPU nor a temperature:
+[tools/rk-monitor](tools/rk-monitor/README.md).
 
 ## Layout
 
@@ -149,6 +152,7 @@ tools/
   woa-deploy/           install Windows to the eMMC from WinPE
   woa-debug/            collect data in WinPE and in the installed system
   make-woa-usb.sh       a Windows Setup stick that boots without NVRAM
+  rk-monitor/           tray app: CPU, GPU and NPU use, temperatures
 docs/
 .github/workflows/      CI and the WinPE image
 ```

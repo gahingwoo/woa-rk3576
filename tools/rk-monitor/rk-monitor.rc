@@ -1,0 +1,36 @@
+/*
+ * rk-monitor.rc - version information and the application manifest
+ *
+ * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <winver.h>
+#include <winuser.h>
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "rk-monitor.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "RK3576 Monitor (CPU, GPU and NPU in the tray)"
+            VALUE "FileVersion", "0.1.0"
+            VALUE "InternalName", "rk-monitor"
+            VALUE "OriginalFilename", "rk-monitor.exe"
+            VALUE "ProductName", "woa-rk3576"
+            VALUE "ProductVersion", "0.1.0"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Ga Hing Woo, GPL-2.0-only"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

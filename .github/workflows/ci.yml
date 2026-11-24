@@ -94,6 +94,59 @@ jobs:
           name: pageverify-linux-x64
           path: pageverify
 
+  rk-monitor:
+    name: rk-monitor tray app (ARM64, x64)
+    # A plain Win32 program, no WDK. The x64 build runs here with --once,
+    # which prints one sample: the runner has CPU counters and no RK3576
+    # ones, so the CPU rows must have numbers and the GPU and NPU rows must
+    # say their counters are missing, without the program failing.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build
+        shell: pwsh
+        run: |
+          foreach ($plat in 'ARM64', 'x64') {
+            msbuild tools/rk-monitor/rk-monitor.vcxproj /p:Configuration=Release /p:Platform=$plat /m /nologo /v:minimal
+            if ($LASTEXITCODE -ne 0) { throw "msbuild failed for $plat" }
+          }
+      - name: Run once (x64)
+        shell: pwsh
+        run: |
+          $exe = 'tools\rk-monitor\x64\Release\rk-monitor.exe'
+          $p = Start-Process -FilePath $exe -ArgumentList '--once' -Wait -PassThru -NoNewWindow `
+                 -RedirectStandardOutput once.txt
+          Get-Content once.txt
+          if ($p.ExitCode -ne 0) { throw "rk-monitor --once exited $($p.ExitCode)" }
+          $t = Get-Content -Raw once.txt
+          if ($t -notmatch '(?m)^CPU') { throw 'no CPU section' }
+          if ($t -notmatch 'found\s+\\Processor\(\*\)') { throw 'the Processor counters were not found' }
+          if ($t -notmatch 'driver has no counters') { throw 'the missing NPU counter set is not reported' }
+          if ($t -notmatch 'RK3576 GPU counters not registered') { throw 'the missing GPU counter set is not reported' }
+      - name: Stage
+        shell: pwsh
+        run: |
+          foreach ($plat in 'ARM64', 'x64') {
+            $d = "stage\$plat"
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+            Copy-Item "tools\rk-monitor\$plat\Release\rk-monitor.exe", tools\rk-monitor\README.md, LICENSE $d
+          }
+          Get-ChildItem stage -Recurse | Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rk-monitor-arm64
+          path: stage/ARM64
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rk-monitor-x64
+          path: stage/x64
+          if-no-files-found: error
+
   solution:
     name: WDK build (build/RockchipDrivers.sln)
     # The drivers imported from worproject/Rockchip-Windows-Drivers build as one
