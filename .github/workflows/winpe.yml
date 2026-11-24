@@ -571,3 +571,42 @@ jobs:
             winpe.img.sha256
           retention-days: 14
           if-no-files-found: error
+
+  # A rolling release tagged "ci" with the WinPE image of the latest
+  # successful build of main, for Maskrom Studio's CI tier (and anyone who
+  # wants it without logging in to download Actions artifacts). A
+  # pre-release, never "latest", replaced by every successful build, its
+  # notes saying it is untested. The image is named as the releases name it
+  # (woa-rk3576-winpe-<tag>.img.xz) with "ci-<sha>" as the tag part.
+  ci-release:
+    name: Rolling "ci" release
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: winpe-arm64-${{ env.ADK_BUILD }}-img
+          path: img
+      - name: Image and checksums
+        run: |
+          set -eu
+          sha=${GITHUB_SHA::7}
+          mkdir rel
+          xz -T0 -6 -c img/winpe.img > "rel/woa-rk3576-winpe-ci-${sha}.img.xz"
+          (cd rel && sha256sum -- * > SHA256SUMS.txt)
+          cat rel/SHA256SUMS.txt
+      - name: Replace the ci release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          sha=${GITHUB_SHA::7}
+          date=$(date -u +%Y-%m-%d)
+          printf '%s\n' "Built from ${GITHUB_SHA} on ${date} by the WinPE workflow on main." "" \
+            "Untested: this image has not been run on a board. Every successful build of main replaces this release." > notes.md
+          gh release delete ci --yes --cleanup-tag -R "$GITHUB_REPOSITORY" || true
+          gh release create ci rel/* -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "CI build ${sha} ${date}" --notes-file notes.md

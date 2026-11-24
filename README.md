@@ -106,6 +106,16 @@ so `git log -- drivers/<class>/<name>` shows what differs from RK3588:
 
 Licences per driver: [THIRD_PARTY.md](THIRD_PARTY.md).
 
+## Releases and the rolling ci build
+
+Tagged releases carry the WinPE image (`woa-rk3576-winpe-<tag>.img.xz`),
+the drivers and `SHA256SUMS.txt`. Besides them, the pre-release tagged
+`ci` holds the WinPE image of the latest successful build of main
+(`woa-rk3576-winpe-ci-<sha>.img.xz` and `SHA256SUMS.txt`): never marked
+latest, replaced by every successful build, and untested. Use a tagged
+release unless you need a change that is only on main. Maskrom Studio's
+CI tier uses the `ci` release.
+
 ## Build
 
 ```cmd
