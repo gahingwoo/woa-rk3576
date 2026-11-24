@@ -38,12 +38,39 @@ counters up once the driver or the registration arrives:
 Kernel-mode counter providers are registered with lodctr, which no INF can
 run, hence the separate step.
 
+## Desktop widget
+
+Tray menu, **Desktop widget**: a small panel on the desktop with four
+lines, CPU (per cluster, with a graph), GPU (use, temperature, clock), NPU
+(per core, with a graph) and the thermal zones. It is a child of the window
+that holds the desktop icons, so it stays under every application and is
+still there after Win+D or "show desktop". Its background is translucent
+and follows light or dark mode. Drag it anywhere; the place is remembered
+per user (and it goes back to the default, the top left of the main
+screen, when that monitor is gone). **Widget click-through** lets clicks
+pass to the desktop; it can then be moved again after turning that off.
+Right-click on the widget opens the tray menu.
+
+It is redrawn only when something on it changes, which on an idle board
+is the graphs moving; a sample costs one PDH collection a second. Should
+Explorer restart, the widget comes back with the tray icon. If the desktop
+window cannot take a child, the widget falls back to a bottom-most
+ordinary window, which Win+D does hide.
+
+Installed with the RK3576 tools ([../rk3576-tools](../rk3576-tools/README.md)),
+the widget is on by default (`HKLM\Software\RK3576\Monitor`, `Widget` = 1);
+each user's own choice is kept in `HKCU\Software\RK3576\Monitor`
+(`Widget`, `WidgetClickThrough`, `WidgetX`, `WidgetY`).
+
 ## Use
 
-It is one portable exe, `rk-monitor.exe`, nothing to install. Copy it
-anywhere and run it. Right-click the icon for **Start with Windows** (an
+It is one portable exe, `rk-monitor.exe`. Copy it anywhere and run it, or
+install it for every user with the RK3576 tools bundle
+([../rk3576-tools](../rk3576-tools/README.md)), which also registers the
+GPU and NPU counters. Right-click the icon for **Start with Windows** (an
 entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, pointing
-at the exe where it is now) and **Exit**. A second start opens the popup of
+at the exe where it is now; shown checked and greyed when the installer
+already starts it for all users) and **Exit**. A second start opens the popup of
 the one already running. It follows the light or dark app mode, and the
 taskbar's mode for the icon.
 

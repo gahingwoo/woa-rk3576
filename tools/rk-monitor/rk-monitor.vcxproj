@@ -64,7 +64,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>pdh.lib;dwmapi.lib;shell32.lib;gdi32.lib;user32.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>pdh.lib;dwmapi.lib;shell32.lib;gdi32.lib;user32.lib;advapi32.lib;shcore.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 

@@ -19,9 +19,21 @@
  * A counter set that is not there is shown as such ("not reported", "driver
  * has no counters") and looked for again every 30 seconds.
  *
- *   rk-monitor.exe           tray icon; left click: the popup, right click:
- *                            the menu (start with Windows, exit)
- *   rk-monitor.exe --once    print one sample as text and exit
+ * The desktop widget (tray menu, "Desktop widget") is a small panel on the
+ * desktop itself: a child of the window that holds the desktop icons, so it
+ * stays below every application and stays visible on Win+D. Semi-transparent
+ * (a per-pixel alpha layered window), draggable, its position remembered,
+ * optionally click-through; it is redrawn only when its text or graphs change.
+ *
+ *   rk-monitor.exe              tray icon; left click: the popup, right click:
+ *                               the menu (desktop widget, start with Windows, exit)
+ *   rk-monitor.exe --autostart  the same, started at logon: exits quietly if
+ *                               one is already running
+ *   rk-monitor.exe --once       print one sample as text and exit
+ *
+ * Settings: HKCU\Software\RK3576\Monitor (Widget, WidgetClickThrough,
+ * WidgetX, WidgetY); a value missing there is read from
+ * HKLM\Software\RK3576\Monitor, which the installer sets (Widget = 1).
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
  * SPDX-License-Identifier: GPL-2.0-only
@@ -42,6 +54,7 @@
 #include <windowsx.h>
 #include <shellapi.h>
 #include <dwmapi.h>
+#include <shellscalingapi.h>
 #include <pdh.h>
 #include <pdhmsg.h>
 #include <stdio.h>
@@ -65,6 +78,12 @@
 #define IDM_SHOW        100
 #define IDM_AUTOSTART   101
 #define IDM_EXIT        102
+#define IDM_WIDGET      103
+#define IDM_CLICKTHRU   104
+
+#define SET_KEY         L"Software\\RK3576\\Monitor"
+#define WIDGET_CLASS    L"Rk3576MonitorWidget"
+#define WIDGET_W        250         /* DIP */
 
 #define HIST            60          /* sparkline samples */
 #define MAX_CPU         64
@@ -248,6 +267,8 @@ static struct {
     BOOL npuSet;                    /* the counter set exists */
     NpuCore npu[2];
     int nnpu;
+
+    Series cpuAll, npuAll;          /* the widget's graphs */
 } M;
 
 typedef enum { R_HEAD, R_ROW, R_NOTE } RowKind;
@@ -377,6 +398,15 @@ static void SampleCpu(void)
         c->mhzOk = fcnt[k] > 0 && fmax[k] > 0;
         c->mhz = fmax[k];
         SeriesPush(&c->hist, c->usage);
+    }
+    {
+        double tot = 0;
+        int cores = 0;
+        for (k = 0; k < M.ncl; k++) {
+            tot += sum[k];
+            cores += cnt[k];
+        }
+        SeriesPush(&M.cpuAll, cores ? tot / cores : 0);
     }
 }
 
@@ -528,8 +558,15 @@ static void SampleNpu(void)
         }
         free(it);
     }
-    for (k = 0; k < M.nnpu; k++)
-        SeriesPush(&M.npu[k].hist, M.npu[k].busyOk ? M.npu[k].busy : 0);
+    {
+        double mx = 0;
+        for (k = 0; k < M.nnpu; k++) {
+            SeriesPush(&M.npu[k].hist, M.npu[k].busyOk ? M.npu[k].busy : 0);
+            if (M.npu[k].busyOk && M.npu[k].busy > mx)
+                mx = M.npu[k].busy;
+        }
+        SeriesPush(&M.npuAll, mx);
+    }
 }
 
 static Row *AddRow(RowKind kind, const wchar_t *label, const Series *spark)
@@ -552,6 +589,77 @@ static void FmtMB(wchar_t *out, size_t cap, double bytes)
         swprintf(out, cap, L"%.2f GB", bytes / (1024.0 * 1024 * 1024));
     else
         swprintf(out, cap, L"%.0f MB", bytes / (1024.0 * 1024));
+}
+
+/* The widget: four lines, label, value and (for the use lines) a graph. */
+static Row g_wrows[4];
+static int g_nwrows;
+
+static void BuildWidgetRows(void)
+{
+    Row *r;
+    wchar_t part[32];
+    int i;
+
+    memset(g_wrows, 0, sizeof(g_wrows));
+    g_nwrows = 4;
+
+    r = &g_wrows[0];
+    wcscpy_s(r->label, 48, L"CPU");
+    r->spark = &M.cpuAll;
+    for (i = 0; i < M.ncl; i++) {
+        if (M.ncl == 2)
+            swprintf(part, 32, L"%ls%ls %.0f%%", i ? L"   " : L"", i ? L"A72" : L"A53", M.cl[i].usage);
+        else
+            swprintf(part, 32, L"%.0f%%", M.cl[i].usage);
+        wcscat_s(r->value, 112, part);
+    }
+
+    r = &g_wrows[1];
+    wcscpy_s(r->label, 48, L"GPU");
+    r->spark = M.gpuOk ? &M.gpuHist : NULL;
+    if (M.gpuOk)
+        swprintf(r->value, 112, L"%.0f%%", M.gpu);
+    else
+        wcscpy_s(r->value, 112, L"no counters");
+    if (M.gpuTempOk) {
+        swprintf(part, 32, L"   %.0f \x00B0" L"C", M.gpuTemp);
+        wcscat_s(r->value, 112, part);
+        r->warn = M.gpuTemp >= 85.0;
+    }
+    if (M.gpuClkOk) {
+        swprintf(part, 32, L"   %.0f MHz", M.gpuClk);
+        wcscat_s(r->value, 112, part);
+    }
+    if (M.gpuThrOk && M.gpuThr >= 0.5) {
+        wcscat_s(r->value, 112, L" (throttled)");
+        r->warn = TRUE;
+    }
+
+    r = &g_wrows[2];
+    wcscpy_s(r->label, 48, L"NPU");
+    if (!M.npuSet || M.nnpu == 0) {
+        wcscpy_s(r->value, 112, M.npuSet ? L"driver not running" : L"no counters");
+    } else {
+        r->spark = &M.npuAll;
+        for (i = 0; i < M.nnpu; i++) {
+            swprintf(part, 32, L"%ls%.0f%%", i ? L" / " : L"", M.npu[i].busy);
+            wcscat_s(r->value, 112, part);
+        }
+    }
+
+    r = &g_wrows[3];
+    wcscpy_s(r->label, 48, L"Temp");
+    if (M.ntz == 0)
+        wcscpy_s(r->value, 112, L"not reported");
+    for (i = 0; i < M.ntz; i++) {
+        swprintf(part, 32, L"%ls%.0f", i ? L" / " : L"", M.tz[i].celsius);
+        wcscat_s(r->value, 112, part);
+        if (M.tz[i].celsius >= 85.0)
+            r->warn = TRUE;
+    }
+    if (M.ntz)
+        wcscat_s(r->value, 112, L" \x00B0" L"C");
 }
 
 static void BuildRows(void)
@@ -670,6 +778,7 @@ static void BuildRows(void)
     else
         wcscpy_s(b, 48, L"NPU no counters");
     swprintf(g_tip, 128, L"%ls\n%ls%ls\nGPU %.0f%%\n%ls", APP_NAME, a, tz, M.gpu, b);
+    BuildWidgetRows();
 }
 
 static int g_tick;
@@ -860,19 +969,50 @@ static void TrayRemove(void)
 
 static BOOL AutostartGet(void)
 {
-    return RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE, RRF_RT_REG_SZ, NULL, NULL, NULL) == ERROR_SUCCESS;
+    return RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
+                        NULL, NULL, NULL) == ERROR_SUCCESS;
+}
+
+/* The installer starts it for every user (HKLM Run); then the per-user entry is not offered. */
+static BOOL AutostartMachine(void)
+{
+    return RegGetValueW(HKEY_LOCAL_MACHINE, RUN_KEY, RUN_VALUE, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
+                        NULL, NULL, NULL) == ERROR_SUCCESS;
+}
+
+/* A setting: the user's, else the machine default the installer wrote, else Dflt. */
+static DWORD SettingGet(const wchar_t *name, DWORD dflt)
+{
+    DWORD v, sz = sizeof(v);
+
+    if (RegGetValueW(HKEY_CURRENT_USER, SET_KEY, name, RRF_RT_REG_DWORD, NULL, &v, &sz) == ERROR_SUCCESS)
+        return v;
+    sz = sizeof(v);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, SET_KEY, name, RRF_RT_REG_DWORD, NULL, &v, &sz) == ERROR_SUCCESS)
+        return v;
+    return dflt;
+}
+
+static BOOL SettingHas(const wchar_t *name)
+{
+    return RegGetValueW(HKEY_CURRENT_USER, SET_KEY, name, RRF_RT_REG_DWORD, NULL, NULL, NULL) == ERROR_SUCCESS;
+}
+
+static void SettingSet(const wchar_t *name, DWORD v)
+{
+    RegSetKeyValueW(HKEY_CURRENT_USER, SET_KEY, name, REG_DWORD, &v, sizeof(v));
 }
 
 static void AutostartSet(BOOL on)
 {
     HKEY k;
-    wchar_t exe[MAX_PATH], cmd[MAX_PATH + 4];
+    wchar_t exe[MAX_PATH], cmd[MAX_PATH + 16];
 
     if (RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, 0, KEY_SET_VALUE, &k) != ERROR_SUCCESS)
         return;
     if (on) {
         GetModuleFileNameW(NULL, exe, MAX_PATH);
-        swprintf(cmd, MAX_PATH + 4, L"\"%ls\"", exe);
+        swprintf(cmd, MAX_PATH + 16, L"\"%ls\" --autostart", exe);
         RegSetValueExW(k, RUN_VALUE, 0, REG_SZ, (const BYTE *)cmd, (DWORD)((wcslen(cmd) + 1) * sizeof(wchar_t)));
     } else {
         RegDeleteValueW(k, RUN_VALUE);
@@ -1070,13 +1210,442 @@ static void PopupHide(void)
     }
 }
 
+/* ------------------------------------------------------------ widget */
+
+static HWND g_widget, g_widgetHost;
+static BOOL g_widgetOn, g_clickThrough, g_widgetDrag;
+static BOOL g_childFailed;          /* the desktop refused a child: stay top-level */
+static POINT g_dragOff;
+static UINT g_wdpi;
+static HFONT g_wfBody, g_wfHead;
+static ULONGLONG g_wsig;            /* what was last drawn */
+static int g_wlastw, g_wlasth;
+
+static void MenuShow(int x, int y);
+
+static int WS(int v)
+{
+    return MulDiv(v, (int)(g_wdpi ? g_wdpi : 96), 96);
+}
+
+/* The window that holds the desktop icons (SHELLDLL_DefView): Progman, or
+ * the WorkerW Explorer moves them into for some wallpaper modes. A child of
+ * it sits on the desktop: under every application, and still there on
+ * Win+D, which hides top-level windows but not the desktop's children. */
+static HWND DesktopHost(void)
+{
+    HWND progman = FindWindowW(L"Progman", NULL), w = NULL;
+
+    if (progman && FindWindowExW(progman, NULL, L"SHELLDLL_DefView", NULL))
+        return progman;
+    while ((w = FindWindowExW(NULL, w, L"WorkerW", NULL)) != NULL)
+        if (FindWindowExW(w, NULL, L"SHELLDLL_DefView", NULL))
+            return w;
+    return progman;
+}
+
+static UINT DpiAt(POINT pt)
+{
+    HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+    UINT dx = 96, dy = 96;
+
+    if (FAILED(GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &dx, &dy)))
+        return 96;
+    return dx;
+}
+
+static void WidgetFonts(void)
+{
+    if (g_wfBody) DeleteObject(g_wfBody);
+    if (g_wfHead) DeleteObject(g_wfHead);
+    /* grey-scale antialiasing: ClearType's coloured fringes do not survive
+     * being composited at a partial alpha */
+    g_wfBody = CreateFontW(-WS(13), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    g_wfHead = CreateFontW(-WS(13), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+}
+
+#define WPAD        10
+#define WROW_H      20
+#define WLABEL_W    42
+#define WSPARK_W    48
+
+/* The default: the top left of the primary monitor's work area. */
+static POINT WidgetDefaultPos(void)
+{
+    POINT z = { 0, 0 };
+    MONITORINFO mi;
+    UINT dpi;
+
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(MonitorFromPoint(z, MONITOR_DEFAULTTOPRIMARY), &mi);
+    dpi = DpiAt(z);
+    z.x = mi.rcWork.left + MulDiv(16, (int)dpi, 96);
+    z.y = mi.rcWork.top + MulDiv(16, (int)dpi, 96);
+    return z;
+}
+
+/* The saved place, if a monitor still shows it; else the default. */
+static POINT WidgetSavedPos(void)
+{
+    POINT p;
+    RECT vs;
+
+    if (!SettingHas(L"WidgetX") || !SettingHas(L"WidgetY"))
+        return WidgetDefaultPos();
+    p.x = (LONG)SettingGet(L"WidgetX", 0);
+    p.y = (LONG)SettingGet(L"WidgetY", 0);
+    vs.left = p.x;
+    vs.top = p.y;
+    vs.right = p.x + 40;
+    vs.bottom = p.y + 20;
+    if (!MonitorFromRect(&vs, MONITOR_DEFAULTTONULL))
+        return WidgetDefaultPos();
+    return p;
+}
+
+static void WidgetScreenPos(POINT *p)
+{
+    RECT rc;
+
+    GetWindowRect(g_widget, &rc);
+    p->x = rc.left;
+    p->y = rc.top;
+}
+
+/* Screen coordinates to the host's client coordinates (a child is placed in those). */
+static void WidgetMoveTo(POINT scr, int w, int h, UINT flags)
+{
+    POINT c = scr;
+
+    if (g_widgetHost)
+        ScreenToClient(g_widgetHost, &c);
+    SetWindowPos(g_widget, g_widgetHost ? HWND_TOP : HWND_BOTTOM, c.x, c.y, w, h, flags | SWP_NOACTIVATE);
+}
+
+static ULONGLONG Fnv(ULONGLONG h, const void *data, size_t n)
+{
+    const unsigned char *b = (const unsigned char *)data;
+
+    while (n--) {
+        h ^= *b++;
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+/* What the widget would show, as a number: when it is the same, nothing is drawn. */
+static ULONGLONG WidgetSignature(int sparkH)
+{
+    ULONGLONG h = 1469598103934665603ull;
+    int i, k;
+
+    h = Fnv(h, &g_appsDark, sizeof(g_appsDark));
+    h = Fnv(h, &g_wdpi, sizeof(g_wdpi));
+    for (i = 0; i < g_nwrows; i++) {
+        const Row *r = &g_wrows[i];
+        h = Fnv(h, r->label, wcslen(r->label) * sizeof(wchar_t));
+        h = Fnv(h, r->value, wcslen(r->value) * sizeof(wchar_t));
+        h = Fnv(h, &r->warn, sizeof(r->warn));
+        if (r->spark) {
+            const Series *s = r->spark;
+            for (k = 0; k < s->n; k++) {
+                /* the graph at its pixel height */
+                int px = (int)(s->v[(s->head - s->n + k + HIST) % HIST] * sparkH / 100.0 + 0.5);
+                h = Fnv(h, &px, sizeof(px));
+            }
+            h = Fnv(h, &s->n, sizeof(s->n));
+        }
+    }
+    return h;
+}
+
+static void WidgetPaint(BOOL force)
+{
+    int w, h, i, x, y, k, radius;
+    BITMAPINFO bi;
+    void *bits = NULL;
+    HDC scr, dc;
+    HBITMAP dib, old;
+    COLORREF bgc, txt, dim, acc, warn, line;
+    BYTE bgA;
+    DWORD *px, bgpx;
+    POINT pos, src = { 0, 0 };
+    SIZE size;
+    BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+    RECT rc;
+    ULONGLONG sig;
+    UINT dpi;
+
+    if (!g_widget)
+        return;
+    WidgetScreenPos(&pos);
+    dpi = DpiAt(pos);
+    if (dpi != g_wdpi) {
+        g_wdpi = dpi;
+        WidgetFonts();
+        force = TRUE;
+    }
+    w = WS(WIDGET_W);
+    h = WS(WPAD) * 2 + WS(WROW_H) * g_nwrows;
+    sig = WidgetSignature(WS(WROW_H) - WS(6));
+    if (!force && sig == g_wsig && w == g_wlastw && h == g_wlasth)
+        return;                     /* nothing changed: no drawing at all */
+    g_wsig = sig;
+    g_wlastw = w;
+    g_wlasth = h;
+
+    if (g_appsDark) {
+        bgc = RGB(0x20, 0x20, 0x20); bgA = 0xB8;
+        txt = RGB(0xFF, 0xFF, 0xFF); dim = RGB(0xC8, 0xC8, 0xC8);
+        acc = RGB(0x60, 0xCD, 0xFF); warn = RGB(0xFF, 0x99, 0xA4); line = RGB(0x50, 0x50, 0x50);
+    } else {
+        bgc = RGB(0xF3, 0xF3, 0xF3); bgA = 0xC8;
+        txt = RGB(0x1A, 0x1A, 0x1A); dim = RGB(0x50, 0x50, 0x50);
+        acc = RGB(0x00, 0x5F, 0xB8); warn = RGB(0xC4, 0x2B, 0x1C); line = RGB(0xC8, 0xC8, 0xC8);
+    }
+
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    scr = GetDC(NULL);
+    dc = CreateCompatibleDC(scr);
+    dib = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (!dib || !bits) {
+        DeleteDC(dc);
+        ReleaseDC(NULL, scr);
+        return;
+    }
+    old = (HBITMAP)SelectObject(dc, dib);
+    {
+        HBRUSH b = CreateSolidBrush(bgc);
+        SetRect(&rc, 0, 0, w, h);
+        FillRect(dc, &rc, b);
+        DeleteObject(b);
+    }
+    SetBkMode(dc, TRANSPARENT);
+    y = WS(WPAD);
+    for (i = 0; i < g_nwrows; i++) {
+        const Row *r = &g_wrows[i];
+        int right = w - WS(WPAD);
+
+        SelectObject(dc, g_wfHead);
+        SetTextColor(dc, dim);
+        SetRect(&rc, WS(WPAD), y, WS(WPAD) + WS(WLABEL_W), y + WS(WROW_H));
+        DrawTextW(dc, r->label, -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        if (r->spark) {
+            const Series *s = r->spark;
+            int x0 = right - WS(WSPARK_W), y0 = y + WS(3), y1 = y + WS(WROW_H) - WS(3);
+            HPEN base = CreatePen(PS_SOLID, 1, line), pen = CreatePen(PS_SOLID, WS(1), acc);
+            HPEN op = (HPEN)SelectObject(dc, base);
+            POINT pt[HIST];
+
+            MoveToEx(dc, x0, y1, NULL);
+            LineTo(dc, right, y1);
+            for (k = 0; k < s->n; k++) {
+                double v = s->v[(s->head - s->n + k + HIST) % HIST];
+                if (v < 0) v = 0;
+                if (v > 100) v = 100;
+                pt[k].x = x0 + MulDiv(HIST - s->n + k, WS(WSPARK_W), HIST - 1);
+                pt[k].y = y1 - (int)((y1 - y0) * v / 100.0 + 0.5);
+            }
+            SelectObject(dc, pen);
+            if (s->n > 1)
+                Polyline(dc, pt, s->n);
+            SelectObject(dc, op);
+            DeleteObject(base);
+            DeleteObject(pen);
+            right = x0 - WS(6);
+        }
+        SelectObject(dc, g_wfBody);
+        SetTextColor(dc, r->warn ? warn : txt);
+        SetRect(&rc, WS(WPAD) + WS(WLABEL_W), y, right, y + WS(WROW_H));
+        DrawTextW(dc, r->value, -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        y += WS(WROW_H);
+    }
+    GdiFlush();
+
+    /* Alpha: the background at bgA, everything drawn on it opaque, the
+     * rounded corners cut out; premultiplied, as UpdateLayeredWindow wants. */
+    px = (DWORD *)bits;
+    bgpx = ((DWORD)GetRValue(bgc) << 16) | ((DWORD)GetGValue(bgc) << 8) | GetBValue(bgc);
+    radius = WS(8);
+    for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+            DWORD p = px[y * w + x] & 0x00FFFFFF, a = p == bgpx ? bgA : 255;
+            int cx = x < radius ? radius - x : (x >= w - radius ? x - (w - radius - 1) : 0);
+            int cy = y < radius ? radius - y : (y >= h - radius ? y - (h - radius - 1) : 0);
+            if (cx && cy && cx * cx + cy * cy > radius * radius)
+                a = 0;
+            px[y * w + x] = (a << 24) |
+                            ((((p >> 16) & 0xFF) * a / 255) << 16) |
+                            ((((p >> 8) & 0xFF) * a / 255) << 8) |
+                            ((p & 0xFF) * a / 255);
+        }
+    }
+    size.cx = w;
+    size.cy = h;
+    UpdateLayeredWindow(g_widget, scr, NULL, &size, dc, &src, 0, &bf, ULW_ALPHA);
+    SelectObject(dc, old);
+    DeleteObject(dib);
+    DeleteDC(dc);
+    ReleaseDC(NULL, scr);
+}
+
+static void WidgetApplyClickThrough(void)
+{
+    LONG_PTR ex;
+
+    if (!g_widget)
+        return;
+    ex = GetWindowLongPtrW(g_widget, GWL_EXSTYLE);
+    ex = g_clickThrough ? (ex | WS_EX_TRANSPARENT) : (ex & ~(LONG_PTR)WS_EX_TRANSPARENT);
+    SetWindowLongPtrW(g_widget, GWL_EXSTYLE, ex);
+}
+
+static void WidgetDestroy(void)
+{
+    if (g_widget) {
+        HWND w = g_widget;
+        g_widget = NULL;
+        DestroyWindow(w);
+    }
+    g_widgetHost = NULL;
+}
+
+static void WidgetCreate(void)
+{
+    POINT pos = WidgetSavedPos();
+    HWND host = DesktopHost();
+
+    if (g_widget)
+        return;
+    if (host && !g_childFailed) {
+        /* a child of the desktop's icon window (see DesktopHost); a layered
+         * child needs the Windows 8+ entry in the manifest, which it has */
+        POINT c = pos;
+        ScreenToClient(host, &c);
+        g_widget = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE, WIDGET_CLASS, APP_NAME,
+                                   WS_CHILD | WS_CLIPSIBLINGS, c.x, c.y, 1, 1, host, NULL,
+                                   GetModuleHandleW(NULL), NULL);
+        if (g_widget)
+            g_widgetHost = host;
+        else
+            g_childFailed = TRUE;
+    }
+    if (!g_widget)      /* no desktop window: a bottom-most top-level window (Win+D hides it) */
+        g_widget = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, WIDGET_CLASS, APP_NAME,
+                                   WS_POPUP, pos.x, pos.y, 1, 1, NULL, NULL, GetModuleHandleW(NULL), NULL);
+    if (!g_widget)
+        return;
+    WidgetApplyClickThrough();
+    g_wdpi = 0;
+    g_wsig = 0;
+    WidgetMoveTo(pos, 1, 1, 0);
+    WidgetPaint(TRUE);
+    ShowWindow(g_widget, SW_SHOWNOACTIVATE);
+}
+
+/* Each second: draw if something changed; every few seconds, check the
+ * host is still the desktop's (Explorer restarted, or moved the icons into
+ * another window) and that nothing of the desktop's own covers the widget. */
+static void WidgetTick(void)
+{
+    if (!g_widgetOn)
+        return;
+    if (!g_widget || (g_tick % 5 == 0 && !g_widgetDrag &&
+                      (g_widgetHost ? (!IsWindow(g_widgetHost) || DesktopHost() != g_widgetHost)
+                                    : (!g_childFailed && DesktopHost() != NULL)))) {
+        WidgetDestroy();
+        WidgetCreate();
+        return;
+    }
+    if (g_widgetHost && !g_widgetDrag && GetWindow(g_widget, GW_HWNDPREV))
+        SetWindowPos(g_widget, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    WidgetPaint(FALSE);
+}
+
+static void WidgetEnable(BOOL on)
+{
+    g_widgetOn = on;
+    SettingSet(L"Widget", on ? 1 : 0);
+    if (on)
+        WidgetCreate();
+    else
+        WidgetDestroy();
+}
+
+static LRESULT CALLBACK WidgetProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    POINT p;
+
+    switch (msg) {
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+    case WM_LBUTTONDOWN:
+        GetCursorPos(&p);
+        WidgetScreenPos(&g_dragOff);
+        g_dragOff.x = p.x - g_dragOff.x;
+        g_dragOff.y = p.y - g_dragOff.y;
+        g_widgetDrag = TRUE;
+        SetCapture(hwnd);
+        return 0;
+    case WM_MOUSEMOVE:
+        if (g_widgetDrag) {
+            GetCursorPos(&p);
+            p.x -= g_dragOff.x;
+            p.y -= g_dragOff.y;
+            WidgetMoveTo(p, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        }
+        return 0;
+    case WM_LBUTTONUP:
+    case WM_CAPTURECHANGED:
+        if (g_widgetDrag) {
+            g_widgetDrag = FALSE;
+            if (msg == WM_LBUTTONUP)
+                ReleaseCapture();
+            WidgetScreenPos(&p);
+            SettingSet(L"WidgetX", (DWORD)p.x);
+            SettingSet(L"WidgetY", (DWORD)p.y);
+            WidgetPaint(FALSE);     /* another monitor's DPI */
+        }
+        return 0;
+    case WM_RBUTTONUP:
+        GetCursorPos(&p);
+        MenuShow(p.x, p.y);
+        return 0;
+    case WM_DESTROY:
+        /* also when Explorer goes away and takes its children with it;
+         * WidgetTick makes a new one */
+        if (hwnd == g_widget) {
+            g_widget = NULL;
+            g_widgetHost = NULL;
+        }
+        return 0;
+    default:
+        (void)lp;
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+}
+
 static void MenuShow(int x, int y)
 {
     HMENU m = CreatePopupMenu();
     UINT cmd;
 
     AppendMenuW(m, MF_STRING, IDM_SHOW, L"Show");
-    AppendMenuW(m, MF_STRING | (AutostartGet() ? MF_CHECKED : 0), IDM_AUTOSTART, L"Start with Windows");
+    AppendMenuW(m, MF_STRING | (g_widgetOn ? MF_CHECKED : 0), IDM_WIDGET, L"Desktop widget");
+    AppendMenuW(m, MF_STRING | (g_clickThrough ? MF_CHECKED : 0) | (g_widgetOn ? 0 : MF_GRAYED), IDM_CLICKTHRU,
+                L"Widget click-through");
+    if (AutostartMachine())
+        AppendMenuW(m, MF_STRING | MF_CHECKED | MF_GRAYED, IDM_AUTOSTART, L"Start with Windows (all users, installed)");
+    else
+        AppendMenuW(m, MF_STRING | (AutostartGet() ? MF_CHECKED : 0), IDM_AUTOSTART, L"Start with Windows");
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING, IDM_EXIT, L"Exit");
     SetMenuDefaultItem(m, IDM_SHOW, FALSE);
@@ -1092,6 +1661,14 @@ static void MenuShow(int x, int y)
     case IDM_AUTOSTART:
         AutostartSet(!AutostartGet());
         break;
+    case IDM_WIDGET:
+        WidgetEnable(!g_widgetOn);
+        break;
+    case IDM_CLICKTHRU:
+        g_clickThrough = !g_clickThrough;
+        SettingSet(L"WidgetClickThrough", g_clickThrough ? 1 : 0);
+        WidgetApplyClickThrough();
+        break;
     case IDM_EXIT:
         DestroyWindow(g_hwnd);
         break;
@@ -1105,6 +1682,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     if (msg == g_msgTaskbarCreated && msg != 0) {
         g_trayAdded = FALSE;        /* explorer restarted */
         TrayUpdate(TRUE);
+        if (g_widgetOn) {           /* its desktop went with it */
+            WidgetDestroy();
+            WidgetCreate();
+        }
         return 0;
     }
     switch (msg) {
@@ -1112,6 +1693,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == TIMER_SAMPLE) {
             Sample();
             TrayUpdate(FALSE);
+            WidgetTick();
             if (IsWindowVisible(hwnd)) {
                 RECT rc;
                 int h = Layout(NULL, S(POPUP_W));
@@ -1157,6 +1739,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             ThemeRead();
             PopupApplyFrame();
             TrayUpdate(FALSE);
+            WidgetPaint(TRUE);
             InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;
@@ -1191,6 +1774,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_DESTROY:
         KillTimer(hwnd, TIMER_SAMPLE);
+        WidgetDestroy();
         TrayRemove();
         PostQuitMessage(0);
         return 0;
@@ -1276,7 +1860,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     mutex = CreateMutexW(NULL, TRUE, APP_MUTEX);
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND other = FindWindowW(APP_CLASS, NULL);
-        if (other)
+        /* started again at logon (HKLM and HKCU Run both set): stay quiet */
+        if (other && !(cmd && wcsstr(cmd, L"--autostart")))
             PostMessageW(other, WM_SHOWPOPUP, 0, 0);
         return 0;
     }
@@ -1290,6 +1875,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     wc.style = CS_DROPSHADOW;
     if (!RegisterClassExW(&wc))
         return 1;
+    wc.lpfnWndProc = WidgetProc;
+    wc.lpszClassName = WIDGET_CLASS;
+    wc.style = 0;
+    if (!RegisterClassExW(&wc))
+        return 1;
     g_hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, APP_CLASS, APP_NAME, WS_POPUP,
                              0, 0, 1, 1, NULL, NULL, inst, NULL);
     if (!g_hwnd)
@@ -1300,6 +1890,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 
     Sample();
     TrayUpdate(TRUE);
+    g_clickThrough = SettingGet(L"WidgetClickThrough", 0) != 0;
+    if (SettingGet(L"Widget", 0)) {
+        g_widgetOn = TRUE;
+        WidgetCreate();
+    }
     SetTimer(g_hwnd, TIMER_SAMPLE, SAMPLE_MS, NULL);
 
     while (GetMessageW(&m, NULL, 0, 0) > 0) {
