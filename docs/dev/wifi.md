@@ -21,6 +21,7 @@ stages, how each one is accepted on the board, licences and firmware files.
 - [Firmware files](#firmware-files)
 - [Tests](#tests)
 - [Risks and open questions](#risks-and-open-questions)
+- [Other boards: ROCK 4D, Dragon Q6A, CM5-IO](#other-boards-rock-4d-dragon-q6a-cm5-io)
 
 ## The choice of driver model
 
@@ -424,3 +425,90 @@ matrix, `wifi`) and makes the test-signed package (`wifi-package`).
    tried.
 7. WiFiCx documentation and the absence of a public sample (W6).
 8. The per-board MAC address (above).
+
+## Other boards: ROCK 4D, Dragon Q6A, CM5-IO
+
+Checked on 2026-11-25, from documents only; nothing below has been tried
+on a board.
+
+| Board | Wi-Fi/BT | Bus | Windows driver that exists |
+|---|---|---|---|
+| TaishanPi 3M | Broadcom BCM43456 (AMPAK AP6256) | SDIO | none; this page |
+| Radxa ROCK 4D | AICSEMI AIC8800D80 (module listed by CNX Software as FCU760K; Radxa's own pages say only "Wi-Fi 6, BT 5.4") | USB | Mario Bălănică's `aicwlan` (below) |
+| Radxa Dragon Q6A (QCS6490) | AICSEMI AIC8800D80 | USB | the same `aicwlan` |
+| ArmSoM CM5-IO (CM5 module) | Synaptics SYN43752 | SDIO | none |
+
+So the guess was right: the ROCK 4D and the Dragon Q6A carry the same
+chip, the AIC8800D80 on USB. Sources: the mainline patch that powers the
+ROCK 4D's Wi-Fi ("The production version of the ROCK 4D appears to sport
+a AICSEMI AIC8800D80 USB Wi-Fi + BT chipset", linux-rockchip, June 2025;
+the power GPIOs it adds, GPIO2 PC7 for `vcc_3v3_wifi` and GPIO2 PD1 for
+the rfkill, are the ones edk2-rk3576's ROCK 4D platform code already
+drives at boot), and Radxa's forum thread "Wi-Fi/BT support for Windows
+on Q6A" ("AIC8800D80 USB Wi-Fi/BT combo chipset found in the Dragon Q6A").
+
+**The Q6A's Windows driver.** Radxa's Windows page for the Q6A says the
+default driver package has no Wi-Fi or Bluetooth driver and points to
+`aicwlan_arm64_0935761.zip` in worproject/dldserv-mirror, "maintained by
+the community (Mario in worproject/dldserv-mirror)", "a test-signed
+build", covering "most client-mode Wi-Fi functionality"; forum users
+report Bluetooth working too. Looking inside the zip:
+
+- `aicwlan.inf`: "INF file for installing the AIC8800 WiFiCx USB driver",
+  Copyright (c) 2026 Mario Bălănică, Class Net, DriverVer 7.47.8.743
+  (2026-06-24). Binds `USB\VID_A69C&PID_8D80` (the chip before its
+  firmware is loaded) and `USB\VID_A69C&PID_8D81&MI_02` (after).
+- `aicwlan.sys`: a KMDF driver binding the WiFiCx and NetAdapterCx class
+  extensions, so Windows' own Wi-Fi UI works with it. Binary only.
+- `fw/usb/aic8800D80*/...`: AICSEMI firmware, patch tables and RF
+  configuration for several AIC8800 variants.
+- **No licence** for the driver or the firmware anywhere in the package,
+  and no source published. So it can be used by anyone who downloads it
+  from the mirror, but this repository cannot redistribute it, modify it,
+  or ship it in an image without the author's permission.
+
+**Will it work on the ROCK 4D?** Probably not as it is, for one reason that
+has nothing to do with the chip: the INF's models section is
+`NTARM64.10.0...26100`, so it installs only on Windows 11 24H2 or later,
+and 24H2 cannot boot on the RK3576 (Cortex-A72/A53 are ARMv8.0; 24H2
+needs ARMv8.1 atomics). The Q6A's Kryo cores are ARMv8.2, which is why
+it is fine there. Whether the binary itself needs 24H2 (a WiFiCx or
+NetAdapterCx version that 23H2 lacks) or only the INF says so is not
+known. A private test is cheap and says which:
+
+1. ROCK 4D, Windows 11 23H2 (22631) as on the other boards, test signing
+   on. Check that `USB\VID_A69C&PID_8D80` enumerates under the DWC3 host
+   (`pnputil /enum-devices /connected`); the firmware already powers the
+   module.
+2. On the board only, edit a copy of `aicwlan.inf` to
+   `NTARM64.10.0...22621`, make a new catalog and test-sign it with a
+   local certificate, `pnputil /add-driver ... /install`.
+3. Pass: the loader device turns into `PID_8D81`, a Wi-Fi adapter
+   appears, a scan lists networks. Fail: code 39 / 31 or a class
+   extension version error in the event log means the binary needs 24H2.
+
+The modified copy stays on that board; it is not committed or shipped.
+
+**The useful next step is to ask the author.** Mario Bălănică wrote
+`dwcmshc` and the other worproject drivers this repository is built on,
+under MIT. A 22621-floor build, or the source under a licence that allows
+redistribution, would give the ROCK 4D Wi-Fi and Bluetooth on Windows
+without writing a driver. The AICSEMI firmware's terms would also need
+settling for any image that ships it (radxa-pkg/aic8800 carries it for
+Linux).
+
+**Sooner than BCM43456?** For the ROCK 4D, yes, possibly within a day if
+the binary runs on 23H2, and in any case far sooner than any from-scratch
+driver. For the TaishanPi 3M, no: the AIC8800 driver does nothing for a
+Broadcom chip on SDIO, and there is no existing Windows driver for the
+BCM43456 to reuse. For the CM5-IO the SYN43752 is in the same Broadcom
+FullMAC family as the BCM43456 (bwfm and brcmfmac support it, chip 43752,
+RAM base 0x170000), so once `bcmwlsdio` works on the TaishanPi it is the
+shortest way there too: a second chip entry, its firmware, its NVRAM and
+the CM5-IO's SDIO controller node in ACPI, not a second driver.
+
+Sources: [ROCK 4D Wi-Fi patch](https://lists.infradead.org/pipermail/linux-rockchip/2025-June/059994.html),
+[Radxa: Windows on the Dragon Q6A](https://docs.radxa.com/en/dragon/q6a/other-system/windows),
+[Radxa forum: Wi-Fi/BT support for Windows on Q6A](https://forum.radxa.com/t/wi-fi-bt-support-for-windows-on-q6a/31091),
+[the driver package](https://github.com/worproject/dldserv-mirror/releases/download/13%2F02%2F2024/aicwlan_arm64_0935761.zip),
+[CNX Software on the ROCK 4D](https://www.cnx-software.com/2025/05/28/radxa-rock-4d-sbc-raspberry-pi-lookalike-powered-by-rockchip-rk3576-edge-ai-soc/).
