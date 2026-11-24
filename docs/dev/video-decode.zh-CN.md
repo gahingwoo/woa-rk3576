@@ -2,7 +2,7 @@
 
 [English](video-decode.md) | 简体中文
 
-写于 2026-11-22。这份计划里的东西都还没有在硬件上跑过。板子顺序：先立创泰山派 3M，再 CM5-IO，然后 ROCK 4D
+写于 2026-11-22。V1 和 V2 已于 2026-11-24 在泰山派 3M 上跑过（见下表）；V3 和 V4 还没有跑过。板子顺序：先立创泰山派 3M，再 CM5-IO，然后 ROCK 4D
 （同一颗 SoC，同一个固件选项）。
 
 ## 决定：通过显示驱动做 D3D11 视频解码
@@ -38,8 +38,8 @@ Windows 应用使用硬件解码器有两条路：
 
 | | 目标 | 在哪里 | 状态 | 工作量 |
 |---|---|---|---|---|
-| V1 | 固件给 PD_VDEC 上电并声明设备；Windows 绑定驱动；寄存器可读 | edk2-rk3576 `vdpu383-acpi-v2`，woa-rk3576 `vdpu383-v2` | 代码完成，CI 已构建，未运行 | 只差板上测试 |
-| V2 | 在测试工具里从保存的码流解码 H.264 帧，和参考 YUV 的 MD5 比对 | `tools/vdpu383test`，`drivers/video/vdpu383/lib` | 代码完成：解析器、寄存器构建器、测试框架、replay、MD5；只用 `--null` 检查过 | 板上迭代 1 到 3 周 |
+| V1 | 固件给 PD_VDEC 上电并声明设备；Windows 绑定驱动；寄存器可读 | edk2-rk3576 `vdpu383-acpi-v2`，woa-rk3576 `vdpu383-v2` | 完成：2026-11-24 在泰山派 3M 上，Windows 把 `vdpu383.sys` 绑定到 `ACPI\RKCP0383`（edk2-rk3576 合并提交 `a23adb9`） | 已完成 |
+| V2 | 在测试工具里从保存的码流解码 H.264 帧，和参考 YUV 的 MD5 比对 | `tools/vdpu383test`，`drivers/video/vdpu383/lib` | 代码完成：解析器、寄存器构建器、测试框架、replay、MD5；2026-11-24 在泰山派 3M 上，试过的六个 H.264 一致性码流与 FFmpeg 的参考逐位一致，硬件错误为 0（edk2-rk3576 合并提交 `a23adb9`） | 板上迭代 1 到 3 周 |
 | V3 | 面向应用的路径：`ID3D11VideoDevice` 列出 H.264，`DecoderBeginFrame` 能解码 | wddm-mali-g52 U4 + U5，单独一个分支 | 未开始；需要 U4（视频 DDI）和第二个节点 | V2 之后 5 到 8 周 |
 | V4 | Edge 上的 YouTube（avc1）和 Movies & TV 用硬件播放 1080p | 同上 | 未开始 | V3 之后 2 到 4 周（NV12 显示、参考 surface 生命周期、电源） |
 

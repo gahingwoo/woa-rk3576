@@ -13,7 +13,7 @@
 - `\_SB.GPI0` 上的 `GpioInt (Edge, ActiveLow, Exclusive, PullUp) { 21 }`（GPIO0_C5），所以依赖 [rk3xgpio](../../gpio/rk3xgpio)。
 
 固件只有在启动时找到了控制器才不会返回 `_STA = 0`，所以没接屏时 Windows 完全看不到触摸设备。
-用旧固件，或者那个补丁没有生效时，也没有这个设备：这张表默认是隐藏的。
+用旧固件时也没有这个设备。这个设备默认是隐藏的：DSDT 里是 `Name (TCHP, 0)`，`TCHP` 为 1 之前 `_STA` 都是 0。固件的 TouchKeysDxe 在 ReadyToBoot 时把已安装 DSDT 里的这一个字节改成 1，而且只在探测到控制器有应答时才改（edk2-rk3576 `8a526ab`）；没有应答时，设备保持隐藏。
 
 ## 工作方式
 
@@ -36,10 +36,10 @@ ACPI\RKCP9271   gt9271.sys  (this driver; class HIDClass)
 - **抬起**：某个触点从一帧中消失时，会在它最后的位置再发送一次，tip switch 清零。一帧最多带十个触点；
   如果抬起的加上新出现的会超过十个，就先把抬起的单独放在一帧里发出去。
 
-坐标是面板原生的竖屏坐标，这块屏上 Windows 桌面也是这个方向。旋转后的桌面还没试过。
+坐标是面板原生的竖屏坐标，这块屏上 Windows 桌面也是这个方向。[README](../../../README.zh-CN.md) 里的截图显示桌面转成横屏后报告了 10 个触点；触摸坐标是否跟着旋转，没有记录。
 
 ## 状态
 
-**只由 CI 构建过，没在板子上跑过。** 如果它启动不了，日志行（`DbgPrintEx`，IHV driver 组件）以 `gt9271:` 开头。
+**在泰山派 3M 上可用**（ci 固件）：支持十点触摸（[README](../../../README.zh-CN.md#状态)、[硬件功能](../../../docs/features.zh-CN.md#触摸泰山派-3mci-固件)）。如果它启动不了，日志行（`DbgPrintEx`，IHV driver 组件）以 `gt9271:` 开头。
 
 依据 Goodix GT9xx 寄存器说明和微软的 VHF、SPB 及触摸屏 HID 文档编写。没有使用 Linux goodix 驱动的代码。

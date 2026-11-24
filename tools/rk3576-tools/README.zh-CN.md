@@ -100,4 +100,4 @@ call "%ProgramFiles%\RK3576\setup\firstboot.cmd"
    "already registered"。
 5. 驱动更新（暂存一个新的 rknpu 或 maliwddm 驱动包，设置重装标志，重启）：`counters.log` 显示注册了新的驱动存储文件夹，
    rk-monitor 的 NPU 和 GPU 行仍然有数字。
-6. 运行 `uninstall.cmd`：文件夹、开始菜单文件夹、任务和计数器组都没了；`reg query HKLM\SOFTWARE\RK3576` 什么也查不到。
+6. 运行 `uninstall.cmd`：文件夹、开始菜单文件夹、两个任务和计数器组都没了；`reg query HKLM\SOFTWARE\RK3576` 什么也查不到。

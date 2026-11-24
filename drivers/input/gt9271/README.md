@@ -18,8 +18,11 @@ it to Windows as a HID touch screen through the Virtual HID Framework (VHF).
 
 The firmware returns `_STA = 0` unless it found the controller at boot, so
 with no screen attached Windows sees no touch device at all. With an older
-firmware, or if that patch did not happen, there is no device either: the
-table defaults to hidden.
+firmware there is no device either. The device is hidden by default: the
+DSDT has `Name (TCHP, 0)` and `_STA` is 0 until `TCHP` is 1. The firmware's
+TouchKeysDxe changes that one byte in the installed DSDT to 1 at ReadyToBoot,
+and only when the controller answered its probe (edk2-rk3576 `8a526ab`); if
+it does not, the device stays hidden.
 
 ## How it works
 
@@ -54,12 +57,15 @@ ACPI\RKCP9271   gt9271.sys  (this driver; class HIDClass)
   frame of their own.
 
 Coordinates are the panel's native portrait ones, which is the orientation
-the Windows desktop has on this screen. A rotated desktop has not been
-tried.
+the Windows desktop has on this screen. The [README](../../../README.md)'s screenshot shows the
+desktop rotated to landscape with 10 touch points reported; whether the touch
+coordinates follow the rotation is not recorded.
 
 ## Status
 
-**Built by CI only; not run on a board.** If it does not start, the log
+**Works on the TaishanPi 3M** with the ci firmware: ten touch points
+([README](../../../README.md#status), [features](../../../docs/features.md#touch-taishanpi-3m-ci-firmware)).
+If it does not start, the log
 lines (`DbgPrintEx`, IHV driver component) start with `gt9271:`.
 
 Written from the Goodix GT9xx register description and Microsoft's VHF, SPB

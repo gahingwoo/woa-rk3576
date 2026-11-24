@@ -35,5 +35,5 @@ SFC0 是 SPI-NOR 闪存控制器，留给 UEFI；本驱动不处理它。
 - **只支持 8 位帧**（DataBitLength 必须为 8）；其他位宽会被拒绝。
 - 输入时钟假定为 `RK3XSPI_INPUT_CLK_HZ`（200 MHz，来自 `_DSD`，取偏保守的值，保证总线永不超频）；等 `_DSD` 单独导出后再从中读取。
 - 轮询方式，没有 DMA。对一般的 SPI 外设流量够用。
-- **还没有用 WDK 编译过，也没在芯片上跑过。** SPI 引擎已对照内核核对；SpbCx 的结构体和字段名来自 WDK 头文件
+- **已在 CI 里用 WDK 编译（`ci.yml`、`winpe.yml`），还没在芯片上跑过。** SPI 引擎已对照内核核对；SpbCx 的结构体和字段名来自 WDK 头文件
   （`SPBCx.h`、`reshub.h`），编译时会检查。

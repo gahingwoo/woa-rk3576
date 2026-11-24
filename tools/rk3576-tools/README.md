@@ -127,5 +127,5 @@ failed (the hive is unloaded again).
 5. A driver update (stage a new rknpu or maliwddm package, reinstall flag,
    reboot): `counters.log` shows the new driver store folder registered and
    rk-monitor's NPU and GPU rows keep their numbers.
-6. `uninstall.cmd`: the folder, the Start menu folder, the task and the
+6. `uninstall.cmd`: the folder, the Start menu folder, both tasks and the
    counter sets are gone; `reg query HKLM\SOFTWARE\RK3576` finds nothing.

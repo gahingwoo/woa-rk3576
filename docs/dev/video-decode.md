@@ -2,7 +2,8 @@
 
 English | [简体中文](video-decode.zh-CN.md)
 
-Written 2026-11-22. Nothing in this plan has run on hardware. Board order:
+Written 2026-11-22. V1 and V2 ran on the TaishanPi 3M on 2026-11-24 (see the
+table); V3 and V4 have not run. Board order:
 LCKFB TaishanPi 3M first, then CM5-IO, then ROCK 4D (same SoC, same
 firmware option).
 
@@ -55,8 +56,8 @@ VDPU383).
 
 | | Goal | Where | State | Effort |
 |---|---|---|---|---|
-| V1 | firmware powers PD_VDEC and declares the device; Windows binds a driver; registers readable | edk2-rk3576 `vdpu383-acpi-v2`, woa-rk3576 `vdpu383-v2` | code done, CI built, not run | board test only |
-| V2 | decode H.264 frames from a stored bitstream in a test tool, compare with the reference YUV MD5 | `tools/vdpu383test`, `drivers/video/vdpu383/lib` | code done: parser, register builder, harness, replay, MD5; checked only with `--null` | 1 to 3 weeks of board iterations |
+| V1 | firmware powers PD_VDEC and declares the device; Windows binds a driver; registers readable | edk2-rk3576 `vdpu383-acpi-v2`, woa-rk3576 `vdpu383-v2` | done: on the TaishanPi 3M on 2026-11-24 Windows binds `vdpu383.sys` to `ACPI\RKCP0383` (edk2-rk3576 merge `a23adb9`) | done |
+| V2 | decode H.264 frames from a stored bitstream in a test tool, compare with the reference YUV MD5 | `tools/vdpu383test`, `drivers/video/vdpu383/lib` | code done: parser, register builder, harness, replay, MD5; on the TaishanPi 3M on 2026-11-24 the six H.264 conformance streams tried matched FFmpeg's references bit for bit, 0 hardware errors (edk2-rk3576 merge `a23adb9`) | 1 to 3 weeks of board iterations |
 | V3 | app-facing path: `ID3D11VideoDevice` lists H.264 and `DecoderBeginFrame` decodes | wddm-mali-g52 U4 + U5, on a branch of its own | not started; needs U4 (video DDI) and a second node | 5 to 8 weeks after V2 |
 | V4 | Edge YouTube (avc1) and Movies & TV play 1080p in hardware | same | not started | 2 to 4 weeks after V3 (NV12 presentation, reference surface lifetime, power) |
 

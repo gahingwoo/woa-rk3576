@@ -15,8 +15,13 @@ same device as ANGLE. The register builder in [lib](lib) is written to move
 there unchanged: plain C, no KMDF, WDM or C library calls, no allocation, no
 floating point, DXVA structures in.
 
-**Nothing here has run on hardware.** It compiles in CI; the parser and the
-register builder have run on Linux with no decoder (`--null`).
+**Run on the TaishanPi 3M on 2026-11-24:** with *Video Decoder (VDPU383)*
+enabled in the firmware setup (off by default), Windows binds `vdpu383.sys`
+to `ACPI\RKCP0383`, and the six H.264 conformance streams tried decode bit
+for bit like FFmpeg's references, with 0 hardware errors (edk2-rk3576 merge
+`a23adb9`, [features](../../../docs/features.md#video-decoder)). It compiles
+in CI; the parser and the register builder also run on Linux with no decoder
+(`--null`).
 
 ## What is where
 

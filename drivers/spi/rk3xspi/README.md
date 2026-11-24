@@ -42,6 +42,7 @@ controller and is left to UEFI; this driver does not handle it.
 - Input clock assumed `RK3XSPI_INPUT_CLK_HZ` (200 MHz, from `_DSD`, biased so
   the bus never overclocks); read from `_DSD` once exported discretely.
 - Polled; no DMA. Fine for typical SPI peripheral traffic.
-- **Not yet compiled with a WDK or run on silicon.** The SPI engine is
+- **Compiled with the WDK in CI (`ci.yml`, `winpe.yml`); not yet run on
+  silicon.** The SPI engine is
   kernel-verified; SpbCx struct/field names come from the WDK headers
   (`SPBCx.h`, `reshub.h`) and are checked at compile time.
