@@ -15,10 +15,11 @@ env:
   # come from the WDK half.
   WDK_VERSION: '10.0.26100.0'
   # The RK3576 tools bundle takes rknputest and charsiu_run from
-  # woa-rk3576-npu at this commit (branch npu-perfcounters until it is
-  # merged), built with the same llvm-mingw pin as that repository's CI.
+  # woa-rk3576-npu at this commit (its main once npu-perfcounters, whose
+  # merge of main this is, is fast-forwarded there), built with the same
+  # llvm-mingw pin as that repository's CI.
   NPU_REPO: 'gahingwoo/woa-rk3576-npu'
-  NPU_REF: '561ba8f48894ec0e95886c9a7696359da6482d0c'
+  NPU_REF: '553cda8c97a9f209b04d4bc1e4451c05ea9ffcd7'
   LLVM_MINGW_TAG: '20261020'
   LLVM_MINGW_SHA256: '55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335'
 

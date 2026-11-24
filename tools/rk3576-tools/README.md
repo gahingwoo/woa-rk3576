@@ -99,7 +99,7 @@ failed (the hive is unloaded again).
 
 ## Testing on the board
 
-1. `install.cmd`. The tray icon and the widget (top left of the main
+1. `install.cmd`. The tray icon and the widget (top right of the main
    screen) appear. Start menu, RK3576 has three entries.
 2. `Get-ScheduledTask -TaskPath \RK3576\` lists the task;
    `Get-Counter -ListSet "RK3576 NPU","RK3576 GPU"` lists both sets;

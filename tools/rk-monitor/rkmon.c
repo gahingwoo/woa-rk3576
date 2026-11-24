@@ -1271,7 +1271,7 @@ static void WidgetFonts(void)
 #define WLABEL_W    42
 #define WSPARK_W    48
 
-/* The default: the top left of the primary monitor's work area. */
+/* The default: the top right of the primary monitor's work area, 16 DIP in. */
 static POINT WidgetDefaultPos(void)
 {
     POINT z = { 0, 0 };
@@ -1281,8 +1281,10 @@ static POINT WidgetDefaultPos(void)
     mi.cbSize = sizeof(mi);
     GetMonitorInfoW(MonitorFromPoint(z, MONITOR_DEFAULTTOPRIMARY), &mi);
     dpi = DpiAt(z);
-    z.x = mi.rcWork.left + MulDiv(16, (int)dpi, 96);
+    z.x = mi.rcWork.right - MulDiv(16 + WIDGET_W, (int)dpi, 96);
     z.y = mi.rcWork.top + MulDiv(16, (int)dpi, 96);
+    if (z.x < mi.rcWork.left)
+        z.x = mi.rcWork.left;
     return z;
 }
 

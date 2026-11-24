@@ -46,7 +46,7 @@ lines, CPU (per cluster, with a graph), GPU (use, temperature, clock), NPU
 that holds the desktop icons, so it stays under every application and is
 still there after Win+D or "show desktop". Its background is translucent
 and follows light or dark mode. Drag it anywhere; the place is remembered
-per user (and it goes back to the default, the top left of the main
+per user (and it goes back to the default, the top right of the main
 screen, when that monitor is gone). **Widget click-through** lets clicks
 pass to the desktop; it can then be moved again after turning that off.
 Right-click on the widget opens the tray menu.
