@@ -68,5 +68,12 @@ which `/WX` turns into an error in every file.
 
 `ci.yml` runs on every push. `winpe.yml` runs on a push that changes
 `tools/woa-debug/**`, `tools/woa-deploy/**`, `drivers/bluetooth/**` or the
-workflow itself; on `main` that also replaces the rolling `ci` pre-release
-with a new WinPE image.
+workflow itself.
+
+On `main`, both put their result on the rolling `ci` pre-release:
+`winpe.yml` the WinPE image, `ci.yml` the RK3576 tools bundle as
+`rk3576-tools-arm64.zip`. Both go through `.github/scripts/ci-release.sh`,
+which uploads the new files first, keeps the other workflow's files and
+their `SHA256SUMS.txt` lines, moves the tag, and only then removes the files
+it replaced. It never deletes the release, so a failed step leaves the
+previous build in place.

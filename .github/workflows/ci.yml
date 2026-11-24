@@ -375,6 +375,44 @@ jobs:
           path: stage/rk3576-tools
           if-no-files-found: error
 
+  # The tools bundle on the rolling "ci" pre-release, as
+  # rk3576-tools-arm64.zip with its line in SHA256SUMS.txt, for Maskrom
+  # Studio's "install RK3576 tools" on the CI channel (it takes the first
+  # rk3576-tools-arm64*.zip of the release). The zip holds one folder,
+  # rk3576-tools/, with offline-install.cmd at its top. winpe.yml writes the
+  # WinPE image to the same release; ci-release.sh keeps each workflow's
+  # files and serialises on the same concurrency group.
+  tools-release:
+    name: Rolling "ci" release (RK3576 tools)
+    needs: [checks, rk3576-tools, solution, build, null-devices]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: woa-ci-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: rk3576-tools-arm64
+          path: pkg/rk3576-tools
+      - name: Zip
+        run: |
+          set -eu
+          test -f pkg/rk3576-tools/offline-install.cmd
+          mkdir rel
+          (cd pkg && zip -q -r -X ../rel/rk3576-tools-arm64.zip rk3576-tools)
+          unzip -l rel/rk3576-tools-arm64.zip
+          cat pkg/rk3576-tools/RK3576/VERSION.txt
+      - name: Update the ci release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/ci-release.sh '^rk3576-tools-arm64.*\.zip$' rel/rk3576-tools-arm64.zip
+
   null-devices:
     name: rk3576-null.inf (no-driver devices, test-signed)
     # An INF-only package: no binary to build, but Windows will not stage
