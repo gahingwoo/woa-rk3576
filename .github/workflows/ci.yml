@@ -69,6 +69,58 @@ jobs:
           head -c 1000 ampak.hcd > trunc.hcd
           if ./hcdcheck trunc.hcd; then exit 1; fi
 
+  bwltest:
+    name: bcmwlsdio core against a simulated chip (Linux, gcc)
+    # The Wi-Fi driver's SDIO, chip, firmware and protocol code is plain C
+    # (drivers/net/bcmwlsdio/bwl*.c). Build it with tools/bwltest, which
+    # runs it against a simulated BCM43456: unit tests, then attach,
+    # download, start and control commands with synthetic files; then the
+    # same bring-up with the real firmware files install-firmware.ps1
+    # fetches, at the same pinned commits and hashes. The files are only
+    # downloaded into the runner, never stored or uploaded.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and check
+        run: |
+          set -eux
+          B=drivers/net/bcmwlsdio
+          SRC="$B/bwl_sdio.c $B/bwl_chip.c $B/bwl_bringup.c $B/bwl_fw.c $B/bwl_proto.c $B/bwl_ctl.c"
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -o bwltest tools/bwltest/main.c tools/bwltest/fakechip.c $SRC
+          gcc -std=c99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror \
+              -o bwltest-asan tools/bwltest/main.c tools/bwltest/fakechip.c $SRC
+          # the core must build with no libc at all, as it does in the driver
+          for f in $SRC; do gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -c "$f" -o /dev/null; done
+          ./bwltest
+          ./bwltest-asan
+          fetch() {
+            curl -fsSL -o "$1" "$2"
+            echo "$3  $1" | sha256sum -c -
+          }
+          A=https://raw.githubusercontent.com/armbian/firmware/db8cc456dad5ad511b04f8a5130acda392cad20b/brcm
+          R=https://raw.githubusercontent.com/RPi-Distro/firmware-nonfree/b1833f18a816cf8fd73ca86e27f9eecea11bf991/debian/added-firmware/brcm
+          mkdir -p armbian rpi
+          fetch armbian/brcmfmac43456-sdio.bin $A/brcmfmac43456-sdio.bin \
+            3167956a7b2cffc4cfcaf6a282b95728c529eebef18a5d9e6d9ff32de32cc67c
+          fetch armbian/brcmfmac43456-sdio.txt $A/brcmfmac43456-sdio.txt \
+            66c71eb53b47c49d42386b66735134578640b0946f3f46e44f384fef5aacfd9e
+          fetch armbian/brcmfmac43456-sdio.clm_blob $A/brcmfmac43456-sdio.clm_blob \
+            2dbd7d22fc9af0eb560ceab45b19646d211bc7b34a1dd00c6bfac5dd6ba25e8a
+          fetch rpi/brcmfmac43456-sdio.bin $R/brcmfmac43456-sdio.bin \
+            dc4429f13b59f8c271e940c28b2a197455a8e02270fcc7a2f9036aa1e4c739fb
+          fetch rpi/brcmfmac43456-sdio.clm_blob $R/brcmfmac43456-sdio.clm_blob \
+            2dbd7d22fc9af0eb560ceab45b19646d211bc7b34a1dd00c6bfac5dd6ba25e8a
+          cp armbian/brcmfmac43456-sdio.txt rpi/
+          ./bwltest-asan files armbian --version 7.45.96.0 --clm-chunks 6
+          ./bwltest-asan files rpi --version 7.45.96.252 --clm-chunks 6
+          # the hashes in install-firmware.ps1 must be the ones checked here
+          for h in 3167956a7b2cffc4cfcaf6a282b95728c529eebef18a5d9e6d9ff32de32cc67c \
+                   66c71eb53b47c49d42386b66735134578640b0946f3f46e44f384fef5aacfd9e \
+                   2dbd7d22fc9af0eb560ceab45b19646d211bc7b34a1dd00c6bfac5dd6ba25e8a \
+                   dc4429f13b59f8c271e940c28b2a197455a8e02270fcc7a2f9036aa1e4c739fb; do
+            grep -qi "$h" $B/install-firmware.ps1
+          done
+
   pageverify:
     name: pageverify (Linux, gcc)
     # The page-integrity tool is portable C. The Linux build is the one used
@@ -383,6 +435,70 @@ jobs:
           path: build/ARM64/Release/Output/
           if-no-files-found: error
 
+  wifi-package:
+    name: Wi-Fi bring-up package, test-signed (dwcmshc + bcmwlsdio)
+    # For a board session: dwcmshc with the SDIO controller support (W2)
+    # and bcmwlsdio (W3), test-signed with a certificate made for this run,
+    # with signer.cer, install-firmware.ps1 and the README, for pnputil on
+    # an installed Windows (docs/dev/wifi.md). Not put on the WinPE media.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build, catalog and sign
+        shell: pwsh
+        run: |
+          msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:SignMode=Off /p:WoaDriverBuild=${{ github.run_number }} /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'msbuild failed for RockchipDrivers.sln' }
+          msbuild drivers\net\bcmwlsdio\bcmwlsdio.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /p:SignMode=Off /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'msbuild failed for bcmwlsdio' }
+
+          $pkg = 'C:\wifi-pkg'
+          foreach ($n in 'dwcmshc', 'bcmwlsdio') { New-Item -ItemType Directory -Force -Path "$pkg\$n" | Out-Null }
+          Get-ChildItem build\ARM64\Release\Output\dwcmshc -Recurse -Include *.sys,*.inf |
+            Copy-Item -Destination "$pkg\dwcmshc" -Force
+          Get-ChildItem drivers\net\bcmwlsdio\ARM64\Release -Recurse -Include *.sys,*.inf |
+            Copy-Item -Destination "$pkg\bcmwlsdio" -Force
+
+          $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
+          $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
+          $pw = 'rk3576-test'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=woa-rk3576 test signing' `
+                    -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(5)
+          $pfx = 'C:\wifi-test.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $pw -Force -AsPlainText) | Out-Null
+          Export-Certificate -Cert $cert -FilePath "$pkg\signer.cer" | Out-Null
+          foreach ($n in 'dwcmshc', 'bcmwlsdio') {
+            $d = "$pkg\$n"
+            & $i2c /driver:"$d" /os:10_RS3_ARM64 /verbose
+            if ($LASTEXITCODE) { throw "inf2cat failed for ${n}: $LASTEXITCODE" }
+            $files = Get-ChildItem $d -Include *.cat,*.sys -Recurse | Select-Object -ExpandProperty FullName
+            & $st sign /fd sha256 /f $pfx /p $pw $files
+            if ($LASTEXITCODE) { throw "signtool failed for ${n}: $LASTEXITCODE" }
+            foreach ($sig in Get-AuthenticodeSignature $files) {
+              Write-Host ("   {0,-14} {1}" -f $sig.Status, (Split-Path $sig.Path -Leaf))
+              if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
+            }
+            foreach ($f in "$n.inf", "$n.sys", "$n.cat") {
+              if (-not (Test-Path (Join-Path $d $f))) { throw "$n package: $f missing" }
+            }
+          }
+          Copy-Item drivers\net\bcmwlsdio\install-firmware.ps1, drivers\net\bcmwlsdio\README.md $pkg -Force
+          "woa-rk3576 $env:GITHUB_SHA, run ${{ github.run_number }}" | Set-Content "$pkg\VERSION.txt" -Encoding ascii
+          Get-ChildItem $pkg -Recurse -File | Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifi-bringup-signed-arm64
+          path: C:\wifi-pkg\
+          retention-days: 30
+          if-no-files-found: error
+
   build:
     name: WDK build (${{ matrix.name }})
     runs-on: windows-2022
@@ -393,6 +509,7 @@ jobs:
           - { name: spi,  proj: drivers/spi/rk3xspi/rk3xspi.vcxproj }
           - { name: touch, proj: drivers/input/gt9271/gt9271.vcxproj }
           - { name: bluetooth, proj: drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj }
+          - { name: wifi, proj: drivers/net/bcmwlsdio/bcmwlsdio.vcxproj }
           - { name: pageverify, proj: tools/pageverify/pageverify.vcxproj }
     steps:
       - uses: actions/checkout@v4
@@ -417,12 +534,12 @@ jobs:
           # The class extensions do not all ship in Include\<ver>\km: SpbCx and
           # NetAdapterCx live in versioned class-extension trees that the WDK
           # targets add only when the project opts in. Locate them, do not guess.
-          foreach ($h in 'sdport.h','spbcx.h','gpioclx.h','netadaptercx.h','acpiioct.h','bthxddi.h','gpio.h') {
+          foreach ($h in 'sdport.h','spbcx.h','gpioclx.h','netadaptercx.h','acpiioct.h','bthxddi.h','gpio.h','ntddsd.h') {
             Get-ChildItem $kits -Recurse -Filter $h -ErrorAction SilentlyContinue |
               ForEach-Object { Write-Host ("{0,-18} {1}" -f $h, $_.FullName) }
           }
           Write-Host "--- class-extension import libs (arm64) ---"
-          foreach ($l in 'SpbCxStubs.lib','msgpioclxstub.lib','netadaptercxstub.lib','sdport.lib') {
+          foreach ($l in 'SpbCxStubs.lib','msgpioclxstub.lib','netadaptercxstub.lib','sdport.lib','sdbus.lib') {
             Get-ChildItem $kits -Recurse -Filter $l -ErrorAction SilentlyContinue |
               Where-Object { $_.FullName -match 'arm64' } |
               ForEach-Object { Write-Host ("{0,-22} {1}" -f $l, $_.FullName) }
