@@ -157,6 +157,9 @@ jobs:
           if ($t -notmatch 'found\s+\\Processor\(\*\)') { throw 'the Processor counters were not found' }
           if ($t -notmatch 'driver has no counters') { throw 'the missing NPU counter set is not reported' }
           if ($t -notmatch 'RK3576 GPU counters not registered') { throw 'the missing GPU counter set is not reported' }
+          # the headphone auto-switch reports its state (and changes nothing): no Rockchip endpoint here
+          if ($t -notmatch '(?m)^audio switch: on; Windows build \d+') { throw 'no audio switch line' }
+          if ($t -notmatch 'headphones: no Rockchip headphone endpoint') { throw 'the audio switch found a headphone endpoint on the runner' }
       - name: Stage
         shell: pwsh
         run: |

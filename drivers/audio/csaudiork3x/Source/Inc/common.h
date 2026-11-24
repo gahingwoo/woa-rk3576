@@ -220,6 +220,8 @@ typedef struct _CSAUDIORK3X_DEVPROPERTY {
 #define ENDPOINT_NO_FLAGS                       0x00000000
 #define ENDPOINT_CELLULAR_PROVIDER1             0x00000008
 #define ENDPOINT_CELLULAR_PROVIDER2             0x00000010
+// The topology reports jack presence from the codec (KSEVENT_PINCAPS_JACKINFOCHANGE)
+#define ENDPOINT_JACK_PRESENCE                  0x00000100
 
 //
 // Endpoint miniport pair (wave/topology) descriptor.
@@ -343,6 +345,23 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
             _In_ BOOLEAN capture,
             _In_ ULONG id,
             _In_ ULONG value
+        ) PURE;
+
+    // Headphone jack presence, reported by the codec driver (hw.h).
+    STDMETHOD_(VOID, JackRegister)
+        (
+            THIS_
+            _In_ PPORTEVENTS PortEvents,
+            _In_ ULONG PinId
+        ) PURE;
+    STDMETHOD_(VOID, JackUnregister)
+        (
+            THIS_
+            _In_ PPORTEVENTS PortEvents
+        ) PURE;
+    STDMETHOD_(BOOLEAN, JackIsConnected)
+        (
+            THIS
         ) PURE;
 
     STDMETHOD_(BOOL,            bDevSpecificRead)

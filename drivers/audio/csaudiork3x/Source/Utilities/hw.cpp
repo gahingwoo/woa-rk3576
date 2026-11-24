@@ -66,6 +66,14 @@ Return Value:
     RtlZeroMemory(this->evLast, sizeof(this->evLast));
     this->diagPdo = NULL;
 
+    KeInitializeGuardedMutex(&this->jackLock);
+    this->jackPortEvents = NULL;
+    this->jackPinId = 0;
+    this->jackIsConnected = TRUE;
+    this->jackReported = FALSE;
+    this->jackReports = 0;
+    this->jackEvents = 0;
+
     m_rkdspInterface = *RKdspInterface;
     m_wdfDevice = wdfDevice;
 

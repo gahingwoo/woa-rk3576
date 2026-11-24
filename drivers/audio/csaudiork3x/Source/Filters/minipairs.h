@@ -137,7 +137,7 @@ ENDPOINT_MINIPAIR HeadphoneSaiMiniports =
     L"TopologyHeadphonesSai",                               // own KSNAME: the INF gives it its own format
     NULL,                                                   // optional template name
     CreateMiniportTopologyCsAudioRk3x,
-    &HeadphoneTopoMiniportFilterDescriptor,
+    &HeadphoneSaiTopoMiniportFilterDescriptor,              // jack presence from the codec
     0, NULL,                                                // Interface properties
     L"WaveHeadphonesSai",
     NULL,                                                   // optional template name
@@ -150,7 +150,7 @@ ENDPOINT_MINIPAIR HeadphoneSaiMiniports =
     SIZEOF_ARRAY(HdmiPinDeviceFormatsAndModes),
     SpeakerTopologyPhysicalConnections,
     SIZEOF_ARRAY(SpeakerTopologyPhysicalConnections),
-    ENDPOINT_NO_FLAGS,
+    ENDPOINT_JACK_PRESENCE,                                 // see headphonetoptable.h
 };
 
 static

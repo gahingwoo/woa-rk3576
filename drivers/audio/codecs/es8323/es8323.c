@@ -515,6 +515,9 @@ Status
 
 	UNREFERENCED_PARAMETER(FxResourcesRaw);
 
+	pDevice->GpioIoCount = 0;
+	pDevice->HasAmpGpio = FALSE;
+
 	//
 	// Parse the peripheral's resources.
 	//
@@ -539,13 +542,16 @@ Status
 			Class = pDescriptor->u.Connection.Class;
 			Type = pDescriptor->u.Connection.Type;
 			if (Class == CM_RESOURCE_CONNECTION_CLASS_GPIO &&
-				Type == CM_RESOURCE_CONNECTION_TYPE_GPIO_IO &&
-				!pDevice->HasAmpGpio)
+				Type == CM_RESOURCE_CONNECTION_TYPE_GPIO_IO)
 			{
-				// The first GpioIo is the amplifier enable (es8388_sai.c).
-				pDevice->AmpGpioResHubId.LowPart = pDescriptor->u.Connection.IdLowPart;
-				pDevice->AmpGpioResHubId.HighPart = pDescriptor->u.Connection.IdHighPart;
-				pDevice->HasAmpGpio = TRUE;
+				// Which is the amplifier enable and which the jack-detect
+				// line is decided below (Es8388JackSelectGpios).
+				if (pDevice->GpioIoCount < ES8388_MAX_GPIOIO)
+				{
+					pDevice->GpioIoResHubId[pDevice->GpioIoCount].LowPart = pDescriptor->u.Connection.IdLowPart;
+					pDevice->GpioIoResHubId[pDevice->GpioIoCount].HighPart = pDescriptor->u.Connection.IdHighPart;
+				}
+				pDevice->GpioIoCount++;
 			}
 			else if (Class == CM_RESOURCE_CONNECTION_CLASS_SERIAL &&
 				Type == CM_RESOURCE_CONNECTION_TYPE_SERIAL_I2C)
@@ -580,19 +586,26 @@ Status
 		return status;
 	}
 
+	pDevice->Rk3576Sai = Es8388SaiIsBound(FxDevice);
+
+	// RKCP8388: the jack-detect GpioIo from _DSD; the amplifier enable is
+	// the first other GpioIo (without a _DSD, the first GpioIo, as before).
+	Es8388JackSelectGpios(pDevice);
+
 	status = SpbTargetInitialize(FxDevice, &pDevice->I2CContext);
 	if (!NT_SUCCESS(status))
 	{
 		return status;
 	}
 
-	pDevice->Rk3576Sai = Es8388SaiIsBound(FxDevice);
 	if (pDevice->Rk3576Sai)
 	{
 		// A missing amplifier GPIO only costs the headphone output.
 		pDevice->AmpOpenStatus = STATUS_NOT_FOUND;
 		Es8388SaiOpenAmpGpio(pDevice);
 		Es8388DiagCreate(pDevice);
+		// A missing jack-detect line only costs the plugged/unplugged state.
+		Es8388JackPrepare(pDevice);
 	}
 
 	return status;
@@ -624,6 +637,7 @@ Status
 
 	UNREFERENCED_PARAMETER(FxResourcesTranslated);
 
+	Es8388JackRelease(pDevice);
 	Es8388SaiCloseAmpGpio(pDevice);
 	SpbTargetDeinitialize(FxDevice, &pDevice->I2CContext);
 
@@ -665,6 +679,8 @@ Status
 			DbgPrint("es8323: ES8388 power-up failed 0x%x\n", status);
 		}
 		Es8388DiagStart(pDevice);
+		// The first jack read, after the amplifier went on.
+		Es8388JackD0Entry(pDevice);
 		// As BOOTCODEC: an I2C failure does not fail D0, so the audio
 		// endpoints still come up and the failure shows in the debug log.
 		return STATUS_SUCCESS;
@@ -703,6 +719,7 @@ Status
 
 	if (pDevice->Rk3576Sai)
 	{
+		Es8388JackD0Exit(pDevice);
 		Es8388DiagStop(pDevice);
 		Es8388SaiPowerDown(pDevice);
 		pDevice->ConnectInterrupt = false;
@@ -727,10 +744,14 @@ Status
 BOOLEAN OnInterruptIsr(
 	WDFINTERRUPT Interrupt,
 	ULONG MessageID) {
-	UNREFERENCED_PARAMETER(Interrupt);
 	UNREFERENCED_PARAMETER(MessageID);
 
-	//DbgPrint("Jack Interrupt!\n");
+	// Passive-level ISR on the jack-detect GpioInt.  RKCP8388: debounce,
+	// then report (es8388_jack.c).  Elsewhere the edge is only consumed.
+	PES8323_CONTEXT pDevice = GetDeviceContext(WdfInterruptGetDevice(Interrupt));
+	if (pDevice->Rk3576Sai) {
+		Es8388JackInterrupt(pDevice);
+	}
 	return TRUE;
 }
 

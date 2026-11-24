@@ -81,6 +81,90 @@ void CCsAudioRk3xHW::CSAudioAPICalled(CsAudioArg arg) {
 		newArg.endpointRequest = CSAudioEndpointStop;
 		ExNotifyCallback(this->CSAudioAPICallback, &newArg, &CsAudioArg2);
 	}
+	else if (arg.endpointRequest == CSAudioEndpointJackState &&
+		arg.endpointType == CSAudioEndpointTypeHeadphone &&
+		arg.argSz >= RTL_SIZEOF_THROUGH_FIELD(CsAudioArg, jackState)) {
+		jack_report(arg.jackState.connected != 0);
+	}
+}
+
+//
+// Headphone jack presence.
+//
+// The codec driver calls in from PASSIVE_LEVEL (its debounce timer or a
+// work item), the miniport registers from Init and its destructor, all at
+// PASSIVE_LEVEL; a guarded mutex keeps the port events pointer valid while
+// GenerateEventList runs on it.
+//
+
+void CCsAudioRk3xHW::jack_register(_In_ PPORTEVENTS portEvents, _In_ ULONG pinId) {
+	KeAcquireGuardedMutex(&this->jackLock);
+	this->jackPortEvents = portEvents;
+	this->jackPinId = pinId;
+	KeReleaseGuardedMutex(&this->jackLock);
+}
+
+void CCsAudioRk3xHW::jack_unregister(_In_ PPORTEVENTS portEvents) {
+	KeAcquireGuardedMutex(&this->jackLock);
+	if (this->jackPortEvents == portEvents) {
+		this->jackPortEvents = NULL;
+	}
+	KeReleaseGuardedMutex(&this->jackLock);
+}
+
+BOOLEAN CCsAudioRk3xHW::jack_connected() {
+	return this->jackIsConnected;
+}
+
+void CCsAudioRk3xHW::jack_report(BOOLEAN connected) {
+	if (KeGetCurrentIrql() > APC_LEVEL) {
+		return;
+	}
+
+	KeAcquireGuardedMutex(&this->jackLock);
+	BOOLEAN changed = (this->jackIsConnected != connected) || !this->jackReported;
+	this->jackIsConnected = connected;
+	this->jackReported = TRUE;
+	this->jackReports++;
+	if (changed && this->jackPortEvents) {
+		// The endpoint builder re-reads KSPROPERTY_JACK_DESCRIPTION and
+		// sets the endpoint to active or unplugged.
+		this->jackPortEvents->GenerateEventList(
+			(GUID*)&KSEVENTSETID_PinCapsChange,
+			KSEVENT_PINCAPS_JACKINFOCHANGE,
+			TRUE,                   // pin event
+			this->jackPinId,        // the topology's bridge pin
+			FALSE,                  // not a node event
+			ULONG(-1));
+		this->jackEvents++;
+	}
+	KeReleaseGuardedMutex(&this->jackLock);
+
+	jack_diag_save();
+}
+
+static void jack_put(HANDLE key, PCWSTR name, ULONG value) {
+	UNICODE_STRING us;
+	RtlInitUnicodeString(&us, name);
+	ZwSetValueKey(key, &us, 0, REG_DWORD, &value, sizeof(value));
+}
+
+// Into the adapter's "Device Parameters" key, next to the Diag* values.
+void CCsAudioRk3xHW::jack_diag_save() {
+	HANDLE key = NULL;
+
+	if (KeGetCurrentIrql() != PASSIVE_LEVEL || this->diagPdo == NULL) {
+		return;
+	}
+	if (!NT_SUCCESS(IoOpenDeviceRegistryKey(this->diagPdo, PLUGPLAY_REGKEY_DEVICE,
+		KEY_WRITE, &key))) {
+		return;
+	}
+	jack_put(key, L"JackConnected", this->jackIsConnected);
+	jack_put(key, L"JackReports", this->jackReports);
+	jack_put(key, L"JackEvents", this->jackEvents);
+	jack_put(key, L"JackTopologyRegistered", this->jackPortEvents != NULL);
+	ZwClose(key);
 }
 
 CSAudioEndpointType CCsAudioRk3xHW::GetCSAudioEndpoint(eDeviceType deviceType) {

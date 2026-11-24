@@ -95,6 +95,7 @@
     <ClCompile Include="es8323.c" />
     <ClCompile Include="es8388_sai.c" />
     <ClCompile Include="es8388_diag.c" />
+    <ClCompile Include="es8388_jack.c" />
     <ClCompile Include="spb.c" />
   </ItemGroup>
   <ItemGroup>

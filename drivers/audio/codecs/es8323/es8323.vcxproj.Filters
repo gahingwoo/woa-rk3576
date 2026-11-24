@@ -36,6 +36,9 @@
     <ClCompile Include="es8388_diag.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="es8388_jack.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="driver.h">
