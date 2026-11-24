@@ -75,6 +75,8 @@ Return Value:
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+
+    obj->SetJackPresence((MiniportPair->DeviceFlags & ENDPOINT_JACK_PRESENCE) != 0);
     
     obj->AddRef();
     *Unknown = reinterpret_cast<IUnknown*>(obj);
@@ -105,6 +107,13 @@ Return Value:
     PAGED_CODE();
 
     DPF_ENTER(("[CMiniportTopology::~CMiniportTopology]"));
+
+    // Before the base destructor releases m_PortEvents.
+    if (m_JackRegistered && m_AdapterCommon)
+    {
+        m_AdapterCommon->JackUnregister(m_PortEvents);
+        m_JackRegistered = FALSE;
+    }
 } // ~CMiniportTopology
 
 //=============================================================================
@@ -255,6 +264,14 @@ Return Value:
         ntStatus,
         DPF(D_ERROR, ("Init: CMiniportTopologyCsAudioRk3x::Init failed, 0x%x", ntStatus)),
         Done);
+
+    // Jack changes from the codec raise KSEVENT_PINCAPS_JACKINFOCHANGE
+    // on the bridge pin, the one with the KSJACK_DESCRIPTION.
+    if (m_JackPresence && m_AdapterCommon && m_PortEvents)
+    {
+        m_AdapterCommon->JackRegister(m_PortEvents, KSPIN_TOPO_LINEOUT_DEST);
+        m_JackRegistered = TRUE;
+    }
 
 Done:
     return ntStatus;

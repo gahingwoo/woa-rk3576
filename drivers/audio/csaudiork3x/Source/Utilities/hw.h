@@ -28,7 +28,13 @@ typedef enum {
     CSAudioEndpointRegister,
     CSAudioEndpointStart,
     CSAudioEndpointStop,
-    CSAudioEndpointOverrideFormat
+    CSAudioEndpointOverrideFormat,
+    //
+    // Sent by a codec driver (es8323.sys for RKCP8388): the jack of
+    // endpointType is now plugged (jackState.connected = 1) or not (0).
+    // Appended, so the values above keep their numbers.
+    //
+    CSAudioEndpointJackState
 } CSAudioEndpointRequest;
 
 typedef struct CSAUDIOFORMATOVERRIDE {
@@ -39,12 +45,17 @@ typedef struct CSAUDIOFORMATOVERRIDE {
     BOOL force32BitOutputContainer;
 } CsAudioFormatOverride;
 
+typedef struct CSAUDIOJACKSTATE {
+    UINT32 connected;
+} CsAudioJackState;
+
 typedef struct CSAUDIOARG {
     UINT32 argSz;
     CSAudioEndpointType endpointType;
     CSAudioEndpointRequest endpointRequest;
     union {
         CsAudioFormatOverride formatOverride;
+        CsAudioJackState jackState;
     };
 } CsAudioArg, * PCsAudioArg;
 
@@ -119,6 +130,28 @@ class CCsAudioRk3xHW
 public:
     int CsAudioArg2;
     void CSAudioAPICalled(CsAudioArg arg);
+
+    //
+    // Headphone jack presence (csaudioapi.cpp).  The codec driver reports
+    // it through the CsAudio callback; the headphone topology miniport of
+    // the SAI endpoint registers its port events here, so a change raises
+    // KSEVENT_PINCAPS_JACKINFOCHANGE on its bridge pin.  Until the codec
+    // reports, the jack reads as plugged, as it always did.
+    //
+    void jack_register(_In_ PPORTEVENTS portEvents, _In_ ULONG pinId);
+    void jack_unregister(_In_ PPORTEVENTS portEvents);
+    BOOLEAN jack_connected();
+
+private:
+    KGUARDED_MUTEX jackLock;
+    PPORTEVENTS jackPortEvents;     // not referenced: the miniport unregisters first
+    ULONG jackPinId;
+    BOOLEAN jackIsConnected;
+    BOOLEAN jackReported;
+    ULONG jackReports;
+    ULONG jackEvents;
+    void jack_report(BOOLEAN connected);
+    void jack_diag_save();
 
 private:
     PCALLBACK_OBJECT CSAudioAPICallback;

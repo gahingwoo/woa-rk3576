@@ -95,6 +95,9 @@ private:
     );
     STDMETHODIMP_(BOOLEAN) IsSai();
     STDMETHODIMP_(VOID) DiagEvent(_In_ BOOLEAN capture, _In_ ULONG id, _In_ ULONG value);
+    STDMETHODIMP_(VOID) JackRegister(_In_ PPORTEVENTS PortEvents, _In_ ULONG PinId);
+    STDMETHODIMP_(VOID) JackUnregister(_In_ PPORTEVENTS PortEvents);
+    STDMETHODIMP_(BOOLEAN) JackIsConnected();
 
     STDMETHODIMP_(BOOL)     bDevSpecificRead();
 
@@ -909,6 +912,34 @@ CAdapterCommon::DiagEvent(_In_ BOOLEAN capture, _In_ ULONG id, _In_ ULONG value)
     if (m_pHW) {
         m_pHW->diag_event(capture, id, value);
     }
+}
+
+//=============================================================================
+#pragma code_seg()
+STDMETHODIMP_(VOID)
+CAdapterCommon::JackRegister(_In_ PPORTEVENTS PortEvents, _In_ ULONG PinId)
+{
+    if (m_pHW) {
+        m_pHW->jack_register(PortEvents, PinId);
+    }
+}
+
+//=============================================================================
+#pragma code_seg()
+STDMETHODIMP_(VOID)
+CAdapterCommon::JackUnregister(_In_ PPORTEVENTS PortEvents)
+{
+    if (m_pHW) {
+        m_pHW->jack_unregister(PortEvents);
+    }
+}
+
+//=============================================================================
+#pragma code_seg()
+STDMETHODIMP_(BOOLEAN)
+CAdapterCommon::JackIsConnected()
+{
+    return m_pHW ? m_pHW->jack_connected() : TRUE;
 }
 
 //=============================================================================

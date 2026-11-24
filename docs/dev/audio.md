@@ -87,13 +87,44 @@ gets `\_SB.SAI1` (`"i2s-jack"`) and `\_SB.I2C3.ES83`.
 user guide (section 10), not from Linux: codec slave, MCLK = 256 fs, 24-bit
 I²S on DAC and ADC, one LRCK for both, LOUT1/ROUT1 at 0 dB, OUT2 off, the
 onboard microphone (LINPUT1) on both capture channels with +24 dB PGA. It
-drives the amplifier enable from the ACPI GpioIo. Jack state is not reported
-to Windows yet: the headphone endpoint always shows as connected.
+drives the amplifier enable from the ACPI GpioIo.
+
+### Jack detection (branch tspi3m-hp-jack, not run on hardware)
+
+Firmware (edk2-rk3576 branch `tspi3m-hp-jack`, on top of `rk3576-gpio-pull`,
+which puts the pull-up on GPIO4 PB0): the codec's `_CRS` has the detect line
+as a GpioInt on both edges and as a GpioIo input, both Shared, pull-up, and a
+`_DSD` with `rockchip,hp-det-gpio-io` (which GpioIo is the detect line),
+`rockchip,hp-det-active-high` (1 on the TaishanPi 3M:
+`hp-det-gpios = <&gpio4 RK_PB0 GPIO_ACTIVE_HIGH>`) and
+`rockchip,hp-det-debounce-ms` (150).
+
+`es8323` (`es8388_jack.c`): every edge restarts a 150 ms passive timer; when
+it fires the driver reads the level, switches the headphone amplifier to
+match, and on a change sends `CSAudioEndpointJackState` for the headphone
+endpoint through `\Callback\CsAudioCallbackAPI`. `csaudiork3x` keeps the
+state, answers `KSPROPERTY_JACK_DESCRIPTION` with it (and
+`JACKDESC2_PRESENCE_DETECT_CAPABILITY` in `KSPROPERTY_JACK_DESCRIPTION2`) on
+the SAI headphone topology only, and raises `KSEVENT_PINCAPS_JACKINFOCHANGE`
+on its bridge pin. Windows then shows the "Headphones" endpoint as
+unplugged (DeviceState 8) or active (1). Until the codec reports, and with
+older firmware that has no `_DSD`, the endpoint stays connected as before.
+
+Windows does not move the default device between two adapters on a jack
+event, so the switch to the headphones and back to HDMI is done by
+rk-monitor ([tools/rk-monitor](../../tools/rk-monitor/README.md)).
+
+Registry, `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP8388\0\Device Parameters`:
+`JackDetect` = 0 turns reporting off, `HpDetInvert` = 1 flips the active
+level, `JackAmpGate` = 0 leaves the amplifier on when unplugged (all read at
+driver start). The driver writes `JackSetupStatus`, `JackOpenStatus`,
+`JackReadStatus`, `JackLevel`, `JackConnected`, `JackEdges`, `JackChanges`
+and `JackNotifies` there; csaudiork3x writes `JackConnected`, `JackReports`,
+`JackEvents` and `JackTopologyRegistered` under the SAI1 adapter's key.
 
 ## What is not done
 
-- Jack detection reaching Windows (KSJACK_DESCRIPTION is static; the
-  GpioInt is connected and ignored).
+- Jack detection is written (above) and not yet run on the board.
 - Hardware volume: Windows' volume is applied in software; the codec sits at
   0 dB.
 - The headset microphone (RINPUT), sample rates other than 48 kHz, and

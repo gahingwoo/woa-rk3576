@@ -210,7 +210,7 @@ VOID Es8388SaiCloseAmpGpio(_In_ PES8323_CONTEXT pDevice) {
 	}
 }
 
-static NTSTATUS Es8388SaiSetAmp(_In_ PES8323_CONTEXT pDevice, BOOLEAN on) {
+NTSTATUS Es8388SaiSetAmp(_In_ PES8323_CONTEXT pDevice, BOOLEAN on) {
 	WDF_MEMORY_DESCRIPTOR inDesc;
 	WDF_MEMORY_DESCRIPTOR outDesc;
 	UCHAR value = on ? 1 : 0;

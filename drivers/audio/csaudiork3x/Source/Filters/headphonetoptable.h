@@ -149,4 +149,62 @@ PCFILTER_DESCRIPTOR HeadphoneTopoMiniportFilterDescriptor =
   NULL                                          // Categories
 };
 
+//=============================================================================
+//
+// The headphone topology of the RK3576 SAI endpoint (HeadphoneSaiMiniports):
+// the same pins and connection, a jack description whose IsConnected comes
+// from the codec's jack detection, and KSEVENT_PINCAPS_JACKINFOCHANGE, which
+// the driver raises on the bridge pin when that changes.  The endpoint
+// builder listens for it and marks the endpoint active or unplugged.
+//
+static
+PCPROPERTY_ITEM PropertiesHeadphoneSaiTopoFilter[] =
+{
+    {
+        &KSPROPSETID_Jack,
+        KSPROPERTY_JACK_DESCRIPTION,
+        KSPROPERTY_TYPE_GET |
+        KSPROPERTY_TYPE_BASICSUPPORT,
+        PropertyHandler_HeadphoneSaiTopoFilter
+    },
+    {
+        &KSPROPSETID_Jack,
+        KSPROPERTY_JACK_DESCRIPTION2,
+        KSPROPERTY_TYPE_GET |
+        KSPROPERTY_TYPE_BASICSUPPORT,
+        PropertyHandler_HeadphoneSaiTopoFilter
+    }
+};
+
+static
+PCEVENT_ITEM HeadphoneSaiJackInfoChangeEvent[] =
+{
+    {
+        &KSEVENTSETID_PinCapsChange,
+        KSEVENT_PINCAPS_JACKINFOCHANGE,
+        KSEVENT_TYPE_ENABLE | KSEVENT_TYPE_BASICSUPPORT,
+        EventHandler_HeadphoneSaiJack
+    }
+};
+
+DEFINE_PCAUTOMATION_TABLE_PROP_EVENT(AutomationHeadphoneSaiTopoFilter,
+    PropertiesHeadphoneSaiTopoFilter, HeadphoneSaiJackInfoChangeEvent);
+
+static
+PCFILTER_DESCRIPTOR HeadphoneSaiTopoMiniportFilterDescriptor =
+{
+  0,                                            // Version
+  &AutomationHeadphoneSaiTopoFilter,            // AutomationTable
+  sizeof(PCPIN_DESCRIPTOR),                     // PinSize
+  SIZEOF_ARRAY(HeadphoneTopoMiniportPins),      // PinCount
+  HeadphoneTopoMiniportPins,                    // Pins
+  sizeof(PCNODE_DESCRIPTOR),                    // NodeSize
+  0,                                            // NodeCount
+  NULL,                                         // Nodes
+  SIZEOF_ARRAY(HeadphoneTopoMiniportConnections), // ConnectionCount
+  HeadphoneTopoMiniportConnections,             // Connections
+  0,                                            // CategoryCount
+  NULL                                          // Categories
+};
+
 #endif // _CSAUDIORK3X_HEADPHONETOPTABLE_H_

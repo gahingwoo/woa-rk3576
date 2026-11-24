@@ -35,6 +35,9 @@
 #define true 1
 #define false 0
 
+#define ES8388_MAX_GPIOIO   4
+#define ES8388_NO_INDEX     0xFFFFFFFF
+
 typedef struct _ES8323_CONTEXT
 {
 
@@ -80,6 +83,37 @@ typedef struct _ES8323_CONTEXT
 	WDFWORKITEM DiagWorkItem;
 	ULONG DiagCount;
 
+	//
+	// The GpioIo connections of _CRS, in order.  RKCP8388: the jack-detect
+	// line is the one _DSD names (es8388_jack.c), the amplifier enable the
+	// first of the others.
+	//
+	ULONG GpioIoCount;
+	LARGE_INTEGER GpioIoResHubId[ES8388_MAX_GPIOIO];
+
+	//
+	// Headphone jack detection (es8388_jack.c).
+	//
+	ULONG HpDetIoIndex;             // ES8388_NO_INDEX: none
+	BOOLEAN HpDetActiveHigh;
+	ULONG HpDetDebounceMs;
+	BOOLEAN JackAmpGate;
+	WDFIOTARGET HpDetTarget;
+	WDFTIMER JackTimer;
+	WDFWORKITEM JackWorkItem;
+	PCALLBACK_OBJECT CsAudioCallback;
+	PVOID CsAudioCallbackReg;
+	BOOLEAN JackInD0;
+	BOOLEAN JackKnown;
+	BOOLEAN JackConnected;
+	ULONG JackLevel;
+	volatile LONG JackEdges;
+	ULONG JackChanges;
+	ULONG JackNotifies;
+	NTSTATUS JackSetupStatus;
+	NTSTATUS JackOpenStatus;
+	NTSTATUS JackReadStatus;
+
 } ES8323_CONTEXT, *PES8323_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(ES8323_CONTEXT, GetDeviceContext)
@@ -93,6 +127,13 @@ NTSTATUS Es8388SaiOpenAmpGpio(_In_ PES8323_CONTEXT pDevice);
 VOID Es8388SaiCloseAmpGpio(_In_ PES8323_CONTEXT pDevice);
 NTSTATUS Es8388SaiPowerUp(_In_ PES8323_CONTEXT pDevice);
 VOID Es8388SaiPowerDown(_In_ PES8323_CONTEXT pDevice);
+NTSTATUS Es8388SaiSetAmp(_In_ PES8323_CONTEXT pDevice, BOOLEAN on);
+VOID Es8388JackSelectGpios(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388JackPrepare(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388JackRelease(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388JackD0Entry(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388JackD0Exit(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388JackInterrupt(_In_ PES8323_CONTEXT pDevice);
 NTSTATUS Es8388DiagCreate(_In_ PES8323_CONTEXT pDevice);
 VOID Es8388DiagStart(_In_ PES8323_CONTEXT pDevice);
 VOID Es8388DiagStop(_In_ PES8323_CONTEXT pDevice);

@@ -32,6 +32,8 @@ class CMiniportTopology :
 {
   private:
     eDeviceType             m_DeviceType;
+    BOOLEAN                 m_JackPresence;     // ENDPOINT_JACK_PRESENCE
+    BOOLEAN                 m_JackRegistered;
 
     union {
         PVOID               m_DeviceContext;
@@ -50,6 +52,8 @@ public:
     : CUnknown(UnknownOuter),
       CMiniportTopologyCsAudioRk3x(FilterDesc, DeviceMaxChannels),
       m_DeviceType(DeviceType),
+      m_JackPresence(FALSE),
+      m_JackRegistered(FALSE),
       m_DeviceContext(DeviceContext)
     {
     }
@@ -74,6 +78,15 @@ public:
     );
     
     PVOID GetDeviceContext() { return m_DeviceContext;  }
+
+    // Set before Init for an endpoint with ENDPOINT_JACK_PRESENCE.
+    VOID SetJackPresence(BOOLEAN JackPresence) { m_JackPresence = JackPresence; }
+
+    // The headphone jack as the codec last reported it (plugged until then).
+    BOOLEAN IsJackConnected()
+    {
+        return m_AdapterCommon ? m_AdapterCommon->JackIsConnected() : TRUE;
+    }
 };
 
 typedef CMiniportTopology *PCMiniportTopology;
