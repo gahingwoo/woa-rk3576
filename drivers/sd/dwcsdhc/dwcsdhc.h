@@ -1338,6 +1338,12 @@ typedef union _SDHC_CAPABILITIES2_REGISTER {
 #define SDHC_ADMA2_MAX_LENGTH_PER_ENTRY 0x0000F000
 
 //
+// DesignWare MSHC: a single ADMA2 descriptor must not cross a 128 MiB
+// boundary of the system address.
+//
+#define SDHC_DMA_BOUNDARY 0x08000000ULL
+
+//
 // Layout of a descriptor (excluding the Address field)
 //
 

@@ -14,6 +14,14 @@ env:
   # version; the km class extensions (sdport, SpbCx, GpioClx, NetAdapterCx)
   # come from the WDK half.
   WDK_VERSION: '10.0.26100.0'
+  # The RK3576 tools bundle takes rknputest and charsiu_run from
+  # woa-rk3576-npu at this commit (its main once npu-perfcounters, whose
+  # merge of main this is, is fast-forwarded there), built with the same
+  # llvm-mingw pin as that repository's CI.
+  NPU_REPO: 'gahingwoo/woa-rk3576-npu'
+  NPU_REF: '553cda8c97a9f209b04d4bc1e4451c05ea9ffcd7'
+  LLVM_MINGW_TAG: '20261020'
+  LLVM_MINGW_SHA256: '55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335'
 
 jobs:
   checks:
@@ -83,6 +91,287 @@ jobs:
               -c $L/vdpu383_h264.c -o /dev/null
           gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -c $L/vdpu383_cabac.c -o /dev/null
 
+  pageverify:
+    name: pageverify (Linux, gcc)
+    # The page-integrity tool is portable C. The Linux build is the one used
+    # on the PC to make pattern files that are then copied to the board, so
+    # it is built and self-tested here, then run end to end: write, verify,
+    # plant a foreign page and a misplaced page, verify again.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and check
+        run: |
+          set -eux
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -o pageverify tools/pageverify/pageverify.c
+          ./pageverify selftest
+          ./pageverify write t.bin 32 --seed 1234
+          ./pageverify verify t.bin --passes 2
+          head -c 4096 /dev/urandom | dd of=t.bin bs=4096 seek=100 conv=notrunc
+          dd if=t.bin of=t.bin bs=4096 skip=3 seek=200 count=1 conv=notrunc
+          set +e
+          ./pageverify verify t.bin > out.txt
+          rc=$?
+          set -e
+          cat out.txt
+          test "$rc" -eq 1
+          grep -q 'BAD page 100 at offset 0x64000' out.txt
+          grep -q 'BAD page 200 at offset 0xc8000.*misplaced page of THIS file.*page 3 ' out.txt
+          ./pageverify loop . 8 --rounds 2
+      - name: Upload the Linux build
+        uses: actions/upload-artifact@v4
+        with:
+          name: pageverify-linux-x64
+          path: pageverify
+
+  rk-monitor:
+    name: rk-monitor tray app (ARM64, x64)
+    # A plain Win32 program, no WDK. The x64 build runs here with --once,
+    # which prints one sample: the runner has CPU counters and no RK3576
+    # ones, so the CPU rows must have numbers and the GPU and NPU rows must
+    # say their counters are missing, without the program failing.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build
+        shell: pwsh
+        run: |
+          foreach ($plat in 'ARM64', 'x64') {
+            msbuild tools/rk-monitor/rk-monitor.vcxproj /p:Configuration=Release /p:Platform=$plat /m /nologo /v:minimal
+            if ($LASTEXITCODE -ne 0) { throw "msbuild failed for $plat" }
+          }
+      - name: Run once (x64)
+        shell: pwsh
+        run: |
+          $exe = 'tools\rk-monitor\x64\Release\rk-monitor.exe'
+          $p = Start-Process -FilePath $exe -ArgumentList '--once' -Wait -PassThru -NoNewWindow `
+                 -RedirectStandardOutput once.txt
+          Get-Content once.txt
+          if ($p.ExitCode -ne 0) { throw "rk-monitor --once exited $($p.ExitCode)" }
+          $t = Get-Content -Raw once.txt
+          if ($t -notmatch '(?m)^CPU') { throw 'no CPU section' }
+          if ($t -notmatch 'found\s+\\Processor\(\*\)') { throw 'the Processor counters were not found' }
+          if ($t -notmatch 'driver has no counters') { throw 'the missing NPU counter set is not reported' }
+          if ($t -notmatch 'RK3576 GPU counters not registered') { throw 'the missing GPU counter set is not reported' }
+      - name: Stage
+        shell: pwsh
+        run: |
+          foreach ($plat in 'ARM64', 'x64') {
+            $d = "stage\$plat"
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+            Copy-Item "tools\rk-monitor\$plat\Release\rk-monitor.exe", tools\rk-monitor\README.md, LICENSE $d
+          }
+          Get-ChildItem stage -Recurse | Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rk-monitor-arm64
+          path: stage/ARM64
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rk-monitor-x64
+          path: stage/x64
+          if-no-files-found: error
+
+  npu-charsiu:
+    name: charsiu_run for the RK3576 tools (llvm-mingw)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.NPU_REPO }}
+          ref: ${{ env.NPU_REF }}
+          submodules: true
+      - name: llvm-mingw
+        run: |
+          set -eux
+          f=llvm-mingw-${LLVM_MINGW_TAG}-ucrt-ubuntu-22.04-x86_64.tar.xz
+          curl -fsSL -o "$RUNNER_TEMP/$f" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_TAG}/$f"
+          echo "${LLVM_MINGW_SHA256}  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/$f"
+          echo "LLVM_MINGW=$RUNNER_TEMP/${f%.tar.xz}" >> "$GITHUB_ENV"
+      - name: Build
+        run: |
+          set -eux
+          make -C port win LLVM_MINGW="$LLVM_MINGW"
+          "$LLVM_MINGW/bin/llvm-objdump" -f port/build/win/charsiu_run.exe | grep -q 'file format coff-arm64'
+          out="$RUNNER_TEMP/npu"
+          mkdir -p "$out/licenses"
+          cp port/build/win/charsiu_run.exe tools/rknpu-perfcounters.ps1 "$out/"
+          cp external/charsiu/LICENSE "$out/licenses/charsiu-LICENSE.txt"
+          cp port/libm/LICENSE.optimized-routines "$out/licenses/optimized-routines-LICENSE.txt"
+          cp LICENSE "$out/licenses/woa-rk3576-npu-LICENSE.txt"
+          printf 'woa-rk3576-npu %s\ncharsiu %s\n' "$(git rev-parse HEAD)" \
+            "$(git -C external/charsiu rev-parse HEAD)" > "$out/commits.txt"
+          ls -la "$out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npu-tools-linux-build
+          path: ${{ runner.temp }}/npu
+          if-no-files-found: error
+          retention-days: 3
+
+  rk3576-tools:
+    name: RK3576 tools bundle (install, uninstall, offline install)
+    # rk-monitor, rknputest and charsiu_run in the layout of
+    # %ProgramFiles%\RK3576, with install.cmd, uninstall.cmd and
+    # offline-install.cmd. The runner (x64, administrator) installs an x64
+    # build of the same bundle, checks every file, registry value, shortcut
+    # and task, uninstalls and checks that nothing is left; then the
+    # offline installer runs against a stand-in Windows root with its own
+    # SOFTWARE hive.
+    needs: npu-charsiu
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.NPU_REPO }}
+          ref: ${{ env.NPU_REF }}
+          path: npu
+      - uses: actions/download-artifact@v4
+        with:
+          name: npu-tools-linux-build
+          path: npu-built
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build rk-monitor and rknputest
+        shell: pwsh
+        run: |
+          foreach ($plat in 'ARM64', 'x64') {
+            msbuild tools/rk-monitor/rk-monitor.vcxproj /p:Configuration=Release /p:Platform=$plat /m /nologo /v:minimal
+            if ($LASTEXITCODE -ne 0) { throw "rk-monitor $plat" }
+          }
+          msbuild npu/tools/rknputest/rknputest.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'rknputest' }
+      - name: Assemble
+        shell: pwsh
+        run: |
+          function Bundle([string]$plat, [string]$out) {
+            $p = Join-Path $out 'RK3576'
+            New-Item -ItemType Directory -Force -Path "$p\npu\licenses", "$p\setup" | Out-Null
+            Copy-Item "tools\rk-monitor\$plat\Release\rk-monitor.exe" $p
+            Copy-Item npu\tools\rknputest\ARM64\Release\rknputest.exe "$p\npu"
+            Copy-Item npu-built\charsiu_run.exe, npu-built\rknpu-perfcounters.ps1 "$p\npu"
+            Copy-Item npu-built\licenses\* "$p\npu\licenses"
+            Copy-Item tools\rk3576-tools\setup\* "$p\setup"
+            Copy-Item tools\rk3576-tools\README.md $p
+            Copy-Item tools\rk3576-tools\README.md, tools\rk3576-tools\*.cmd $out
+            Copy-Item LICENSE "$p\LICENSE.txt"
+            $ver = "0.1.0+$($env:GITHUB_SHA.Substring(0,7))"
+            @($ver, "woa-rk3576 $env:GITHUB_SHA") + (Get-Content npu-built\commits.txt) |
+              Set-Content -Path "$p\VERSION.txt" -Encoding ascii
+          }
+          Bundle 'ARM64' 'stage\rk3576-tools'
+          Bundle 'x64' 'test\rk3576-tools'
+          Get-ChildItem stage -Recurse -File | Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
+          Get-Content stage\rk3576-tools\RK3576\VERSION.txt
+      - name: Scripts parse
+        shell: pwsh
+        run: |
+          foreach ($f in Get-ChildItem tools\rk3576-tools -Recurse -Filter *.ps1) {
+            $e = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$e)
+            if ($e) { $e; throw "parse errors in $($f.Name)" }
+          }
+      - name: Install, check, uninstall, check (x64 build)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:ProgramFiles 'RK3576'
+          $menu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\RK3576'
+          & test\rk3576-tools\install.cmd /quiet /nostart
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:ProgramData\RK3576\setup.log"; throw "install.cmd exited $LASTEXITCODE" }
+          Get-Content "$env:ProgramData\RK3576\setup.log"
+          foreach ($f in 'rk-monitor.exe', 'npu\rknputest.exe', 'npu\charsiu_run.exe', 'npu\rknpu-perfcounters.ps1',
+                         'setup\rk3576-setup.ps1', 'setup\rk3576-counters.ps1', 'setup\uninstall.cmd',
+                         'setup\firstboot.cmd', 'VERSION.txt', 'LICENSE.txt') {
+            if (-not (Test-Path (Join-Path $dir $f))) { throw "missing $f" }
+          }
+          # rk-monitor starts from a logon task for the Users group, not from a Run entry
+          if ((Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run').GetValue('RK3576 Monitor')) { throw 'a Run entry next to the logon task' }
+          $lt = Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'RK3576 Monitor'
+          $lt.Principal | Format-List | Out-String | Write-Host
+          if ($lt.Principal.GroupId -notmatch 'S-1-5-32-545|Users') { throw "logon task principal: $($lt.Principal.GroupId)" }
+          if ($lt.Principal.RunLevel -ne 'Limited') { throw 'logon task elevated' }
+          if ($lt.Triggers[0].CimClass.CimClassName -ne 'MSFT_TaskLogonTrigger' -or $lt.Triggers[0].UserId) { throw 'logon trigger is not for any user' }
+          if ($lt.Actions[0].Execute -ne (Join-Path $dir 'rk-monitor.exe') -or $lt.Actions[0].Arguments -ne '--autostart') { throw 'logon task action' }
+          if ((Get-ItemProperty 'HKLM:\SOFTWARE\RK3576\Monitor').AutostartTask -ne 1) { throw 'AutostartTask' }
+          if ((Get-ItemProperty 'HKLM:\SOFTWARE\RK3576\Monitor').Widget -ne 1) { throw 'Widget default' }
+          if (-not (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RK3576Tools').UninstallString) { throw 'ARP' }
+          foreach ($l in 'RK3576 Monitor.lnk', 'RK3576 tools folder.lnk', 'Uninstall RK3576 tools.lnk') {
+            if (-not (Test-Path (Join-Path $menu $l))) { throw "missing shortcut $l" }
+          }
+          # an offline install's Run entry, which the install must replace with the task
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'RK3576 Monitor' -Value 'x' -Force | Out-Null
+          $t = Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Performance counters'
+          if ($t.Principal.UserId -ne 'SYSTEM') { throw 'task principal' }
+          Get-Content "$env:ProgramData\RK3576\counters.log"
+          # the installed program runs (no RK3576 counters on the runner)
+          $p = Start-Process -FilePath (Join-Path $dir 'rk-monitor.exe') -ArgumentList '--once' -Wait -PassThru -NoNewWindow -RedirectStandardOutput once.txt
+          Get-Content once.txt
+          if ($p.ExitCode -ne 0) { throw 'rk-monitor --once' }
+          # a per-user setting, to see the uninstall take it away
+          New-Item -Path 'HKCU:\Software\RK3576\Monitor' -Force | New-ItemProperty -Name WidgetX -Value 5 -PropertyType DWord | Out-Null
+          # upgrade in place
+          & test\rk3576-tools\install.cmd /quiet /nostart
+          if ($LASTEXITCODE -ne 0) { throw "second install.cmd exited $LASTEXITCODE" }
+          if ((Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run').GetValue('RK3576 Monitor')) { throw 'the upgrade kept the Run entry' }
+
+          & "$dir\setup\uninstall.cmd" /quiet
+          if ($LASTEXITCODE -ne 0) { throw "uninstall.cmd exited $LASTEXITCODE" }
+          $left = @()
+          foreach ($x in $dir, $menu, "$env:ProgramData\RK3576", 'HKLM:\SOFTWARE\RK3576', 'HKCU:\Software\RK3576',
+                         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RK3576Tools') {
+            if (Test-Path $x) { $left += $x }
+          }
+          if ((Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run').GetValue('RK3576 Monitor')) { $left += 'Run value' }
+          if (Get-ScheduledTask -TaskPath '\RK3576\' -ErrorAction SilentlyContinue) { $left += 'task' }
+          if ($left) { throw "left after uninstall: $($left -join ', ')" }
+          Write-Host 'uninstall removed everything'
+      - name: Offline install into a stand-in Windows root
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'img'
+          New-Item -ItemType Directory -Force -Path "$root\Windows\System32\config", "$root\Program Files" | Out-Null
+          # an empty hive file to stand for the image's SOFTWARE
+          reg add HKCU\Software\Rk3576HiveSeed /f | Out-Null
+          reg save HKCU\Software\Rk3576HiveSeed "$root\Windows\System32\config\SOFTWARE" /y | Out-Null
+          reg delete HKCU\Software\Rk3576HiveSeed /f | Out-Null
+          & stage\rk3576-tools\offline-install.cmd $root /hook
+          if ($LASTEXITCODE -ne 0) { throw "offline-install.cmd exited $LASTEXITCODE" }
+          if (-not (Test-Path "$root\Program Files\RK3576\rk-monitor.exe")) { throw 'files' }
+          $sc = Get-Content -Raw "$root\Windows\Setup\Scripts\SetupComplete.cmd"
+          Write-Host $sc
+          if ($sc -notmatch [regex]::Escape('call "%ProgramFiles%\RK3576\setup\firstboot.cmd"')) { throw 'SetupComplete hook' }
+          reg load HKLM\RKTEST "$root\Windows\System32\config\SOFTWARE" | Out-Null
+          try {
+            reg query HKLM\RKTEST /s
+            $run = (Get-Item 'HKLM:\RKTEST\Microsoft\Windows\CurrentVersion\Run').GetValue('RK3576 Monitor', $null, 'DoNotExpandEnvironmentNames')
+            $kind = (Get-Item 'HKLM:\RKTEST\Microsoft\Windows\CurrentVersion\Run').GetValueKind('RK3576 Monitor')
+            if ($run -ne '"%ProgramFiles%\RK3576\rk-monitor.exe" --autostart' -or $kind -ne 'ExpandString') { throw "Run: $kind $run" }
+            if ((Get-ItemProperty 'HKLM:\RKTEST\RK3576\Monitor').Widget -ne 1) { throw 'Widget' }
+            if ((Get-ItemProperty 'HKLM:\RKTEST\RK3576').FirstBootPending -ne 1) { throw 'FirstBootPending' }
+            $u = (Get-Item 'HKLM:\RKTEST\Microsoft\Windows\CurrentVersion\Uninstall\RK3576Tools').GetValue('UninstallString', $null, 'DoNotExpandEnvironmentNames')
+            if ($u -ne '"%ProgramFiles%\RK3576\setup\uninstall.cmd"') { throw "UninstallString: $u" }
+          } finally {
+            [GC]::Collect()
+            reg unload HKLM\RKTEST | Out-Null
+          }
+          Write-Host 'offline install wrote what the README says'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rk3576-tools-arm64
+          path: stage/rk3576-tools
+          if-no-files-found: error
+
   solution:
     name: WDK build (build/RockchipDrivers.sln)
     # The drivers imported from worproject/Rockchip-Windows-Drivers build as one
@@ -128,6 +417,8 @@ jobs:
           - { name: bluetooth, proj: drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj }
           - { name: vdpu383, proj: drivers/video/vdpu383/vdpu383.vcxproj }
           - { name: vdpu383test, proj: tools/vdpu383test/vdpu383test.vcxproj }
+
+          - { name: pageverify, proj: tools/pageverify/pageverify.vcxproj }
     steps:
       - uses: actions/checkout@v4
 

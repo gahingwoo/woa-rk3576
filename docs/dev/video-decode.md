@@ -166,7 +166,7 @@ vdpu383test decode BA1_Sony_D.jsv --ref REFERENCE.yuv -o out.yuv
 Pass: `reference: 17 frames; MATCH`, output MD5
 114d1cf94a2fcaffda0cf1b49964bf3d. If it fails, the next steps (replay,
 register dumps, the Linux capture to diff against) are in
-[the driver README](../drivers/video/vdpu383/README.md), "Test plan" 2 to 4.
+[the driver README](../../drivers/video/vdpu383/README.md), "Test plan" 2 to 4.
 The full stream list there is V2's exit criterion.
 
 ### V3 and V4

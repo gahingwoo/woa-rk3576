@@ -1,19 +1,16 @@
-# rk3xspi — Rockchip SPI controller (Windows on ARM)
+# rk3xspi: Rockchip SPI controller (Windows on ARM)
 
 An SpbCx controller driver for the Rockchip SPI master (device-tree
 `rockchip,rk3576-spi` / `rockchip,rk3066-spi`). Same SpbCx shape as the
 [I²C driver](../../i2c/rk3xi2c); SPI adds full-duplex.
 
-## ACPI prerequisite
+## ACPI
 
 RK3576 exposes SPI0..SPI4 (0x2ACF0000, 0x2AD00000, 0x2AD10000, 0x2AD20000,
-0x2AD30000; GIC SPI 116–120 → GSIV 148–152). In the current EDK2 DSDT they are
-published with `_HID "PRP0001"` — a Linux-only enumerator Windows ignores. This
-INF binds **`ACPI\RKCP3003`**, so the EDK2 `Spi.asl` must give the controllers
-that `_HID` (matching GPIO=`RKCP3002`, I²C=`RKCP3001`). The EDK2 port is also
-part of this project, so that `_HID` change is being made there (**WIP**). (SFC0
-is the SPI-NOR flash controller and is intentionally left to UEFI — not handled
-by this driver.)
+0x2AD30000; GIC SPI 116 to 120, GSIV 148 to 152). The INF binds
+**`ACPI\RKCP3003`**, which edk2-rk3576's `Spi.asl` gives the controllers,
+with a `_CID` that keeps Linux's PRP0001 match. SFC0 is the SPI-NOR flash
+controller and is left to UEFI; this driver does not handle it.
 
 ## Design (v1)
 
