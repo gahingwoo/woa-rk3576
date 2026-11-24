@@ -6,7 +6,8 @@ rem
 rem   uninstall.cmd [/quiet]
 rem
 rem It runs from the folder it deletes, so the work is one block that cmd
-rem has read in full before it starts, and the script it calls is a copy.
+rem has read in full before it starts, the script it calls is a copy, and
+rem "(goto)" ends the batch before cmd would look for the deleted file.
 rem
 rem Copyright (c) 2026 Ga Hing Woo ^<gahing@gahingwoo.com^>
 rem SPDX-License-Identifier: GPL-2.0-only
@@ -26,5 +27,5 @@ if errorlevel 1 (
   echo.
   echo RK3576 tools removed.
   if not defined QUIET pause
-  exit /b 0
+  (goto) 2>nul & exit /b 0
 )
