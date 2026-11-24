@@ -13,6 +13,7 @@
 #include <dxva.h>
 
 #include "../../drivers/video/vdpu383/lib/v383_dxva.h"
+#include "../../drivers/video/vdpu383/lib/v383_dxva_hevc.h"
 
 #define CAT2(a, b) a##b
 #define CAT(a, b) CAT2(a, b)
@@ -42,6 +43,46 @@ SAME_OFF(redundant_pic_cnt_present_flag);
 SAME_OFF(slice_group_change_rate_minus1);
 SAME_OFF(SliceGroupMap);
 
+#define SAME_OFF_HEVC(f) typedef char CAT(hoff_check_, __LINE__)[ \
+    (offsetof(DXVA_PicParams_HEVC, f) == offsetof(V383_DXVA_PicParams_HEVC, f)) ? 1 : -1]
+
+SAME_SIZE(DXVA_PicParams_HEVC, V383_DXVA_PicParams_HEVC);
+SAME_SIZE(DXVA_Qmatrix_HEVC, V383_DXVA_Qmatrix_HEVC);
+SAME_SIZE(DXVA_Slice_HEVC_Short, V383_DXVA_Slice_HEVC_Short);
+typedef char hevc_pp_size_232[(sizeof(V383_DXVA_PicParams_HEVC) == 232) ? 1 : -1];
+SAME_OFF_HEVC(wFormatAndSequenceInfoFlags);
+SAME_OFF_HEVC(CurrPic);
+SAME_OFF_HEVC(init_qp_minus26);
+SAME_OFF_HEVC(wNumBitsForShortTermRPSInSlice);
+SAME_OFF_HEVC(dwCodingParamToolFlags);
+SAME_OFF_HEVC(dwCodingSettingPicturePropertyFlags);
+SAME_OFF_HEVC(column_width_minus1);
+SAME_OFF_HEVC(row_height_minus1);
+SAME_OFF_HEVC(log2_parallel_merge_level_minus2);
+SAME_OFF_HEVC(CurrPicOrderCntVal);
+SAME_OFF_HEVC(RefPicList);
+SAME_OFF_HEVC(PicOrderCntValList);
+SAME_OFF_HEVC(RefPicSetStCurrBefore);
+SAME_OFF_HEVC(RefPicSetLtCurr);
+SAME_OFF_HEVC(StatusReportFeedbackNumber);
+
+/* the bit order of the HEVC flag words */
+static int v383_dxva_hevc_bit_order_check(void)
+{
+    DXVA_PicParams_HEVC pp;
+    memset(&pp, 0, sizeof(pp));
+    pp.log2_max_pic_order_cnt_lsb_minus4 = 5;
+    pp.cabac_init_present_flag = 1;
+    pp.num_extra_slice_header_bits = 3;
+    pp.IntraPicFlag = 1;
+    pp.uniform_spacing_flag = 1;
+    return V383_HEVC_LOG2_MAX_POC_LSB_MINUS4((V383_DXVA_PicParams_HEVC *)&pp) == 5 &&
+           V383_HEVC_CABAC_INIT_PRESENT((V383_DXVA_PicParams_HEVC *)&pp) &&
+           V383_HEVC_NUM_EXTRA_SH_BITS((V383_DXVA_PicParams_HEVC *)&pp) == 3 &&
+           V383_HEVC_INTRA((V383_DXVA_PicParams_HEVC *)&pp) &&
+           V383_HEVC_UNIFORM_SPACING((V383_DXVA_PicParams_HEVC *)&pp);
+}
+
 /* the bit order of wBitFields */
 static int v383_dxva_bit_order_check(void)
 {
@@ -54,7 +95,7 @@ static int v383_dxva_bit_order_check(void)
 
 int v383_dxva_check(void)
 {
-    return v383_dxva_bit_order_check();
+    return v383_dxva_bit_order_check() && v383_dxva_hevc_bit_order_check();
 }
 #else
 typedef int v383_dxva_check_not_on_this_platform;

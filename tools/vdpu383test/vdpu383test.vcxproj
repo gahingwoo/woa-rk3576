@@ -60,15 +60,19 @@
   <ItemGroup>
     <ClCompile Include="main.c" />
     <ClCompile Include="h264parse.c" />
+    <ClCompile Include="hevcparse.c" />
     <ClCompile Include="dev.c" />
     <ClCompile Include="md5.c" />
     <ClCompile Include="dxva_check.c" />
     <ClCompile Include="..\..\drivers\video\vdpu383\lib\vdpu383_h264.c" />
     <ClCompile Include="..\..\drivers\video\vdpu383\lib\vdpu383_cabac.c" />
+    <ClCompile Include="..\..\drivers\video\vdpu383\lib\vdpu383_hevc.c" />
+    <ClCompile Include="..\..\drivers\video\vdpu383\lib\vdpu383_hevc_cabac.c" />
   </ItemGroup>
 
   <ItemGroup>
     <ClInclude Include="h264parse.h" />
+    <ClInclude Include="hevcparse.h" />
     <ClInclude Include="dev.h" />
     <ClInclude Include="md5.h" />
   </ItemGroup>

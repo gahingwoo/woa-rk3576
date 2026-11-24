@@ -22,6 +22,8 @@ register builder have run on Linux with no decoder (`--null`).
 |---|---|
 | [lib/vdpu383_h264.c](lib/vdpu383_h264.c) | DXVA_PicParams_H264 + DXVA_Qmatrix_H264 + bitstream to registers 0..383 and the auxiliary buffer. From Rockchip MPP (Apache-2.0 OR MIT, used as MIT) |
 | [lib/v383_dxva.h](lib/v383_dxva.h) | the DXVA H.264 structures, byte for byte dxva.h's layout (checked against dxva.h at compile time) |
+| [lib/vdpu383_hevc.c](lib/vdpu383_hevc.c) | the same for HEVC Main: DXVA_PicParams_HEVC + DXVA_Qmatrix_HEVC + bitstream, from MPP, checked against mainline's rkvdec-vdpu383-hevc.c; rebuilds the SPS's reference picture sets, which DXVA does not carry (see the top of the file). Not run on the board |
+| [lib/v383_dxva_hevc.h](lib/v383_dxva_hevc.h) | the DXVA HEVC structures, dxva.h's layout |
 | [driver.c](driver.c), [warmup.c](warmup.c) | the KMDF driver for `ACPI\RKCP0383` |
 | [vdpu383_ioctl.h](vdpu383_ioctl.h) | the driver's interface (`\\.\VDPU383`) |
 | [../../../tools/vdpu383test](../../../tools/vdpu383test) | the test program and its H.264 parser |
@@ -212,6 +214,40 @@ Send back on failure, for the first stream that fails:
 3. the Linux capture of the same stream (below) and `compare-regs.py`
    output for the first picture that differs
 4. `vdpu383test info` after the failure
+
+### 5. HEVC Main conformance (not run yet)
+
+Streams: FFmpeg's fate-suite copies of the JCT-VC conformance streams,
+`https://fate-suite.ffmpeg.org/hevc-conformance/NAME.bit`, the 75 8-bit 4:2:0
+ones listed in [hevc-conformance.txt](../../../tools/vdpu383test/hevc-conformance.txt)
+with the frame count and the MD5 of FFmpeg 6.1.1's I420 output for each
+(made 2026-11-25). On Linux every one of them goes through the parser and
+the register builder with `--null`: FFmpeg's frame count, and every
+picture's reference sets derived from its slice headers (as the decoder
+derives them) equal to DXVA's, with the SPS's sets and with the table
+rebuilt from DXVA alone. CI does that for nine of them.
+
+On the board, as administrator, the streams in one folder:
+
+```
+powershell -ExecutionPolicy Bypass -File hevc-conformance.ps1 -Dir D:\hevc\streams -Only RPS_A
+powershell -ExecutionPolicy Bypass -File hevc-conformance.ps1 -Dir D:\hevc\streams
+powershell -ExecutionPolicy Bypass -File hevc-conformance.ps1 -Dir D:\hevc\streams -DxvaOnly -Out .\hevc-dxva
+```
+
+Pass: `MATCH` on every line (the output MD5 is FFmpeg's, the frame count
+too, no hardware errors), first with the parser's SPS sets, then with
+`-DxvaOnly`: the same MD5 there means a D3D11 driver, which has only DXVA,
+decodes HEVC with this builder. In that order: RPS_A_docomo_4 (one slice,
+P and B), then the whole list; it names the first feature that fails
+(SLIST_* scaling lists, TILES_* tiles, WPP_*/ENTP_* entry points, DSLICE_*
+dependent slices, LTRPSPS_A long-term pictures from the SPS, RAP_* leading
+pictures). AMP_A/B (2560x1600) need about 170 MiB of decoder buffers.
+
+Send back on failure: `hevc-results\hevc-results.txt` and the first failing
+stream's `NAME.txt`, then `vdpu383test decode NAME.bit --frame-md5 --regs -n 4 > win.txt`
+and `vdpu383test info`. FFmpeg's per-frame MD5s for comparing `--frame-md5`
+are in the streams folder of the bundle (`framemd5\NAME.framemd5`).
 
 ### Linux reference capture
 
