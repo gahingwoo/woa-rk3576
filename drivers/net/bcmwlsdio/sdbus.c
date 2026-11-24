@@ -11,6 +11,11 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
+/* sdbus.lib refers to GUID_SDBUS_INTERFACE_STANDARD; define it here, once. */
+#include <ntddk.h>
+#include <initguid.h>
+#include <ntddsd.h>
+
 #include "bcmwlsdio.h"
 
 /*

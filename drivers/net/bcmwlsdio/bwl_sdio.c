@@ -274,7 +274,7 @@ BwlFuncEnable(bwl_dev *Dev, unsigned Fn, int Enable, u32 TimeoutMs)
     if (BwlRead8(Dev, CCCR_IOEX, &v)) {
         return BWL_E_IO;
     }
-    v = Enable ? (u8)(v | bit) : (u8)(v & ~bit);
+    v = (u8)(Enable ? (v | bit) : (v & ~bit));
     if (BwlWrite8(Dev, CCCR_IOEX, v)) {
         return BWL_E_IO;
     }
@@ -349,7 +349,7 @@ HtClk(bwl_dev *Dev, int On)
         (void)BwlWrite8(Dev, F1_CHIPCLKCSR, 0);
         return;
     }
-    req = Dev->AlpOnly ? CLKCSR_ALP_AVAIL_REQ : CLKCSR_HT_AVAIL_REQ;
+    req = (u8)(Dev->AlpOnly ? CLKCSR_ALP_AVAIL_REQ : CLKCSR_HT_AVAIL_REQ);
     if (BwlWrite8(Dev, F1_CHIPCLKCSR, req)) {
         return;
     }

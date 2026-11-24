@@ -188,7 +188,7 @@ RecordBus(_In_ PBWL_DEVICE_CONTEXT Ctx)
 
     status = BwlSdGetProperty(Ctx, SDP_FUNCTION_NUMBER, &fn, sizeof(fn));
     BwlPutULong(Ctx, L"FunctionNumberStatus", (ULONG)status);
-    Ctx->Function = NT_SUCCESS(status) ? fn : 0xFF;
+    Ctx->Function = (UCHAR)(NT_SUCCESS(status) ? fn : 0xFF);
     BwlPutULong(Ctx, L"FunctionNumber", Ctx->Function);
     if (NT_SUCCESS(BwlSdGetProperty(Ctx, SDP_BUS_DRIVER_VERSION, &ver, sizeof(ver)))) {
         BwlPutULong(Ctx, L"BusDriverVersion", ver);
@@ -306,7 +306,7 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
 
     BwlInit(d, &BwlSdOps, Ctx, Ctx->Bounce, BWL_BOUNCE_MIN);
     d->MaxBlocks = (u16)(Ctx->MaxBlocks ? min(Ctx->MaxBlocks, 511u) : 32u);
-    d->F2ByteModeOnly = Ctx->F2BlockMode ? 0 : 1;
+    d->F2ByteModeOnly = (u8)(Ctx->F2BlockMode ? 0 : 1);
 
     BwlCrumb(Ctx, "CCCR");
     r = RecordCccr(Ctx);

@@ -176,10 +176,10 @@ BwlClmChunk(const u8 *Blob, u32 Len, u32 Off, u8 *Out, u32 Cap, u32 *Consumed)
         return BWL_E_SPACE;
     }
     if (Off == 0) {
-        flag |= DLOAD_FLAG_BEGIN;
+        flag = (u16)(flag | DLOAD_FLAG_BEGIN);
     }
     if (Off + n == Len) {
-        flag |= DLOAD_FLAG_END;
+        flag = (u16)(flag | DLOAD_FLAG_END);
     }
     /* struct bwfm_dload_data: flag, type, len, crc, data[] */
     BwlPutLe16(Out + 0, flag);
