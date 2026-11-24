@@ -1,5 +1,6 @@
 > Historical copy, 2026-07-30 to 2026-11-22: docs/INSTALL.md as it was before the 2026-11-24 rewrite,
-> unchanged. It may not match main; the current page is [INSTALL.md](../INSTALL.md). Relative links below are as they were and may not resolve from here.
+> unchanged except that its links into this repository now point at commit
+> f8c3a47, where they resolve. It may not match main; the current page is [INSTALL.md](../INSTALL.md).
 
 # Installing Windows on the CM5-IO
 
@@ -143,7 +144,7 @@ firmware 0.4.0 and 0.4.1.
 - The stick has to be on a USB-A port. The firmware does not use the USB-C
   port, and it is not in the board's ACPI tables.
 - Touch works in the firmware's menus and, with the
-  [gt9271](../drivers/input/gt9271) driver, in Windows (10 touch points). It
+  [gt9271](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/input/gt9271) driver, in Windows (10 touch points). It
   needs firmware whose DSDT declares the touch controller
   (`\_SB.I2C0.TCH0`, `RKCP9271`): edk2-rk3576 built from `main` after
   0.4.1; no release has it yet. With no screen attached the firmware hides
@@ -152,7 +153,7 @@ firmware 0.4.0 and 0.4.1.
 - Bluetooth: firmware from edk2-rk3576 `main` after 0.4.1 declares the
   controller. Install the patchram once with the driver's
   `install-firmware.ps1` (it downloads it and checks its SHA-256; it cannot be
-  shipped here), then the [bcm4345bt](../drivers/bluetooth/bcm4345bt/README.md)
+  shipped here), then the [bcm4345bt](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/bluetooth/bcm4345bt/README.md)
   package. No voice (SCO) yet.
 - Audio: the headphone jack plays and its microphone records with
   rk3xi2sbus, es8323 and csaudiork3x 1.0.0.135 or later. HDMI audio has not

@@ -1,5 +1,6 @@
 > Historical copy, 2026-06-19 to 2026-11-21: docs/AUDIO.md as it was before the 2026-11-24 rewrite,
-> unchanged. It may not match main; the current page is [dev/audio.md](../dev/audio.md). Relative links below are as they were and may not resolve from here.
+> unchanged except that its links into this repository now point at commit
+> f8c3a47, where they resolve. It may not match main; the current page is [dev/audio.md](../dev/audio.md).
 
 # Audio
 

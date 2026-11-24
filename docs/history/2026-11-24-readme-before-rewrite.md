@@ -1,10 +1,11 @@
 > Historical copy, 2026-06-19 to 2026-11-24: README.md as it was before the 2026-11-24 rewrite,
-> unchanged. It may not match main; the current page is [README.md](../../README.md). Relative links below are as they were and may not resolve from here.
+> unchanged except that its links into this repository now point at commit
+> f8c3a47, where they resolve. It may not match main; the current page is [README.md](../../README.md).
 
 # woa-rk3576
 
 [![CI](https://github.com/gahingwoo/woa-rk3576/actions/workflows/ci.yml/badge.svg)](https://github.com/gahingwoo/woa-rk3576/actions/workflows/ci.yml)
-[![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
+[![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/LICENSE)
 
 Windows on Arm drivers for Rockchip RK3576 boards, and the tools to install
 Windows on one. Tested on the ArmSoM CM5-IO and the LCKFB TaishanPi 3M.
@@ -13,30 +14,30 @@ Windows finds hardware through ACPI. The firmware and its ACPI tables are in
 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576); this repo has the
 drivers for the controllers Windows has no inbox driver for.
 
-![Windows 11 23H2 on the ArmSoM CM5-IO, booted from its eMMC](docs/imgs/cm5io-win11-desktop.jpg)
+![Windows 11 23H2 on the ArmSoM CM5-IO, booted from its eMMC](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/docs/imgs/cm5io-win11-desktop.jpg)
 
 Windows 11 23H2 boots to the desktop from the CM5-IO's eMMC with all eight
 cores, 3.7 GB of memory, the NVMe, the SD card, Ethernet and both USB
 controllers. It needs firmware 0.2.0 or later. How to install it:
-[docs/INSTALL.md](docs/INSTALL.md).
+[docs/INSTALL.md](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/docs/INSTALL.md).
 
 ## Status
 
 | Peripheral | `_HID` | Driver | State |
 |---|---|---|---|
-| eMMC | `RKCP0D40` | [dwcsdhc](drivers/sd/dwcsdhc) (sdport) | works; Windows boots from it |
-| SD card | `RKCPFE2C` | [dwcmshc](drivers/sd/dwcmshc) (sdport) | works, including eject and reinsert |
-| GPIO | `RKCP3002` | [rk3xgpio](drivers/gpio/rk3xgpio) (GpioClx) | started, all 5 banks; SD card detect runs through it |
-| I²C | `RKCP3001` | [rk3xi2c](drivers/i2c/rk3xi2c) (SpbCx) | started, all 10; no I²C device exercised |
-| DMA | `ARMH0330` | [pl330dma](drivers/dma/pl330dma) | started, all 3 |
-| Ethernet | `RKCP6543` | [dwc_eqos](drivers/net/dwc_eqos) (NetAdapterCx) | works, gets a DHCP lease |
-| SPI | `RKCP3003` | [rk3xspi](drivers/spi/rk3xspi) (SpbCx) | started, all 5; no SPI device exercised |
-| Touch (TaishanPi 3M DSI screen) | `RKCP9271` | [gt9271](drivers/input/gt9271) (VHF) | works on the TaishanPi 3M, 10 touch points; needs edk2-rk3576 built from `main` after 0.4.1 |
-| Bluetooth (TaishanPi 3M, AP6256) | `RKCP4345` | [bcm4345bt](drivers/bluetooth/bcm4345bt) (BthX, in-box BthMini) | works: radio up, pairing and file transfer; no voice (SCO) yet; needs edk2-rk3576 `main` after 0.4.1 and the patchram fetched on the board once |
+| eMMC | `RKCP0D40` | [dwcsdhc](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/sd/dwcsdhc) (sdport) | works; Windows boots from it |
+| SD card | `RKCPFE2C` | [dwcmshc](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/sd/dwcmshc) (sdport) | works, including eject and reinsert |
+| GPIO | `RKCP3002` | [rk3xgpio](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/gpio/rk3xgpio) (GpioClx) | started, all 5 banks; SD card detect runs through it |
+| I²C | `RKCP3001` | [rk3xi2c](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/i2c/rk3xi2c) (SpbCx) | started, all 10; no I²C device exercised |
+| DMA | `ARMH0330` | [pl330dma](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/dma/pl330dma) | started, all 3 |
+| Ethernet | `RKCP6543` | [dwc_eqos](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/net/dwc_eqos) (NetAdapterCx) | works, gets a DHCP lease |
+| SPI | `RKCP3003` | [rk3xspi](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/spi/rk3xspi) (SpbCx) | started, all 5; no SPI device exercised |
+| Touch (TaishanPi 3M DSI screen) | `RKCP9271` | [gt9271](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/input/gt9271) (VHF) | works on the TaishanPi 3M, 10 touch points; needs edk2-rk3576 built from `main` after 0.4.1 |
+| Bluetooth (TaishanPi 3M, AP6256) | `RKCP4345` | [bcm4345bt](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/bluetooth/bcm4345bt) (BthX, in-box BthMini) | works: radio up, pairing and file transfer; no voice (SCO) yet; needs edk2-rk3576 `main` after 0.4.1 and the patchram fetched on the board once |
 | NVMe | PCIe | inbox stornvme | works |
 | USB | `PNP0D10` | inbox usbxhci | works on both controllers; USB-C at USB 2.0 |
-| Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](docs/DISPLAY.md)) |
-| Audio (TaishanPi 3M headphones) | `RKCP3004`, `RKCP8388` | rk3xi2sbus, csaudiork3x, es8323 | headphone playback and the jack microphone work (1.0.0.135, 22 November 2026); HDMI audio not yet tested ([audio](docs/AUDIO.md)) |
+| Display | none | inbox BasicDisplay | the firmware's framebuffer, one mode ([display](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/docs/DISPLAY.md)) |
+| Audio (TaishanPi 3M headphones) | `RKCP3004`, `RKCP8388` | rk3xi2sbus, csaudiork3x, es8323 | headphone playback and the jack microphone work (1.0.0.135, 22 November 2026); HDMI audio not yet tested ([audio](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/docs/AUDIO.md)) |
 
 Most of these were measured once, on 2026-10-01.
 
@@ -57,7 +58,7 @@ DMA and SPI drivers all start; none of them was exercised beyond that, and no
 SD card was tried. The board was sponsored by JLC (嘉立创).
 
 Bluetooth works since 22 November 2026 with
-[bcm4345bt](drivers/bluetooth/bcm4345bt) and firmware that declares the
+[bcm4345bt](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/bluetooth/bcm4345bt) and firmware that declares the
 controller (edk2-rk3576 `main` after 0.4.1): the radio comes up in Settings,
 pairing and file transfer work. Voice calls and headset microphones do not,
 because the module carries SCO audio over a PCM link that has no driver.
@@ -78,13 +79,13 @@ Windows Time service to start automatically. Until the clock is right,
 ("not within its validity period"); run `w32tm /resync /force` first.
 
 Touch on the DSI screen works through
-[gt9271](drivers/input/gt9271): Windows reports touch support with 10
+[gt9271](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/drivers/input/gt9271): Windows reports touch support with 10
 touch points. It needs edk2-rk3576 firmware built from `main` after 0.4.1,
 whose ACPI tables declare the touch controller only when the screen is
 attached. With [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)'s
 rotation (its `next` branch) the desktop can be turned to landscape:
 
-![Windows 11 on the TaishanPi 3M's DSI screen in landscape, reporting 10 touch points](docs/imgs/tspi3m-win11-touch-landscape.png)
+![Windows 11 on the TaishanPi 3M's DSI screen in landscape, reporting 10 touch points](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/docs/imgs/tspi3m-win11-touch-landscape.png)
 
 ## Where the drivers come from
 
@@ -107,7 +108,7 @@ so `git log -- drivers/<class>/<name>` shows what differs from RK3588:
   runs the UART itself (Windows on ARM has no driver for it) and does not
   ship the Broadcom patchram, which `install-firmware.ps1` fetches.
 
-Licences per driver: [THIRD_PARTY.md](THIRD_PARTY.md).
+Licences per driver: [THIRD_PARTY.md](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/THIRD_PARTY.md).
 
 ## Releases and the rolling ci build
 
@@ -129,8 +130,8 @@ msbuild drivers\bluetooth\bcm4345bt\bcm4345bt.vcxproj /p:Configuration=Release /
 ```
 
 CI builds all of them on every push. The WinPE workflow also test-signs the drivers
-and puts them in a WinPE image. Details: [docs/BUILDING.md](docs/BUILDING.md).
-Debugging tools: [docs/DEBUGGING.md](docs/DEBUGGING.md).
+and puts them in a WinPE image. Details: [docs/BUILDING.md](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/docs/BUILDING.md).
+Debugging tools: [docs/DEBUGGING.md](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/docs/DEBUGGING.md).
 
 ## Layout
 
@@ -166,7 +167,7 @@ Mario Bălănică (SD/eMMC), CoolStar (GPIO, I²C, DMA, audio) and Doug Cook
 
 ## License
 
-Code written for this repo is GPL-2.0-only ([LICENSE](LICENSE)). Releases
+Code written for this repo is GPL-2.0-only ([LICENSE](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/LICENSE)). Releases
 before this change were MIT and stay MIT. The ported drivers keep their own
 licences, and RK3576 changes to them are made under the same licence as the
-driver they change; see [THIRD_PARTY.md](THIRD_PARTY.md).
+driver they change; see [THIRD_PARTY.md](https://github.com/gahingwoo/woa-rk3576/blob/f8c3a47/THIRD_PARTY.md).
