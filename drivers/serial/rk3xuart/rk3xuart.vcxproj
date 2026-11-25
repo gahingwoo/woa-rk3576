@@ -68,11 +68,11 @@
     </ClCompile>
     <Link>
       <!--
-        sercx2.lib is SerCx2's import stub (SercxFunctions, SercxDriverGlobals),
-        in the same versioned tree under the km libraries. ntstrsafe.lib for
-        RtlStringCch*.
+        sercxstubs.lib (Lib\<ver>\km\arm64\sercx\2.0) is the SerCx2 import
+        stub: it defines SercxFunctions and SercxDriverGlobals (there is no
+        sercx2.lib). ntstrsafe.lib for RtlStringCch*.
       -->
-      <AdditionalDependencies>$(DDK_LIB_PATH)sercx\2.0\sercx2.lib;$(DDK_LIB_PATH)ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(DDK_LIB_PATH)sercx\2.0\sercxstubs.lib;$(DDK_LIB_PATH)ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>
