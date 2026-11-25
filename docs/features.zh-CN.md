@@ -58,6 +58,10 @@ DSI 屏的 GT9271 配合 [gt9271](../drivers/input/gt9271) 可用，支持十点
 
 RK3576 的 VDPU383 在 Windows 下可以解码 H.264，用的是早期调试驱动 [vdpu383](../drivers/video/vdpu383) 和它的测试工具 `vdpu383test`：2026-11-24 在泰山派 3M 上试过的 H.264 一致性码流，输出全部与 FFmpeg 逐位一致。需要 edk2-rk3576 并在设置里打开 *Video Decoder (VDPU383)*（默认关闭）。视频播放器还用不上它，计划见[视频解码](dev/video-decode.zh-CN.md)。
 
+## SARADC 上的 ADC 按键和耳机插孔（尚未在板上运行）
+
+固件声明了 SARADC（`ACPI\RKCP0ADC`，目前在 edk2-rk3576 的板级分支上）时，[rk3xsaradc](../drivers/adc/rk3xsaradc) 读取它：泰山派 3M 的 Recovery 键、CM5-IO 和 ROCK 4D 的 Maskrom 键成为 HID 按键（厂商页 0xFF00，Windows 本身不对它们做任何动作）；ROCK 4D 的耳机插孔没有检测开关，在 ADC 通道 3 上读取，经 es8323 控制"耳机"端点的插拔状态。`tools/adctest` 可读任意通道。
+
 ## NPU
 
 见 [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu)（泰山派 3M）。

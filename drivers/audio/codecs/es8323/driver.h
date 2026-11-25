@@ -141,6 +141,18 @@ typedef struct _ES8323_CONTEXT
 	NTSTATUS JackOpenStatus;
 	NTSTATUS JackReadStatus;
 
+	//
+	// Jack state from rk3xsaradc.sys instead of a GPIO (ROCK 4D: the jack
+	// is read on SARADC channel 3), when _DSD has rockchip,hp-det-saradc
+	// and no detect GpioIo (es8388_jack.c).
+	//
+	BOOLEAN HpDetSaradc;            // _DSD asks for it
+	BOOLEAN HpDetSaradcActive;      // registered on \Callback\Rk3xSaradcJack
+	PCALLBACK_OBJECT SaradcCallback;
+	PVOID SaradcCallbackReg;
+	volatile LONG SaradcConnected;  // -1 nothing heard yet, else 0/1
+	ULONG SaradcStates;             // STATE notifications received
+
 } ES8323_CONTEXT, *PES8323_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(ES8323_CONTEXT, GetDeviceContext)

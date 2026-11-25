@@ -38,6 +38,7 @@ Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 �
 | WiFi | 不能用 | 不能用 | 无 |
 | NPU | 不支持 | 配合 [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) 可用 | rknpu |
 | 视频解码器（VDPU383） | 未试 | 用 vdpu383test 硬件解码可用（H.264 一致性码流与 FFmpeg 逐位一致，2026-11-24）；播放器尚不能用（[视频解码](docs/dev/video-decode.zh-CN.md)） | vdpu383 |
+| ADC 按键、ADC 读取的耳机插孔 | 驱动已写，未试过 | 驱动已写，未试过 | rk3xsaradc |
 | RTC、PMIC、引脚控制器、UART2 | 不需要驱动 | 不需要驱动；有名称，没有黄色感叹号（2026-11-24 在泰山派 3M 上；那里已不再声明 UART2） | [null](drivers/null) |
 
 每项结果都来自同一块板子。CM5-IO 一栏大部分是 2026-10-01 看到的。各项功能的细节见[硬件功能](docs/features.zh-CN.md)。

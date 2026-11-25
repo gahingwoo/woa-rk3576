@@ -626,6 +626,25 @@ jobs:
           # the suite's own exit code (1: rows FAIL on a VM) is not this step's
           exit 0
 
+  saradc-logic:
+    name: rk3xsaradc thresholds and debounce (Linux, gcc)
+    # The key, jack and HID-mapping decisions of drivers/adc/rk3xsaradc are
+    # plain C with no WDK dependency; run their unit test, and build the
+    # file freestanding the way the kernel build sees it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        run: |
+          set -eux
+          D=drivers/adc/rk3xsaradc
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -o saradc_logic_test $D/test/saradc_logic_test.c $D/saradc_logic.c
+          ./saradc_logic_test
+          gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -Wall -Wextra -Werror -c $D/saradc_logic.c -o /dev/null
+          # the interface header alone, as a host program sees it
+          printf '#include "%s/rk3xsaradc_ioctl.h"\nint main(void){return sizeof(RK3X_SARADC_INFO)==4*54?0:1;}\n' "$PWD/$D" > hdr.c
+          gcc -std=c11 -Wall -Wextra -Werror -o hdr hdr.c && ./hdr
+
   solution:
     name: WDK build (build/RockchipDrivers.sln)
     # The drivers imported from worproject/Rockchip-Windows-Drivers build as one
@@ -671,6 +690,8 @@ jobs:
           - { name: bluetooth, proj: drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj }
           - { name: vdpu383, proj: drivers/video/vdpu383/vdpu383.vcxproj }
           - { name: vdpu383test, proj: tools/vdpu383test/vdpu383test.vcxproj }
+          - { name: saradc, proj: drivers/adc/rk3xsaradc/rk3xsaradc.vcxproj }
+          - { name: adctest, proj: tools/adctest/adctest.vcxproj }
 
           - { name: pageverify, proj: tools/pageverify/pageverify.vcxproj }
     steps:

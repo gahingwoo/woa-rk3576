@@ -88,7 +88,10 @@ jobs:
             'drivers/spi/rk3xspi/rk3xspi.vcxproj',
             'drivers/input/gt9271/gt9271.vcxproj',
             'drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj',
-            'drivers/video/vdpu383/vdpu383.vcxproj'
+            'drivers/video/vdpu383/vdpu383.vcxproj',
+            # binds ACPI\RKCP0ADC only, which firmware declares on boards
+            # with ADC keys or an ADC jack; elsewhere it changes nothing
+            'drivers/adc/rk3xsaradc/rk3xsaradc.vcxproj'
           )
           # Record the sdport miniport API surface into the log.
           #
@@ -182,6 +185,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "msbuild failed for vdpu383test" }
           New-Item -ItemType Directory -Force -Path C:\rk-tools | Out-Null
           Copy-Item tools\vdpu383test\ARM64\Release\vdpu383test.exe C:\rk-tools\ -Force
+          msbuild tools\adctest\adctest.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed for adctest" }
+          Copy-Item tools\adctest\ARM64\Release\adctest.exe C:\rk-tools\ -Force
           Copy-Item tools\vdpu383-capture\* C:\rk-tools\ -Force
 
           # Test-sign them.
