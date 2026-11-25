@@ -745,6 +745,8 @@ jobs:
           if ($out -notmatch 'No COM port on the EC20 AT interface') { throw 'did not reach the port lookup' }
           $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $f 2>&1 | Out-String
           if ($LASTEXITCODE -ne 3) { throw "ec20-mode.ps1 (switch) exited $LASTEXITCODE, expected 3" }
+          # the step's own exit code would otherwise be the script's 3
+          exit 0
   ec20-tools-linux:
     name: EC20 usbnet mode script (shellcheck, Linux)
     runs-on: ubuntu-latest

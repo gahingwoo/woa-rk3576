@@ -43,9 +43,9 @@ usbdev() {
 
 # the tty of interface $1 (two hex digits) of the module
 tty_of() {
-	local dev t
+	local dev t n=$((10#$1))
 	dev=$(usbdev) || return 1
-	for t in "$dev":1."$((10#$1))"/ttyUSB*; do
+	for t in "$dev:1.$n"/ttyUSB*; do
 		[ -e "$t" ] && { echo "/dev/$(basename "$t")"; return 0; }
 	done
 	return 1
