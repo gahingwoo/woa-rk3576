@@ -3,15 +3,15 @@
 English | [简体中文](audio.zh-CN.md)
 
 How the audio drivers drive the RK3576 SAI, and what the firmware does for
-them. Status on 2026-11-24:
+them.
 
 | Endpoint | Boards | Firmware setting | Windows drivers | State |
 |---|---|---|---|---|
-| Headphone jack and jack microphone (ES8388) | TaishanPi 3M | `PcdAnalogAudioPreset` (TRUE on this board) | rk3xi2sbus, csaudiork3x 1.0.0.135 or later, es8323, pl330dma | works since 2026-11-22 |
-| HDMI output, 48 kHz stereo | TaishanPi 3M | `PcdHdmiAudioPreset` (TRUE) | the same, and wddm-mali-g52 driving HDMI | works since 2026-11-23 |
-| HDMI output | CM5-IO | `PcdHdmiAudioPreset` (TRUE) | the same | not tried |
-| ES8388: CN3 header (OUT2 on test pads), LIN2/RIN2 differential microphone pads | CM5-IO | edk2-rk3576 branch `cm5io-parity` | the same, es8323 with optional interrupt (`es83-optional-irq`) | not tried |
-| ES8388: headphone jack, LIN1 headset microphone | ROCK 4D | edk2-rk3576 branch `rock4d-parity` | the same | not tried |
+| Headphone jack and jack microphone (ES8388) | TaishanPi 3M | `PcdAnalogAudioPreset` (TRUE on this board) | rk3xi2sbus, csaudiork3x 1.0.0.135 or later, es8323, pl330dma | board-tested |
+| HDMI output, 48 kHz stereo | TaishanPi 3M | `PcdHdmiAudioPreset` (TRUE) | the same, and wddm-mali-g52 driving HDMI | board-tested |
+| HDMI output | CM5-IO | `PcdHdmiAudioPreset` (TRUE) | the same | CI only |
+| ES8388: CN3 header (OUT2 on test pads), LIN2/RIN2 differential microphone pads | CM5-IO | edk2-rk3576 branch `cm5io-parity` | the same, es8323 with optional interrupt | branch |
+| ES8388: headphone jack, LIN1 headset microphone | ROCK 4D | edk2-rk3576 branch `rock4d-parity` | the same | branch |
 
 These need edk2-rk3576 firmware newer than 0.4.1 (the `ci` build until the
 next release). A USB audio device works with Windows' inbox USB Audio Class
@@ -21,8 +21,7 @@ The CM5-IO and the ROCK 4D have no jack-detect line, and their ES8388 is
 wired differently from the TaishanPi 3M's; see
 [Other boards](#other-boards-no-jack-detect-and-the-routing-properties).
 
-The plan this page grew from, written before audio worked, is in
-[history](../history/2026-11-21-audio-plan.md).
+The original plan is in [history](../history/2026-11-21-audio-plan.md).
 
 ## The hardware
 
@@ -94,7 +93,7 @@ I²S on DAC and ADC, one LRCK for both, LOUT1/ROUT1 at 0 dB, OUT2 off, the
 onboard microphone (LINPUT1) on both capture channels with +24 dB PGA. It
 drives the amplifier enable from the ACPI GpioIo.
 
-### Jack detection (branch tspi3m-hp-jack, not run on hardware)
+### Jack detection (CI only)
 
 Firmware (edk2-rk3576 branch `tspi3m-hp-jack`, on top of `rk3576-gpio-pull`,
 which puts the pull-up on GPIO4 PB0): the codec's `_CRS` has the detect line
@@ -181,11 +180,10 @@ from then on handles every change the way it handles a GPIO edge: the amplifier
 gate and `CSAudioEndpointJackState` to csaudiork3x. Until the SARADC driver
 answers, or when it is not installed, the endpoint stays plugged. It writes
 `JackSaradc` (1 when following rk3xsaradc) and `JackSaradcStates` next to the
-other `Jack*` values. `JackDetect` = 0 turns this off too. Not run on a board.
+other `Jack*` values. `JackDetect` = 0 turns this off too. CI only.
 
 ## What is not done
 
-- Jack detection is written (above) and not yet run on the board.
 - Hardware volume: Windows' volume is applied in software; the codec sits at
   0 dB.
 - The headset microphone (RINPUT), sample rates other than 48 kHz, and
@@ -208,8 +206,3 @@ other `Jack*` values. `JackDetect` = 0 turns this off too. Not run on a board.
 4. Sound settings show "Rockchip HDMI" (with an HDMI monitor that has
    speakers) and, on the TaishanPi 3M, "Rockchip Headphones" and "Rockchip
    Microphone".
-
-Before 2026-11-21 Windows drove the SAI with the RK3588 I2S-TDM register
-layout and never started TX (XFER 0x3 instead of 0x7, DMACR 0x70010 instead
-of 0xF0110 as Linux has on the same board); csaudiork3x 1.0.0.135 uses the
-RK3576 SAI layout.

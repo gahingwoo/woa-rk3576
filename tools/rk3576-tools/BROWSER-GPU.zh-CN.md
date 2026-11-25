@@ -5,12 +5,10 @@
 在 WDDM 2.x 下，Chromium 的 DirectComposition 呈现在 maliwddm 上会失败。GPU
 进程崩溃三次后，浏览器退回软件渲染。加上 `--disable-direct-composition`
 启动时，Edge 158 和 Chrome 158（ARM64）通过 ANGLE D3D11（功能级别 10_1）在
-Mali-G52 上渲染，GPU 进程不崩溃。这是 2026-11-25 在泰山派 3M 上实测的结果。
+Mali-G52 上渲染，GPU 进程不崩溃（已在泰山派 3M 上板测试）。
 
-这个开关不只 GPU 进程读，浏览器进程也读：没有它，Windows 11 22H2 及以后的版本
-不给浏览器窗口重定向表面。所以 maliwddm 自己关不掉 DirectComposition（分析见
-wddm-mali-g52 的 `docs/EDGE-PRESENT.md`，"DirectComposition off without a
-flag"）。Edge 和 Chrome 都没有控制这个开关或额外命令行参数的策略。因此
+浏览器进程也读这个开关，所以 maliwddm 自己关不掉 DirectComposition（见
+wddm-mali-g52 的 `docs/EDGE-PRESENT.md`），两个浏览器也都没有对应的策略。
 `setup\rk3576-browser-gpu.ps1` 把开关加到每一个启动入口上，并一直保持。
 
 ## 改了什么
@@ -107,13 +105,10 @@ powershell -ExecutionPolicy Bypass -File rk3576-browser-gpu.ps1 -Action Uninstal
 
 ## 测试
 
-CI（`.github/workflows/ci.yml` 中的 `browser-gpu` 作业）：在 Windows PowerShell
-5.1 和 PowerShell 7 下运行 [tests/browser-gpu.tests.ps1](tests/browser-gpu.tests.ps1)
-中的单元测试，对象是 `HKCU\Software\RK3576BgTest` 下虚构的本机和用户，以及临时
-文件夹中的 `.lnk` 文件。然后在运行器自带的 Edge 和 Chrome 上：安装（判断为否，
-什么也不改），`Mode` 2，计划任务自己运行一次（Edge 和 Chrome 的打开命令和开始菜单
-快捷方式、策略、WebView2 都加上开关），再运行一次（什么也不改），Disable，
-Uninstall，最后检查一切都和之前一样。
+CI（`.github/workflows/ci.yml` 中的 `browser-gpu` 作业）在 Windows PowerShell 5.1 和
+PowerShell 7 下，对 `HKCU\Software\RK3576BgTest` 下虚构的本机和用户运行
+[tests/browser-gpu.tests.ps1](tests/browser-gpu.tests.ps1)，然后在运行器自带的 Edge 和
+Chrome 上安装、应用（`Mode` 2）、Disable、Uninstall，并检查没有留下任何东西。
 
 在板子上（泰山派 3M，WDDM 2.0）：
 

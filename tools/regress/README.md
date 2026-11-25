@@ -65,9 +65,7 @@ sudo ./regress.sh [--board auto|tspi3m|cm5io|rock4d] [--quick] [--out DIR]
 ## The checks
 
 Every check is gated by the board manifest in [`boards/`](boards), written
-from the firmware's per-board inventory (edk2-rk3576 `docs/BOARD-FEATURES.md`
-on branch `rock4d-parity`, `docs/boards/cm5io.md` on `cm5io-parity`). A
-manifest value is `true` (must be there: missing is a FAIL), `"optional"`
+from the firmware's per-board feature list. A manifest value is `true` (must be there: missing is a FAIL), `"optional"`
 (missing is a SKIP, for parts that are not always fitted or not always
 enabled) or `false` (N-A). Edit the manifest when a board changes.
 
@@ -139,8 +137,7 @@ none, so optional), `time.rtc` (the HYM8563), `time.clock`, and
 [`streams.txt`](streams.txt) lists nine small streams (four H.264, five
 HEVC Main; together about 380 KB) from FFmpeg's fate-suite copies of the
 ITU-T conformance streams, each with its SHA-256, frame count and the MD5
-of the decoded I420 output. Every one matched on a TaishanPi 3M (H.264
-2026-11-24, HEVC 2026-11-25). They are not stored in git:
+of the decoded I420 output. They are not stored in git:
 `fetch-streams.sh` downloads them into `streams/` and checks the hashes,
 and `run-remote.sh` copies them to the board.
 
@@ -152,25 +149,19 @@ No board is needed:
   non-ASCII text has a UTF-8 BOM (Windows PowerShell 5.1 reads it as ANSI
   otherwise), and runs `regress.ps1 -DryRun` against each
   `tests/mock-*.json`. A mock holds the facts a board would report and the
-  result it expects for some checks: an all-good TaishanPi 3M with
-  `-Stress`, a CM5-IO with planted regressions (WDDM 1.3, wrong clock, a
-  problem device, no NVMe, a 4101 event, a wrong MD5), a ROCK 4D with
-  `-Quick`, no counters and nobody signed in, and a TaishanPi 3M with the
-  wrong firmware and a stress run stopped at 90 C. It also checks that
-  the suite writes nothing outside `-Out`.
+  results it expects (good boards, planted regressions, missing counters,
+  a stress run stopped at 90 C). It also checks that the suite writes
+  nothing outside `-Out`.
 * `tests/test-regress-sh.sh` builds `/sys` and `/proc` trees for made-up
   boards (`REGRESS_ROOT`), puts stub `dmesg`, `ip`, `ping` and
-  `timedatectl` first in `PATH`, and checks the rows of five cases; then
-  runs `run-remote.sh` with stub `ssh` and `scp` to check the copy, the
-  arguments and the results coming back.
+  `timedatectl` first in `PATH`, and checks five cases; then runs
+  `run-remote.sh` with stub `ssh` and `scp`.
 
 CI runs both on every push (`regress-linux`, `regress-windows` in
-[`ci.yml`](../../.github/workflows/ci.yml)): shellcheck, the Linux tests,
-the dry runs under PowerShell 7 and Windows PowerShell 5.1, and one live
-run of `regress.ps1` on the Windows runner (an x64 VM, so most rows FAIL),
-which must reach the last check, read the runner's own DSDT header
-through the C# helper, pass the storage check and leave no file or task
-behind.
+[`ci.yml`](../../.github/workflows/ci.yml)), under PowerShell 7 and Windows
+PowerShell 5.1, plus one live `regress.ps1` run on the x64 runner (most
+rows FAIL there; it must finish, pass the storage check and leave nothing
+behind).
 
 ## Adding a check
 

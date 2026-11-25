@@ -53,8 +53,7 @@ sudo ./regress.sh [--board auto|tspi3m|cm5io|rock4d] [--quick] [--out DIR]
 
 ## 检查项
 
-每项检查都受 [`boards/`](boards) 里板子清单的约束。清单根据固件的各板功能清单编写（edk2-rk3576 分支 `rock4d-parity`
-上的 `docs/BOARD-FEATURES.md`，`cm5io-parity` 上的 `docs/boards/cm5io.md`）。清单中的值为 `true`（必须存在：缺失即
+每项检查都受 [`boards/`](boards) 里板子清单的约束。清单根据固件的各板功能清单编写。清单中的值为 `true`（必须存在：缺失即
 FAIL）、`"optional"`（缺失为 SKIP，用于不一定装配或不一定开启的部件）或 `false`（N-A）。板子有变化时请修改清单。
 
 ### Windows（regress.ps1）
@@ -115,26 +114,21 @@ N-A：套件从不关闭板子。
 ## 解码码流
 
 [`streams.txt`](streams.txt) 列出九个小码流（四个 H.264、五个 HEVC Main，总共约 380 KB），取自 FFmpeg fate-suite 中
-ITU-T 一致性码流的副本，每个都带 SHA-256、帧数和解码后 I420 输出的 MD5。它们都在泰山派 3M 上匹配过（H.264 2026-11-24，
-HEVC 2026-11-25）。码流不存进 git：`fetch-streams.sh` 把它们下载到 `streams/` 并校验哈希，`run-remote.sh` 把它们拷到板子上。
+ITU-T 一致性码流的副本，每个都带 SHA-256、帧数和解码后 I420 输出的 MD5。码流不存进 git：`fetch-streams.sh` 把它们下载到 `streams/` 并校验哈希，`run-remote.sh` 把它们拷到板子上。
 
 ## 测试
 
 不需要板子：
 
 * `tests/run-dryrun.ps1` 解析这里的每个 `.ps1`，检查含非 ASCII 文本的文件是否带 UTF-8 BOM（否则 Windows PowerShell 5.1
-  会按 ANSI 读取），并对每个 `tests/mock-*.json` 运行 `regress.ps1 -DryRun`。mock 文件里是板子会报告的数据，以及某些检查
-  预期的结果：一切正常且带 `-Stress` 的泰山派 3M、埋了回归问题的 CM5-IO（WDDM 1.3、频率不对、问题设备、没有 NVMe、一个
-  4101 事件、一个 MD5 不对）、带 `-Quick`、没有计数器且没人登录的 ROCK 4D，以及固件不对且压力测试在 90 C 被停止的泰山派 3M。
-  它还检查套件不会在 `-Out` 之外写任何东西。
+  会按 ANSI 读取），并对每个 `tests/mock-*.json` 运行 `regress.ps1 -DryRun`。mock 文件里是板子会报告的数据和预期结果
+  （正常的板子、埋好的回归问题、缺少计数器、在 90 C 被停止的压力测试）。它还检查套件不会在 `-Out` 之外写任何东西。
 * `tests/test-regress-sh.sh` 为虚构的板子构造 `/sys` 和 `/proc` 目录树（`REGRESS_ROOT`），把桩程序 `dmesg`、`ip`、`ping`
-  和 `timedatectl` 放在 `PATH` 最前面，检查五种情况的结果行；然后用桩程序 `ssh` 和 `scp` 运行 `run-remote.sh`，检查拷贝、
-  参数传递和结果回传。
+  和 `timedatectl` 放在 `PATH` 最前面，检查五种情况；然后用桩程序 `ssh` 和 `scp` 运行 `run-remote.sh`。
 
-CI 在每次推送时运行这两项（[`ci.yml`](../../.github/workflows/ci.yml) 中的 `regress-linux`、`regress-windows`）：
-shellcheck、Linux 测试、PowerShell 7 和 Windows PowerShell 5.1 下的 dry run，以及在 Windows runner（x64 虚拟机，所以大部分
-行是 FAIL）上真实运行一次 `regress.ps1`：它必须跑到最后一项检查，通过 C# 辅助代码读到 runner 自己的 DSDT 表头，通过存储
-检查，并且不留下任何文件或任务。
+CI 在每次推送时运行这两项（[`ci.yml`](../../.github/workflows/ci.yml) 中的 `regress-linux`、`regress-windows`），
+分别在 PowerShell 7 和 Windows PowerShell 5.1 下运行，另外在 x64 runner 上真实运行一次 `regress.ps1`（那里大部分行是 FAIL；
+它必须跑完、通过存储检查并且不留下任何东西）。
 
 ## 添加检查
 

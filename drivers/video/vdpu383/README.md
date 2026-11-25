@@ -2,209 +2,146 @@
 
 English | [简体中文](README.zh-CN.md)
 
-The RK3576's H.264/HEVC/VP9/AV1 decoder (RKVDEC, VDPU383 in Rockchip's
-naming), driven from Windows. This is the prototype: a KMDF driver that
-exposes the block to a test program, and the program, which parses H.264,
-builds the decoder's register file and checks the output against the
-conformance streams' reference pictures. Applications do not see it.
+A KMDF driver for the RK3576 H.264/HEVC/VP9/AV1 decoder (RKVDEC, VDPU383 in
+Rockchip's naming), plus a test program that parses streams, builds the
+decoder's register file and checks the output against reference MD5s.
+Applications do not see this driver directly. The decoder Edge will use is
+planned as a VIDEO_DECODE node inside the display driver
+([wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)); the register
+builder in [lib](lib) is plain C (no KMDF, WDM or C library calls, no
+allocation, no floating point) so it can move there unchanged.
 
-The decoder that Edge will use is planned inside the display driver
-([wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52), docs/D3D11-UMD.md,
-milestone U5) as a VIDEO_DECODE node, because D3D11 video has to run on the
-same device as ANGLE. The register builder in [lib](lib) is written to move
-there unchanged: plain C, no KMDF, WDM or C library calls, no allocation, no
-floating point, DXVA structures in.
+The device `ACPI\RKCP0383` exists only when *Video Decoder (VDPU383)* is
+enabled in the firmware setup (off by default; see
+[features](../../../docs/features.md#video-decoder)).
 
-**Run on the TaishanPi 3M on 2026-11-24:** with *Video Decoder (VDPU383)*
-enabled in the firmware setup (off by default), Windows binds `vdpu383.sys`
-to `ACPI\RKCP0383`, and the six H.264 conformance streams tried decode bit
-for bit like FFmpeg's references, with 0 hardware errors (edk2-rk3576 merge
-`a23adb9`, [features](../../../docs/features.md#video-decoder)). It compiles
-in CI; the parser and the register builder also run on Linux with no decoder
-(`--null`).
+| Codec | Status |
+|---|---|
+| H.264 | board-tested (TaishanPi 3M): six conformance streams bit exact, 0 hardware errors |
+| HEVC Main | board-tested: 60/75 MATCH with contiguous buffers (`Iommu` 0), 14 large streams failed to allocate there; not yet re-run on the IOMMU path |
+| VP9 profile 0/2 | board-tested: 215/216; the failure (vp90-2-trac3849) is fixed in the builder, not re-run |
+| AV1 Main | CI only (parser and builder on Linux with `--null`) |
+| IOMMU buffers (`Iommu` 1, default) | board-tested with H.264 and VP9 |
+
+History: `git log -- drivers/video/vdpu383 tools/vdpu383test`.
 
 ## What is where
 
 | Path | What |
 |---|---|
-| [lib/vdpu383_h264.c](lib/vdpu383_h264.c) | DXVA_PicParams_H264 + DXVA_Qmatrix_H264 + bitstream to registers 0..383 and the auxiliary buffer. From Rockchip MPP (Apache-2.0 OR MIT, used as MIT) |
-| [lib/v383_dxva.h](lib/v383_dxva.h) | the DXVA H.264 structures, byte for byte dxva.h's layout (checked against dxva.h at compile time) |
-| [lib/vdpu383_hevc.c](lib/vdpu383_hevc.c) | the same for HEVC Main: DXVA_PicParams_HEVC + DXVA_Qmatrix_HEVC + bitstream, from MPP, checked against mainline's rkvdec-vdpu383-hevc.c; rebuilds the SPS's reference picture sets, which DXVA does not carry (see the top of the file). Not run on the board |
-| [lib/v383_dxva_hevc.h](lib/v383_dxva_hevc.h) | the DXVA HEVC structures, dxva.h's layout |
-| [lib/vdpu383_vp9.c](lib/vdpu383_vp9.c) | VP9 profile 0 and 2 (8 and 10 bit 4:2:0): DXVA_PicParams_VP9 + the frame to registers, the global record and the probability tables. Registers and buffer handling from MPP's hal_vp9d_vdpu383.c (MIT); the packers written fresh to the layout of MPP's hal_vp9d_com.c (Apache-2.0 only, nothing copied), byte for byte equal to MPP's output. The decoder reads the compressed header and adapts the probabilities itself; the builder keeps the four frame contexts, the segment maps and the motion vectors between frames (V383_Vp9State). Not run on the board |
-| [lib/vdpu383_vp9_probs.c](lib/vdpu383_vp9_probs.c), [lib/v383_dxva_vp9.h](lib/v383_dxva_vp9.h) | the VP9 default and key-frame probabilities (mainline v4l2-vp9.c, GPL-2.0); the DXVA VP9 structures, dxva.h's layout |
-| [driver.c](driver.c), [warmup.c](warmup.c) | the KMDF driver for `ACPI\RKCP0383` |
-| [vdpu383_ioctl.h](vdpu383_ioctl.h) | the driver's interface (`\\.\VDPU383`) |
-| [lib/vdpu383_av1.c](lib/vdpu383_av1.c) | AV1 Main (8 and 10 bit 4:2:0): DXVA_PicParams_AV1 to registers and the 672-byte global record, ported from MPP's hal_av1d_vdpu383.c and hal_av1d_com.c (MIT), byte for byte equal to MPP's packer. The decoder parses the frame's OBUs and keeps the CDFs itself (per-surface CDF and segment map buffers); the builder keeps per surface what DXVA does not say about the reference slots (V383_Av1State) and can wrap DXVA tile data in OBUs. Not run on the board |
-| [lib/vdpu383_av1_cdf.c](lib/vdpu383_av1_cdf.c), [lib/v383_dxva_av1.h](lib/v383_dxva_av1.h) | the decoder's default AV1 CDF tables (MPP, MIT); the DXVA AV1 structures, dxva.h's layout |
-| [../../../tools/vdpu383test](../../../tools/vdpu383test) | the test program and its H.264, HEVC, VP9 and AV1 (IVF) parsers |
-| [../../../tools/vdpu383-capture](../../../tools/vdpu383-capture) | what mainline Linux does with the same clips, and a register diff |
+| [lib/vdpu383_h264.c](lib/vdpu383_h264.c), [lib/v383_dxva.h](lib/v383_dxva.h) | H.264: DXVA_PicParams_H264 + DXVA_Qmatrix_H264 + bitstream to registers 0..383 and the auxiliary buffer (from Rockchip MPP, used as MIT); DXVA structures checked against dxva.h at compile time |
+| [lib/vdpu383_hevc.c](lib/vdpu383_hevc.c), [lib/v383_dxva_hevc.h](lib/v383_dxva_hevc.h) | HEVC Main, from MPP, checked against mainline rkvdec-vdpu383-hevc.c; rebuilds the SPS reference picture sets, which DXVA does not carry |
+| [lib/vdpu383_vp9.c](lib/vdpu383_vp9.c), [lib/vdpu383_vp9_probs.c](lib/vdpu383_vp9_probs.c), [lib/v383_dxva_vp9.h](lib/v383_dxva_vp9.h) | VP9 profile 0 and 2: registers from MPP hal_vp9d_vdpu383.c (MIT), packers written fresh to MPP's layout (byte equal output), default probabilities from mainline v4l2-vp9.c (GPL-2.0). Keeps frame contexts, segment maps and motion vectors between frames (V383_Vp9State) |
+| [lib/vdpu383_av1.c](lib/vdpu383_av1.c), [lib/vdpu383_av1_cdf.c](lib/vdpu383_av1_cdf.c), [lib/v383_dxva_av1.h](lib/v383_dxva_av1.h) | AV1 Main 8/10 bit: DXVA_PicParams_AV1 to registers and the 672-byte global record, from MPP (MIT); keeps reference slot state per surface (V383_Av1State) and can wrap DXVA tile data in OBUs |
+| [driver.c](driver.c), [warmup.c](warmup.c), [vdpu383_ioctl.h](vdpu383_ioctl.h) | the KMDF driver and its interface `\\.\VDPU383` |
+| [../../../tools/vdpu383test](../../../tools/vdpu383test) | test program, parsers, conformance lists and scripts |
+| [../../../tools/vdpu383-capture](../../../tools/vdpu383-capture) | Linux reference capture and register diff |
 
-The firmware side is edk2-rk3576 branch `vdpu383-acpi-v2` (the old
-`vdpu383-acpi` rebased onto main with the NPU option kept): a setup option, off
-by default, that powers PD_VDEC, sets the decoder clocks and installs an
-SSDT with the device.
-
-## Verified, derived, guessed
+## Hardware facts and their sources
 
 | Item | Source | Status |
 |---|---|---|
-| Registers at 0x27B00000 (link +0, function +0x100, cache +0x600, IOMMU +0x800/+0x900), GSIV 340/341, PD_VDEC bits, CRU bits, SRAM 0x3FF88000 480 KiB | mainline rk3576.dtsi, pm-domains.c, clk-rk3576.c, rst-rk3576.c | read from source, not measured |
-| Start: link 0x54 = timeout, 0x58 = 0, 0x40 = 1; interrupt: read 0x48/0x4C, write 0x03FF0000 to 0x4C and 0x00030000 to 0x48 | mainline rkvdec-vdpu383-h264.c, rkvdec.c | read from source |
-| Reference read cache at +0x600: CACHE0_CFG = 0x13, MAX_READS = 0x1C at D0 entry and after every IP reset; CLR_CACHE0 = 1 before every decode | mainline "configure the reference read cache" (v3, merged) | ported; mainline measured a 2688x1520 stream at 22.5 or 65.4 ms per frame with the power-on values and 3.6 ms with these. Reprogramming after a reset is ours: mainline left open whether the reset clears them |
-| A timed-out decode always gets an IP reset (link 0x48 irq off, 0x44 = 1, wait for status bit 11, clear status), then queued DPCs are drained | mainline "Stop the VDPU383 core on timeout" (posted, compile-tested there) and "Handle interrupts without a current context" | ported; an error status still resets only with `VDPU383_RUN_RESET_ON_ERROR` |
-| Warm-up decode | vendor kernel mpp_hack_rk3576.c (GPL-2.0+ OR MIT) | ported unchanged; mainline does not do it. Needed: without it every H.264 decode after a power-on is wrong until one warm-up has run (board, 2026-11-25). At every D0 entry and after every IP reset unless Device Parameters `WarmupAtD0` = 0; `vdpu383test warmup` runs it on demand |
-| Register values, SPS/PPS/RPS bit layouts, RCB sizes, CABAC table | MPP hal_h264d_vdpu383.c and friends | ported; RCB arithmetic changed from float to integer (same values, checked in `selftest`) |
-| SPS/PPS record written both at offset 0 (MPP) and at pps_id * 176 (mainline) | the two disagree | whichever the hardware reads is covered |
-| Default reference lists P/B0/B1 from DXVA_PicParams_H264 | H.264 8.2.4.2, as mainline hands them to the hardware | written fresh |
-| profile_idc, seq_parameter_set_id, constraint_set3_flag | not in DXVA | the tool passes the real ones; `--dxva-only` passes guesses, to find out whether the hardware cares |
-| DXVA_Qmatrix_H264 in zig-zag order | the DXVA spec as FFmpeg's dxva2_h264.c reads it | not checked against a Windows decoder |
-| IOMMU paging on with the driver's own v2 tables (one directory for both instances +0x800/+0x900, 4 KiB pages, 32-bit IO addresses from 16 MiB up, SRAM and warm-up buffer at their physical addresses); enable/disable/fault sequences of rk_iommu_enable/disable/irq, no FORCE_RESET (rockchip,disable-mmu-reset); paging restored after every IP reset and decode error | mainline rockchip-iommu.c (rk3576.dtsi: "rockchip,rk3576-iommu", "rockchip,rk3568-iommu" = v2), rkvdec.c rkvdec_iommu_restore(), rkvdec-rcb.c; the VOP2 scan-out of wddm-mali-g52 runs the same IOMMU type with the same entry format on the board | ported, not run on the board yet. Device Parameters `Iommu` 0 gives the old path (paging off, physical addresses, contiguous buffers below 4 GiB), which failed for 4 MiB surfaces with error 1450 on 2026-11-25 |
-| Buffers write-combined (Normal non-cacheable) for a non-coherent device | | guessed |
-| Field pictures (PAFF), FMO, 4:2:2, 10 bit, MVC | | not supported; MBAFF frames pass through untested |
+| Registers at 0x27B00000 (link +0, function +0x100, cache +0x600, IOMMU +0x800/+0x900), GSIV 340/341, SRAM 0x3FF88000 480 KiB | mainline rk3576.dtsi, pm-domains.c, clk-rk3576.c, rst-rk3576.c | from source |
+| Start: link 0x54 = timeout, 0x58 = 0, 0x40 = 1; interrupt: read 0x48/0x4C, write 0x03FF0000 to 0x4C and 0x00030000 to 0x48 | mainline rkvdec | from source |
+| Read cache: CACHE0_CFG = 0x13, MAX_READS = 0x1C at D0 entry and after every IP reset; CLR_CACHE0 = 1 before each decode | mainline | ported (mainline measured 3.6 ms per frame vs 22.5 to 65.4 ms with power-on values) |
+| Timed-out decode: IP reset (link 0x48 irq off, 0x44 = 1, wait status bit 11, clear), then drain DPCs | mainline | ported; an error status resets only with `VDPU383_RUN_RESET_ON_ERROR` |
+| Warm-up decode at D0 entry and after IP reset | vendor kernel mpp_hack_rk3576.c | required: without it H.264 decodes wrong after power-on |
+| SPS/PPS record written at offset 0 (MPP) and at pps_id * 176 (mainline) | the two disagree | both covered |
+| profile_idc, seq_parameter_set_id, constraint_set3_flag | not in DXVA | `--dxva-only` passes guesses to test whether the hardware cares |
+| IOMMU v2 page tables (4 KiB pages, IO addresses from 16 MiB, SRAM and warm-up buffer identity mapped), restored after every reset | mainline rockchip-iommu.c, rkvdec.c | ported |
+| Buffers write-combined | | guessed |
+| PAFF, FMO, 4:2:2, H.264 10 bit, MVC | | not supported; MBAFF untested |
 
-## Breadcrumbs and settings
+## Settings and breadcrumbs
 
-The driver keeps its last step and what it read in the device's hardware
-key, flushed to disk at once, so a hang or a bugcheck leaves them readable
-after the next boot (boot with the setup option off if the decoder is what
-stops Windows):
-
-```
-reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters"
-```
-
-| Value | Meaning |
-|---|---|
-| `LastStep`, `PrevStep`, `StepSeq` | the step the driver was in, the one before, and a counter. `D0Entry: first register read` as LastStep after a bugcheck means the decoder's power domain or clocks were off: the firmware did not power it |
-| `RegsPa`, `SramPa` | the resources Windows gave it (expect 0x27B00000, 0x3FF88000) |
-| `Version`, `Mmu0Status`, `Mmu1Status`, `LinkIrqAtD0`, `LinkStatusAtD0` | the first reads at D0 entry |
-| `CacheCfgPowerOn`, `CacheMaxReadsPowerOn` | the read cache before the driver set it |
-| `WarmupIrq`, `WarmupStatus`, `WarmupTimedOut` | the last warm-up, at D0 entry or from the tool |
-| `FirstRunResult`, `FirstRunStatus` | the first decode of the session (0 = ok) |
-| `IommuSetting`, `IommuOn`, `MmuDte0`, `MmuEnableStatus0/1` | the `Iommu` setting read, whether paging came on at D0 entry (1) or the driver fell back to physical addresses (0), the directory register and both statuses after enabling (bit 0 = paging) |
-| `LastMmuFaultAddr` | the IO address of the last decode failed with an IOMMU fault |
-
-Settings, DWORDs in the same key, read at each start of the device:
+DWORDs under
+`HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters`, read
+when the device starts (restart the device or reboot after a change):
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `WarmupAtD0` | 1 | 1: run the vendor kernel's warm-up decode at every D0 entry, as the vendor kernel does at probe and resume, and after every IP reset. 0: never by itself (H.264 then decodes wrong after a power-on until `vdpu383test warmup` has run) |
-| `Iommu` | 1 | 1: buffers are any pages, mapped through the decoder's IOMMU, and `dma` is an IO address. 0: the old path, physically contiguous buffers below 4 GiB, paging off. Takes effect at the next start of the device (disable/enable or reboot) |
-| `UserAccess` | 0 | 0: SYSTEM and administrators only, one handle at a time (vdpu383test). 1: every user may open `\\.\VDPU383`, many handles at once, so that a video player's process reaches it through the display driver's user-mode part (wddm-mali-g52 `video-decode`, D3D11 video decode milestone V3a); 2: low-integrity processes too (a browser's GPU process). With 1 or 2 `VDPU383_RUN_NO_ADDR_CHECK` is ignored, and each handle may hold at most 384 MiB of decoder buffers. Read when the device starts: set it, then restart the device or the board |
+| `WarmupAtD0` | 1 | run the warm-up decode at every D0 entry and IP reset. 0: never (H.264 is then wrong until `vdpu383test warmup` runs) |
+| `Iommu` | 1 | map buffers through the decoder IOMMU. 0: physically contiguous buffers below 4 GiB, paging off (large surfaces fail with error 1450) |
+| `UserAccess` | 0 | 0: SYSTEM and administrators, one handle. 1: every user, many handles (a player process through the display driver's user-mode part). 2: low-integrity processes too (browser GPU process). With 1 or 2, `VDPU383_RUN_NO_ADDR_CHECK` is ignored and each handle may hold at most 384 MiB |
 
-Security note on `UserAccess`: the bring-up interface lets the caller write
-the decoder's registers. The driver checks that every address register of
-a run points into a buffer that handle allocated (or the SRAM), but not
-that the decoder stays inside it. With `Iommu` 0 the decoder's IOMMU is
-off, so a process that can open the device can make the decoder read or
-write memory past the end of its own buffers. With `Iommu` 1 (the default)
-the decoder reaches only what is mapped in its IOMMU, but that is every open
-handle's buffers, the SRAM and the warm-up buffer, so one process can still
-reach another's buffers. That is why `UserAccess` is 0 by default and meant
-for a test board only; the product path is the decode node inside maliwddm
-(docs/dev/video-decode.md, V3b).
+`UserAccess` is for test boards only. The interface lets the caller write
+decoder registers; the driver checks that every address register points
+into a buffer of that handle, but not that the decoder stays inside it. With
+`Iommu` 1 the decoder reaches every open handle's buffers, so one process can
+reach another's; with `Iommu` 0 it can reach any memory.
 
-## Test plan
+The driver also writes breadcrumbs to the same key, flushed at once, so they
+survive a hang or bugcheck (boot with the firmware option off if the decoder
+stops Windows):
 
-Run in this order. Each step says what to send back if it fails.
+| Value | Meaning |
+|---|---|
+| `LastStep`, `PrevStep`, `StepSeq` | current step, previous step, counter. `D0Entry: first register read` after a bugcheck = the firmware did not power the decoder |
+| `RegsPa`, `SramPa` | assigned resources (expect 0x27B00000, 0x3FF88000) |
+| `Version`, `Mmu0Status`, `Mmu1Status`, `LinkIrqAtD0`, `LinkStatusAtD0` | first reads at D0 entry |
+| `CacheCfgPowerOn`, `CacheMaxReadsPowerOn` | read cache before the driver set it |
+| `WarmupIrq`, `WarmupStatus`, `WarmupTimedOut` | last warm-up |
+| `FirstRunResult`, `FirstRunStatus` | first decode of the session (0 = ok) |
+| `IommuSetting`, `IommuOn`, `MmuDte0`, `MmuEnableStatus0/1` | `Iommu` value read, whether paging came on, directory register, status after enable (bit 0 = paging) |
+| `LastMmuFaultAddr` | IO address of the last IOMMU fault |
 
-### 0. Firmware
+## Install
 
-Flash the `vdpu383-acpi-v2` firmware (CI artifact `cm5io-firmware` or
-`tspi3m-firmware` of the edk2-rk3576 run on that branch). With the option
-still off, boot once to Windows and Linux as usual: nothing must have
-changed.
+Firmware: enable *ACPI / Device Tree* > *Video Decoder (VDPU383, experimental)*
+(config table mode must include ACPI). The serial log then shows
+`RK3576Dxe: VDEC powered, version=0x...`, and `acpiview -s SSDT` in the UEFI
+shell lists OEM table ID `RKVDEC`.
 
-Then in setup, *ACPI / Device Tree*: the config table mode must include ACPI;
-set *Video Decoder (VDPU383, experimental)* to Enabled, save, reset. The
-serial log should then show:
-
-```
-RK3576Dxe: VDEC: gpll 1188000000 Hz, cpll 1000000000 Hz -> aclk 594000000, aclk_bak 500000000, hevc_ca 1000000000 Hz
-RK3576Dxe: VDEC powered, version=0x........ mmu status=0x........./0x........
-```
-
-(or `VDEC power domain was already on` before the second line). In the UEFI
-shell, `acpiview -s SSDT` lists a table with OEM table ID `RKVDEC`.
-
-Send back on failure: the serial log from power-on to the boot manager.
-
-### 1. Install
-
-From the WinPE workflow run of branch `vdpu383-v2`, artifact
-`woa-drivers-signed-arm64`: `woa-drivers\vdpu383\` (the signed package),
-`woa-drivers\signer.cer` and `woa-tools\` (vdpu383test.exe and the Linux
-capture scripts). The WinPE image of that run already contains the driver.
-
-On an installed Windows, as administrator, after `w32tm /resync /force`:
+Driver: from the WinPE workflow artifact `woa-drivers-signed-arm64`
+(`woa-drivers\vdpu383\`, `woa-drivers\signer.cer`, `woa-tools\vdpu383test.exe`).
+The test certificate changes with every run, so import the one from the same
+run. As administrator, after `w32tm /resync /force`:
 
 ```
 certutil -addstore -f Root signer.cer
 certutil -addstore -f TrustedPublisher signer.cer
-pnputil /add-driver vdpu383\vdpu383.inf /install
+pnputil /add-driver vdpu383\vdpu383.inf
+reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0" /v ConfigFlags /t REG_DWORD /d 0x20 /f
+shutdown /r /t 0
 ```
 
-Device Manager, *System devices*: "Rockchip RK3576 Video Decoder (VDPU383,
-bring-up)", no problem code. With the firmware option off the device does
-not exist and the driver binds nothing.
+Staged install (mark for reinstall, reboot) is safer than `/install` on a
+running device. Device Manager > System devices then shows "Rockchip RK3576
+Video Decoder (VDPU383, bring-up)" without a problem code.
 
-Send back on failure: `pnputil /enum-devices /instanceid "ACPI\RKCP0383\0" /drivers`
-(or the problem code shown), and `C:\Windows\INF\setupapi.dev.log` lines
-around `RKCP0383`.
+On failure send: `pnputil /enum-devices /instanceid "ACPI\RKCP0383\0" /drivers`
+and the `RKCP0383` lines of `C:\Windows\INF\setupapi.dev.log`.
 
-### 2. Power and warm-up
+## Test
 
-```
-vdpu383test info
-```
+Run in order; the first failure names the feature.
 
-Expected (from the vendor code, not measured):
+| Step | Command | Pass |
+|---|---|---|
+| Power | `vdpu383test info` | non-zero `version register`; both IOMMU instances `paging ON` with the same `dte`; `warm-up verdict: PASS`; `buffers IO addresses, IOMMU paging on` |
+| Warm-up | `vdpu383test warmup`, then `vdpu383test warmup-direct` three times | status bit 0 set, bits 1-9 clear (10-15 are not errors), `verdict: PASS`; same MD5 each time |
+| Replay | `vdpu383test decode BA1_Sony_D.jsv -n 3 --dump C:\v383 --readback`, then `vdpu383test replay C:\v383\pic_0000\replay.txt` | `replay: ok ... MATCH` (mismatch with good status = non-deterministic decode; different status = state outside the register file) |
+| H.264 | `vdpu383test decode STREAM --ref REFERENCE.yuv -o out.yuv`, then with `--dxva-only` | `reference: N frames; MATCH`, MD5 as in the table below |
+| HEVC | `powershell -ExecutionPolicy Bypass -File hevc-conformance.ps1 -Dir D:\hevc\streams` (`-Only RPS_A` first, then `-DxvaOnly -Out .\hevc-dxva`) | `MATCH` on every line |
+| VP9 | `vp9-conformance.ps1 -Dir D:\vp9\streams` (`-Only vp90-2-00` first, then `-DxvaOnly -Out .\vp9-dxva`) | `MATCH` on every line |
+| AV1 | `av1-conformance.ps1 -Dir D:\av1\streams`, then `-DxvaOnly -Out .\av1-dxva` and `-DxvaOnly -Synth 1 -Out .\av1-dxva-frame` | `MATCH`; `GRAIN-OFF` = frames equal dav1d's without film grain |
+| Fallback | set `Iommu` 0, reboot | `vdpu383test info` says `physical, contiguous`, BA1_Sony_D still matches; delete the value afterwards |
 
-- `version register` non-zero, the same as the firmware's `version=` line
-- both IOMMU instances `paging ON` with the same `dte` (`paging off` with Device Parameters `Iommu` 0, and with drivers before branch `vdpu383-iommu`)
-- `warm-up at D0 entry: ran 1`, `warm-up verdict: PASS` (the default, `WarmupAtD0` 1; `not run` with `WarmupAtD0` 0 and with drivers before 2026-11-26)
+After a full run `vdpu383test info` should show `0 IOMMU faults`,
+`0 failed allocations` and `pages mapped` back to 122. A faulting decode
+prints `MMU-FAULT` and `IOMMU fault at IO address 0x...`; the next decode
+runs normally.
 
-Then `vdpu383test warmup` (through the link registers, with interrupts
-live): `irq 0x0000000?`, status bit 0 (`frame_rdy`) set and bits 1-9
-clear, `verdict: PASS`. Bits 10-15 may be set; they are not errors. Then
-`vdpu383test warmup-direct` (the same 32x32 picture
-through the ordinary start path). Run `warmup-direct` three times: the
-output MD5 must be the same each time.
+### Streams
 
-Send back: the output of all three commands, whatever they print.
+- H.264: ITU-T H.264.1 suite, https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/ (AVCv1/, FRExt/); each zip has the stream and reference .yuv. Start with BA1_Sony_D, CABA1_SVA_B, CABA3_SVA_B, MR2_TANDBERG_E, FRExt1_Panasonic_D, HPCAQ2LQ_BRCM_B.
+- HEVC: `https://fate-suite.ffmpeg.org/hevc-conformance/NAME.bit`, the 75 streams in [hevc-conformance.txt](../../../tools/vdpu383test/hevc-conformance.txt) with FFmpeg 6.1.1 MD5s. AMP_A/B need about 170 MiB of buffers. NUT_A_ericsson_5 and RPS_D_ericsson_6 may differ (see the list).
+- VP9: `https://fate-suite.ffmpeg.org/vp9-test-vectors/`, remuxed to IVF (`ffmpeg -i NAME.webm -c copy -f ivf NAME.ivf`, add `-copyinkf` for vp90-2-16-intra-only), listed in [vp9-conformance.txt](../../../tools/vdpu383test/vp9-conformance.txt). References are made with `-autoscale 0 -fps_mode passthrough`; without it FFmpeg repeats frames and correct streams read MISMATCH. `-Extra '--vp9-mpp'` repeats a run the way MPP handles frame contexts, where MPP and the spec differ.
+- AV1: 17 IVF files from fate-suite `av1-test-vectors/` and `av1/` plus 7 made with libaom and SVT-AV1, listed in [av1-conformance.txt](../../../tools/vdpu383test/av1-conformance.txt) with dav1d MD5s. Order: allintra, cdfupdate, mv, mfmv, then the rest.
 
-### 3. Replay
+Per-frame reference MD5s for `--frame-md5` are in the kit's `framemd5\NAME.framemd5`.
 
-```
-vdpu383test decode BA1_Sony_D.jsv -n 3 --dump C:\v383 --readback
-vdpu383test replay C:\v383\pic_0000\replay.txt
-vdpu383test replay C:\v383\pic_0002\replay.txt
-```
-
-Each replay rewrites one picture's register file and buffers from the dump
-and checks the output against the MD5 recorded when it was decoded:
-`replay: ok ... MATCH`. A mismatch with a good status means the decode is
-not deterministic (memory ordering, cache attributes); a different status
-means state outside the register file matters.
-
-Send back on failure: the console output and `C:\v383` zipped.
-
-### 4. H.264 conformance
-
-Streams from the ITU-T H.264.1 conformance suite,
-https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/ (AVCv1/ and
-FRExt/), each a zip with the stream and the reference output. For each:
-
-```
-vdpu383test decode STREAM --ref REFERENCE.yuv -o out.yuv
-```
-
-Pass: `reference: N frames; MATCH`, and `output md5` equal to the MD5 of the
-reference file below. Then the same with `--dxva-only` added: the same MD5
-means the hardware needs nothing beyond DXVA plus the slice header's pps id.
-
-| Stream (zip) | File | What it covers | Frames | Reference MD5 |
+| H.264 stream (zip) | File | Covers | Frames | Reference MD5 |
 |---|---|---|---|---|
 | BA1_Sony_D | BA1_Sony_D.jsv | Baseline, CAVLC, I and P, QCIF | 17 | 114d1cf94a2fcaffda0cf1b49964bf3d |
 | SVA_BA1_B | SVA_BA1_B.264 | Baseline | 17 | dab92aa2145ab44abab2beb2868dd326 |
@@ -220,7 +157,7 @@ means the hardware needs nothing beyond DXVA plus the slice header's pps id.
 | CABA3_TOSHIBA_E | CABA3_TOSHIBA_E.264 | CABAC, B, 300 frames | 300 | 13651d01c5b533e6b7aa132bae7669ed |
 | CANL1_TOSHIBA_G | CANL1_TOSHIBA_G.264 | CABAC, deblocking off | 300 | afa072746b16bd96f3152b45e2f2881e |
 | CABAST3_Sony_E | CABAST3_Sony_E.jsv | CABAC, slice types, CIF | 25 | e95f27c3779af519c1a317adb2f699a5 |
-| CAPM3_Sony_D | CAPM3_Sony_D.jsv | CABAC, pictures with mixed slice types | 300 | 9ecc3bf5ff7cac9a068a5ba57bc87cb7 |
+| CAPM3_Sony_D | CAPM3_Sony_D.jsv | CABAC, mixed slice types | 300 | 9ecc3bf5ff7cac9a068a5ba57bc87cb7 |
 | CAWP1_TOSHIBA_E | CAWP1_TOSHIBA_E.264 | weighted prediction, CIF | 90 | 87946607d1d774c2da8ec8632710c84a |
 | CVWP2_TOSHIBA_E | CVWP2_TOSHIBA_E.264 | weighted prediction, CAVLC | 90 | 7616ccc1e4cc89805cf5ae11e4437533 |
 | FRExt1_Panasonic_D | FRExt1_Panasonic.avc | High, 8x8 transform | 8 | f7023a3a93cc98c0c8d83c1deaf11048 |
@@ -228,233 +165,18 @@ means the hardware needs nothing beyond DXVA plus the slice header's pps id.
 | HPCV_BRCM_A | HPCV_BRCM_A.264 | High, CAVLC, CIF | 300 | 5eafc104844211893e1d8af0b8b66ed6 |
 | HPCAQ2LQ_BRCM_B | HPCAQ2LQ_BRCM_B.264 | High, CABAC, scaling matrices | 100 | cf81785c89930d5b1c191a1ef4cb9e83 |
 
-The MD5s are of the reference .yuv in each zip; FFmpeg's software decode of
-each stream gives the same MD5 (checked 2026-11-21). Start with BA1_Sony_D,
-then CABA1_SVA_B, CABA3_SVA_B, MR2_TANDBERG_E, FRExt1_Panasonic_D and
-HPCAQ2LQ_BRCM_B: each adds one feature, so the first failure names it.
+### What to send back on failure
 
-Send back on failure, for the first stream that fails:
-
-1. the full console output of
-   `vdpu383test decode STREAM --ref REF.yuv --frame-md5 --readback --regs -n 8 > win.txt`
-2. `vdpu383test decode STREAM -n 4 --dump C:\v383` with `C:\v383` zipped
-3. the Linux capture of the same stream (below) and `compare-regs.py`
-   output for the first picture that differs
-4. `vdpu383test info` after the failure
-
-Board, 2026-11-25 (driver 3.37.25.177, `WarmupAtD0` 0): after a reboot
-all six streams were wrong, both ways (BA1_Sony_D: luma exact, about 860
-bytes of each chroma plane per frame; luma too with `Iommu` 0), the same
-within one boot and different from boot to boot; HEVC decodes first did
-not change it, one `vdpu383test warmup` did, for good. The warm-up shares
-no buffer with a decode, so the state it sets up is inside the decoder.
-Since then the driver runs the warm-up at every D0 entry and after every
-IP reset (`WarmupAtD0` 1, the default), as the vendor kernel does at
-probe and resume, and the builders write registers 31, 107 and 233-235
-(left alone by MPP, zero after the vendor's warm-up) as 0. Which of the
-two is the cure is not known yet: a boot with `WarmupAtD0` 0 tells.
-
-### 5. HEVC Main conformance
-
-Streams: FFmpeg's fate-suite copies of the JCT-VC conformance streams,
-`https://fate-suite.ffmpeg.org/hevc-conformance/NAME.bit`, the 75 8-bit 4:2:0
-ones listed in [hevc-conformance.txt](../../../tools/vdpu383test/hevc-conformance.txt)
-with the frame count and the MD5 of FFmpeg 6.1.1's I420 output for each
-(made 2026-11-25, `-flags unaligned` as in fate: CONFWIN_A_Sony_1's
-reference was first made without it, 414 wide, and is corrected). Board
-2026-11-25 with the contiguous buffers: 60/75 MATCH, 0 hardware errors;
-the 14 large or 4 MiB-stream ones failed to allocate (error 1450) before
-picture 0, and CONFWIN_A_Sony_1's output is the corrected reference's. On Linux every one of them goes through the parser and
-the register builder with `--null`: FFmpeg's frame count, and every
-picture's reference sets derived from its slice headers (as the decoder
-derives them) equal to DXVA's, with the SPS's sets and with the table
-rebuilt from DXVA alone. CI does that for nine of them.
-
-vdpu383test with HEVC: CI artifact `rk3576-woa-vdpu383test-arm64` of
-branch `vdpu383-hevc` (run 45383528190 or later); vdpu383.sys as for H.264.
-On the board, as administrator, the streams in one folder:
-
-```
-powershell -ExecutionPolicy Bypass -File hevc-conformance.ps1 -Dir D:\hevc\streams -Only RPS_A
-powershell -ExecutionPolicy Bypass -File hevc-conformance.ps1 -Dir D:\hevc\streams
-powershell -ExecutionPolicy Bypass -File hevc-conformance.ps1 -Dir D:\hevc\streams -DxvaOnly -Out .\hevc-dxva
-```
-
-Pass: `MATCH` on every line (the output MD5 is FFmpeg's, the frame count
-too, no hardware errors), first with the parser's SPS sets, then with
-`-DxvaOnly`: the same MD5 there means a D3D11 driver, which has only DXVA,
-decodes HEVC with this builder. In that order: RPS_A_docomo_4 (one slice,
-P and B), then the whole list; it names the first feature that fails
-(SLIST_* scaling lists, TILES_* tiles, WPP_*/ENTP_* entry points, DSLICE_*
-dependent slices, LTRPSPS_A long-term pictures from the SPS, RAP_* leading
-pictures). AMP_A/B (2560x1600) need about 170 MiB of decoder buffers.
-
-Send back on failure: `hevc-results\hevc-results.txt` and the first failing
-stream's `NAME.txt`, then `vdpu383test decode NAME.bit --frame-md5 --regs -n 4 > win.txt`
-and `vdpu383test info`. FFmpeg's per-frame MD5s for comparing `--frame-md5`
-are in the streams folder of the bundle (`framemd5\NAME.framemd5`).
-
-### 6. IOMMU buffers (branch `vdpu383-iommu`)
-
-The driver of that branch maps every buffer through the decoder's IOMMU.
-Install it staged, not hot: add it to the driver store, mark the device for
-reinstall, reboot. As administrator, from the WinPE workflow run's
-`woa-drivers-signed-arm64` (`woa-drivers\vdpu383\`, `woa-drivers\signer.cer`,
-`woa-tools\vdpu383test.exe`; the CI workflow's `rk3576-woa-vdpu383-arm64` is
-unsigned). The test certificate changes with every run, so import this
-run's:
-
-```
-certutil -addstore -f Root signer.cer
-certutil -addstore -f TrustedPublisher signer.cer
-pnputil /add-driver vdpu383\vdpu383.inf
-reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0" /v ConfigFlags /t REG_DWORD /d 0x20 /f
-shutdown /r /t 0
-```
-
-(Without a `signer.cer`, export the certificate from the `.cat`:
-Properties, *Digital Signatures*, *Details*, *View Certificate*, *Copy to
-File*.) After the reboot `pnputil /enum-devices /instanceid "ACPI\RKCP0383\0" /drivers`
-shows the new driver version, and `vdpu383test info` ends with
-`buffers IO addresses, IOMMU paging on`, both IOMMU lines say `paging ON`
-with the same `dte`.
-
-Then, in this order:
-
-1. `vdpu383test warmup` and `vdpu383test warmup-direct`: as before (the
-   warm-up buffer is mapped at its physical address).
-2. The six H.264 streams of section 4: all MATCH.
-3. `hevc-conformance.ps1` with all 75 streams, then `-DxvaOnly`: 75 MATCH
-   expected (NUT_A_ericsson_5 and RPS_D_ericsson_6 may differ, see the
-   list). `vdpu383test info` afterwards: `0 IOMMU faults`, `0 failed
-   allocations`, and `pages mapped` back to the SRAM's and warm-up
-   buffer's 122.
-4. Fallback: `reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters" /v Iommu /t REG_DWORD /d 0 /f`,
-   reboot, `vdpu383test info` says `physical, contiguous`, and BA1_Sony_D
-   still MATCHes. Delete the value afterwards.
-
-A decode that faults prints `MMU-FAULT` and `IOMMU fault at IO address
-0x...`, the next decode runs normally. Send back on failure: `vdpu383test
-info`, the failing stream's `NAME.txt`, and the Device Parameters key.
-
-### 7. VP9 conformance (branch `vdpu383-vp9`)
-
-Streams: the libvpx test vectors in FFmpeg's fate-suite
-(`https://fate-suite.ffmpeg.org/vp9-test-vectors/`), all 215 profile 0
-ones and the profile 2 10-bit 4:2:0 one, remuxed to IVF (`ffmpeg -i
-NAME.webm -c copy -f ivf NAME.ivf`, with `-copyinkf` for
-vp90-2-16-intra-only), listed in
-[vp9-conformance.txt](../../../tools/vdpu383test/vp9-conformance.txt) with
-the frame count and the MD5 of FFmpeg 6.1.1's output, each frame at its own
-size (`-autoscale 0`, `-fps_mode passthrough`: without it FFmpeg repeats
-frames to fill IVF timestamp gaps, which made 67 correct streams read
-MISMATCH on the first board run), yuv420p or yuv420p10le. Made 2026-11-25. Off the
-board, on Linux with `--null`, for every stream: the frame count is FFmpeg's,
-the uncompressed header parser agrees with FFmpeg's trace_headers on every
-frame (base_q_idx, refresh_frame_flags and both header sizes), every
-address register points into the tool's buffers; the global record and the
-probability tables are byte for byte what MPP's packers write for the same
-frames (checked off-board against MPP's code; `selftest` keeps the MD5s).
-CI runs 22 of them. Nothing of it has run on the decoder.
-
-vdpu383test with VP9: CI artifact `rk3576-woa-vdpu383test-arm64` of branch
-`vdpu383-vp9`; vdpu383.sys of section 6 (`vdpu383-iommu`, now main) or the
-one installed, unchanged by this branch. As administrator, the streams in
-one folder:
-
-```
-vdpu383test decode D:\vp9\streams\vp90-2-00-quantizer-00.ivf --frame-md5
-powershell -ExecutionPolicy Bypass -File vp9-conformance.ps1 -Dir D:\vp9\streams -Only vp90-2-00
-powershell -ExecutionPolicy Bypass -File vp9-conformance.ps1 -Dir D:\vp9\streams
-powershell -ExecutionPolicy Bypass -File vp9-conformance.ps1 -Dir D:\vp9\streams -DxvaOnly -Out .\vp9-dxva
-```
-
-In that order: one key frame and one inter frame (quantizer-00); the
-quantizer, sharpness and size groups (vp90-2-00 to -03: intra and inter
-prediction, loop filter, odd sizes); then the features: deltaq, 05-resize
-(scaled references), 06-bilinear, 09-lf_deltas, 10-show-existing-frame
-(hidden frames, superframes), 15-segkey_adpq and segmentation-* (segment
-maps between frames), 16-intra-only (frame contexts: see below),
-parallelmode (forward-only probabilities), 2pass-akiyo and trac* (alt-ref,
-compound prediction), tiling-pedestrian (4 tile columns at 1080p), and
-vp92-2-20-10bit-yuv420 (10 bit; the output is unpacked from the decoder's
-4-in-5-bytes layout). A third-party mainline V4L2 driver for this decoder
-reports compound-prediction frames wrong with registers equal to MPP's
-(github.com/SympleNZ/rkvdec-vdpu383-vp9); the 2pass and trac streams show
-whether that applies here.
-
-Where MPP and the VP9 specification differ the builder follows the
-specification; `-Extra '--vp9-mpp'` repeats a run the way MPP does it
-(every intra frame resets the four contexts; the adapted context of a
-frame that does not keep it is written over its context). A stream that
-MATCHes only one way says which the hardware wants: vp90-2-16-intra-only
-is the one expected to tell them apart.
-
-First board run (2026-11-25, TaishanPi 3M, driver 3.37.25.177): 215 of
-216 right. 67 more read MISMATCH with every frame's `--frame-md5` equal
-to FFmpeg's: the references were wrong, not the decoder (FFmpeg's rawvideo
-output repeated frames to fill IVF timestamp gaps; remade with
-`-fps_mode passthrough`). The one real failure, vp90-2-trac3849 (every
-frame error resilient, segment ids predicted from the previous map):
-frames 5-9 wrong, the same with `--vp9-mpp`. An FFmpeg made to predict
-from the previous frame's map in error resilient mode gives the board's
-10 frame MD5s exactly, so the decoder reads register 181's map whatever
-the frame; the builder now clears that map where the specification
-clears it (`vdpu383_vp9.c`).
-
-Send back on failure: `vp9-results\vp9-results.txt`, the first failing
-stream's `NAME.txt`, then `vdpu383test decode NAME.ivf --frame-md5 --regs -n 4 > win.txt`
-and `vdpu383test info`. FFmpeg's per-frame MD5s are in the kit's
-`framemd5\NAME.framemd5`.
-
-### 8. AV1 Main conformance (branch `vdpu383-av1`)
-
-Streams: the 17 IVF files of FFmpeg's fate-suite `av1-test-vectors/` and
-`av1/` (8 and 10 bit, film grain, SVC, frame size changes, switch frame,
-non-uniform tiles, short reference signalling) and 7 made with libaom and
-SVT-AV1 (segmentation, delta q, 4 x 2 tiles, loop restoration with
-quantizer matrices, sb64, 10 bit, SVT film grain), listed in
-[av1-conformance.txt](../../../tools/vdpu383test/av1-conformance.txt)
-with dav1d's MD5 through FFmpeg 6.1.1, with and without film grain. Off the
-board, on Linux with `--null`, for every stream and in all three stream
-modes (the file's OBUs; DXVA only, tiles in an OBU_TILE_GROUP; DXVA only,
-in an OBU_FRAME): dav1d's frame count; the frame header parser equal to
-FFmpeg's trace_headers on 23009 values over 529 frames, and the global
-motion parameters re-derived from the trace's coded values equal on 16464;
-every address register inside the tool's buffers; ASan and UBSan clean;
-the global record byte for byte what MPP's vdpu38x_av1d_uncomp_hdr()
-writes for the same frame (checked off-board against MPP's code, in both
-the parser and the DXVA-only mode; `selftest` keeps an MD5). CI runs the 17
-fate-suite streams. Nothing of it has run on the decoder.
-
-vdpu383test with AV1: CI artifact `rk3576-woa-vdpu383test-arm64` of branch
-`vdpu383-av1`; vdpu383.sys unchanged. As administrator:
-
-```
-vdpu383test decode D:\av1\streams\av1-1-b8-02-allintra.ivf --frame-md5 -n 2
-powershell -ExecutionPolicy Bypass -File av1-conformance.ps1 -Dir D:\av1\streams
-powershell -ExecutionPolicy Bypass -File av1-conformance.ps1 -Dir D:\av1\streams -DxvaOnly -Out .\av1-dxva
-powershell -ExecutionPolicy Bypass -File av1-conformance.ps1 -Dir D:\av1\streams -DxvaOnly -Synth 1 -Out .\av1-dxva-frame
-```
-
-In that order: allintra (key frames only), cdfupdate and mv (inter, CDFs
-carried between frames), mfmv (motion field projection), then the rest.
-`GRAIN-OFF` means the frames equal dav1d's without film grain: the decoder
-did not apply the grain (or not like dav1d). The first run is the one MPP
-makes (the file's OBUs, frame header size given); the two `-DxvaOnly` runs
-tell whether a D3D11 driver, which has only the tile data, can feed the
-decoder at all, and which wrapping it takes. If neither does, the D3D11 path
-for AV1 needs the frame header bits, which DXVA does not carry.
-
-Send back on failure: `av1-results\av1-results.txt`, the first failing
-stream's `NAME.txt`, `vdpu383test decode NAME.ivf --frame-md5 --regs -n 3 > win.txt`
-and `vdpu383test info`; dav1d's per-frame MD5s are in the kit's
-`framemd5\NAME.framemd5`.
+For the first failing stream: the results file (`*-results\*-results.txt`)
+and its `NAME.txt`, `vdpu383test decode NAME --frame-md5 --readback --regs -n 4 > win.txt`,
+`vdpu383test decode NAME -n 4 --dump C:\v383` with `C:\v383` zipped,
+`vdpu383test info`, the Device Parameters key, and for H.264 the Linux
+capture below with `compare-regs.py` output.
 
 ### Linux reference capture
 
-On the board under Armbian edge 7.3.x, from `woa-tools\` (or
-tools/vdpu383-capture in this repository):
+On the board under Armbian edge 7.3.x, from `woa-tools\` or
+[tools/vdpu383-capture](../../../tools/vdpu383-capture):
 
 ```
 sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-bad gstreamer1.0-plugins-base v4l-utils python3
@@ -462,21 +184,17 @@ sudo ./capture-linux.sh                       # BA1_Sony_D and CABA3_SVA_B, fetc
 sudo ./capture-linux.sh STREAM.264 -n 8       # or any stream
 ```
 
-It writes `vdpu383-capture-<host>-<time>.tar.gz`; send that file. It holds,
-per stream, the register file after each of the first N pictures, the
-hardware-decoded output with its MD5 (which should be the reference MD5
-above), an ftrace call graph, and the decoder clocks, power domain, CRU and
-PMU state. It only reads registers while the decoder is held awake; if
-`/dev/mem` refuses the decoder's range it says so, and a boot with
-`iomem=relaxed` on the kernel command line fixes that.
+It writes `vdpu383-capture-<host>-<time>.tar.gz` with, per stream, the
+register file after each of the first N pictures, the decoded output and its
+MD5, an ftrace call graph, and clock, power domain, CRU and PMU state. If
+`/dev/mem` refuses the decoder range, boot with `iomem=relaxed`.
 
-To diff a picture (Linux's `regs-pic-0003.txt` is the third picture; the
-Windows tool counts from 0):
+Diff one picture (Linux counts from 1, the Windows tool from 0):
 
 ```
 vdpu383test decode CABA3_SVA_B.264 -n 8 --regs > win.txt          (Windows)
 python3 compare-regs.py capture/CABA3_SVA_B/regs-pic-0003.txt win.txt --picture 2
 ```
 
-`vdpu383test --null decode ...` gives the same register file on any PC,
-with made-up buffer addresses.
+`vdpu383test --null decode ...` gives the same register file on any PC, with
+made-up buffer addresses.

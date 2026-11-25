@@ -3,8 +3,10 @@
 KMDF driver for the RK3576 successive-approximation ADC (8 channels, 12 bits,
 1.8 V reference) at `0x2AE00000`. It binds `ACPI\RKCP0ADC`, which
 edk2-rk3576 declares as `\_SB.ADC0` (`Silicon/Rockchip/RK3576/AcpiTables/Saradc.asl`)
-on boards whose DSDT says what is wired to the ADC. It never runs on hardware
-that has not been tested; see the test plan below.
+on boards whose DSDT says what is wired to the ADC.
+
+Status: CI only (builds, host unit test); not run on a board yet. See the
+board test plan below.
 
 What it does with the ADC, all from the firmware's `_DSD`:
 
@@ -108,7 +110,7 @@ dependency; CI runs its unit test on Linux:
 
 ## Board test plan
 
-Nothing here has run on a board. Per board, with firmware that declares
+Per board, with firmware that declares
 `\_SB.ADC0` and this driver installed (`pnputil /add-driver rk3xsaradc.inf /install`):
 
 1. Device Manager: "Rockchip RK3576 SARADC" started, no code 10. `reg query`

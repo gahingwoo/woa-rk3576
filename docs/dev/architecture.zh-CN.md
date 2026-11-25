@@ -37,7 +37,7 @@ Windows 没有这颗 SoC 的时钟、复位、电源域和引脚驱动，所以�
 RK3576 改动都是单独的提交，所以 `git log -- drivers/<class>/<name>` 就能看出和 RK3588 的差别：
 
 - dwcsdhc：卡时钟改由 CRU 提供，不再用 TF-A SiP 调用；每次控制器复位后恢复 Rockchip 厂商位；ADMA2
-  描述符在 128 MiB 边界处拆分（2026-11-24 合并）。
+  描述符在 128 MiB 边界处拆分。
 - dwcmshc：时钟来自 CRU，相位放在控制器的 `TIMING_CON` 里，只支持 3.3 V。
 - rk3xgpio：接受 GPIO 版本 `V2_2`。
 - dwc_eqos：打开 DMA 的 40 位寻址（EAME）。RK3576 的内存超过 4 GB，不打开的话，每次传输到 4 GB 以上的缓冲区都会出错。

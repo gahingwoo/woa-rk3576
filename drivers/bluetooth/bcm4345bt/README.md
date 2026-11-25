@@ -7,15 +7,15 @@ on UART6, for the Windows Bluetooth stack. A KMDF bus driver that runs the
 UART itself, powers the controller, loads its patchram and hands the HCI
 link to the in-box BthMini.
 
-**Works on the TaishanPi 3M** (22 November 2026, Windows 11 23H2): the
-Bluetooth Radio, the BR/EDR and LE enumerators and RFCOMM start, and pairing
-and file transfer work. No voice (SCO) and no idle power saving yet.
+| Board | Status |
+|---|---|
+| TaishanPi 3M (`RKCP4345`) | board-tested on Windows 11 23H2: pairing and file transfer; no voice (SCO), no idle power saving |
+| CM5-IO (`RKCP4362`) | CI only |
 
 ## What it binds
 
 `ACPI\RKCP4345`, declared by the TaishanPi 3M firmware (edk2-rk3576 newer
-than 0.4.1, merged 2026-11-22; its `ci` build until the next release) as
-`\_SB.BTH0`, with in this order:
+than 0.4.1) as `\_SB.BTH0`, with in this order:
 
 - `Memory32Fixed (0x2ad90000, 0x100)`: UART6's registers;
 - `Interrupt { 114 }`: UART6, level high;
@@ -29,8 +29,7 @@ firmware there is no `RKCP4345` device at all.
 ### CM5-IO: `ACPI\RKCP4362`
 
 The ArmSoM CM5 module's BW3752-50B1 carries a BCM43752; Linux's btbcm names
-its Bluetooth core BCM4362A2. The CM5-IO firmware (edk2-rk3576 branch
-`cm5io-parity`, not on a board yet) declares it as `\_SB.BTH0` with HID
+its Bluetooth core BCM4362A2. The CM5-IO firmware declares it as `\_SB.BTH0` with HID
 `RKCP4362` and the same four resources in the same order: UART4
 (`0x2ad70000`, `Interrupt { 112 }`), BT_REG_ON GPIO1 PC7 and BT_WAKE GPIO1
 PD4, the GPIOs the TaishanPi 3M uses (ArmSoM-CM5-1V1 schematic, page 17).
@@ -73,8 +72,7 @@ ACPI\RKCP4345          bcm4345bt.sys  (this driver, class System)
   accepts nothing else: after `IOCTL_BTHX_QUERY_CAPABILITIES` it fails its
   start with `STATUS_DEVICE_CONFIGURATION_ERROR` (0xC0000182, code 10 on
   `BCM4345BT\UART_H4`) unless `MaxAclTransferInSize` >= 0x103,
-  `ScoSupport` == 2 and `MaxScoChannels` == 1 (read from BthMini.sys; the
-  first board run, with `ScoSupportNone`, hit exactly that). Bypass means
+  `ScoSupport` == 2 and `MaxScoChannels` == 1 (read from BthMini.sys). Bypass means
   SCO audio is expected on the module's PCM pins (SAI2 on this board), and
   there is no audio driver for that path: data profiles (A2DP playback, HID,
   file transfer) work, calls and a headset microphone will not.
@@ -120,8 +118,8 @@ It goes to `%SystemRoot%\System32\drivers\brcm\BCM4345C5.hcd`; the
 4. First install, on a device with no driver yet:
    `pnputil /add-driver bcm4345bt.inf /install`. To replace an installed
    copy, stage it with `pnputil /add-driver bcm4345bt.inf` (no `/install`)
-   and restart: stopping an older build of this driver on a running system
-   ended in DPC_WATCHDOG_VIOLATION twice.
+   and restart: stopping this driver on a running system has ended in
+   DPC_WATCHDOG_VIOLATION.
 
 ## Reading what happened
 

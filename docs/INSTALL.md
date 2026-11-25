@@ -2,23 +2,17 @@
 
 English | [简体中文](INSTALL.zh-CN.md)
 
-How to install Windows 11 23H2 on the eMMC of an ArmSoM CM5-IO or an LCKFB
-TaishanPi 3M with the WinPE stick from this repository.
-
-New to these boards? Start at
+Install Windows 11 23H2 on the eMMC of an ArmSoM CM5-IO or an LCKFB
+TaishanPi 3M with the WinPE stick from this repository. Board-tested on both
+boards. New boards start at
 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576#from-a-new-board-to-windows-or-linux).
 [Maskrom Studio](https://github.com/gahingwoo/maskrom-studio) does the same
-install from a PC over USB, without a stick; it has not been run on a board
-yet (2026-11-24).
-
-Installed this way: Windows 11 23H2 Enterprise (22631.2428) on the CM5-IO on
-2026-10-01 (repaired in place after its first boots), and on the TaishanPi 3M
-on 2026-11-13, a fresh run of these scripts.
+install from a PC over USB (CI only).
 
 ## Which Windows
 
 RK3576 is ARMv8.0. Windows 11 24H2 and later need ARMv8.1 atomics and cannot
-run on it, and firmware cannot work around that.
+run on it.
 
 | Target | Build | |
 |---|---|---|
@@ -31,12 +25,10 @@ anything newer than 25999.
 
 ## Why not Windows Setup
 
-23H2 Setup has no driver for the eMMC controller, so it does not see the
-eMMC. It also refuses these boards for having no TPM 2.0 and no Secure Boot,
-and on the CM5-IO for an eMMC smaller than 64 GB. The installed system needs
-test signing from its first boot, because its boot disk is behind a
-test-signed driver. So the image is applied with DISM from this repository's
-WinPE.
+Setup does not see the eMMC (no driver for its controller), refuses boards
+without TPM 2.0 and Secure Boot, and refuses the CM5-IO's eMMC as smaller
+than 64 GB. The installed system also needs test signing from its first
+boot. So the image is applied with DISM from this repository's WinPE.
 
 ## What you need
 
@@ -52,10 +44,9 @@ WinPE.
 - `install.wim` or `install.esd` from a Windows 11 23H2 ARM64 ISO.
 - A USB keyboard. On the TaishanPi 3M, an HDMI monitor or LCKFB's DSI screen.
 
-Do not mix in older parts. Firmware before 0.3.0 on the TaishanPi 3M, before
-0.4.0 on the CM5-IO, and the drivers of 0.1.0 ran the eMMC at 148.5 MHz
-instead of 52 MHz, and files written under Windows could come back different
-with no error reported.
+Do not use older parts: firmware before 0.3.0 (TaishanPi 3M) or 0.4.0
+(CM5-IO) and the 0.1.0 drivers ran the eMMC at 148.5 MHz and could corrupt
+files silently.
 
 On the TaishanPi 3M, touch, Bluetooth, the headphone jack, HDMI audio and the
 USB-C port need firmware newer than 0.4.1: the edk2-rk3576
@@ -143,8 +134,8 @@ installation from WinPE without erasing it. Other ways:
   table.
 - With LCKFB's DSI screen attached, the firmware uses it instead of HDMI,
   and Windows shows its picture there in portrait (landscape with
-  wddm-mali-g52). The 2026-11-13 installation was done over HDMI; to do the
-  same, unplug the screen's ribbon with the power off.
+  wddm-mali-g52). To install over HDMI, unplug the screen's ribbon with the
+  power off.
 - Keep a USB keyboard at hand for WinPE and the first setup.
 
 If it does not boot: [troubleshooting](troubleshooting.md).
