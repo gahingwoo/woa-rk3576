@@ -88,7 +88,10 @@ jobs:
             'drivers/spi/rk3xspi/rk3xspi.vcxproj',
             'drivers/input/gt9271/gt9271.vcxproj',
             'drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj',
-            'drivers/video/vdpu383/vdpu383.vcxproj'
+            'drivers/video/vdpu383/vdpu383.vcxproj',
+            # binds ACPI\RKCP3006, which only the firmware's "40-pin UART"
+            # option publishes: nothing to bind on a board without it
+            'drivers/serial/rk3xuart/rk3xuart.vcxproj'
           )
           # Record the sdport miniport API surface into the log.
           #

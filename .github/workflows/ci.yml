@@ -552,6 +552,8 @@ jobs:
           - { name: spi,  proj: drivers/spi/rk3xspi/rk3xspi.vcxproj }
           - { name: touch, proj: drivers/input/gt9271/gt9271.vcxproj }
           - { name: bluetooth, proj: drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj }
+          - { name: uart, proj: drivers/serial/rk3xuart/rk3xuart.vcxproj }
+          - { name: serialtest, proj: tools/serialtest/serialtest.vcxproj }
           - { name: vdpu383, proj: drivers/video/vdpu383/vdpu383.vcxproj }
           - { name: vdpu383test, proj: tools/vdpu383test/vdpu383test.vcxproj }
 
@@ -579,12 +581,12 @@ jobs:
           # The class extensions do not all ship in Include\<ver>\km: SpbCx and
           # NetAdapterCx live in versioned class-extension trees that the WDK
           # targets add only when the project opts in. Locate them, do not guess.
-          foreach ($h in 'sdport.h','spbcx.h','gpioclx.h','netadaptercx.h','acpiioct.h','bthxddi.h','gpio.h') {
+          foreach ($h in 'sdport.h','spbcx.h','gpioclx.h','netadaptercx.h','acpiioct.h','bthxddi.h','gpio.h','sercx.h') {
             Get-ChildItem $kits -Recurse -Filter $h -ErrorAction SilentlyContinue |
               ForEach-Object { Write-Host ("{0,-18} {1}" -f $h, $_.FullName) }
           }
           Write-Host "--- class-extension import libs (arm64) ---"
-          foreach ($l in 'SpbCxStubs.lib','msgpioclxstub.lib','netadaptercxstub.lib','sdport.lib') {
+          foreach ($l in 'SpbCxStubs.lib','msgpioclxstub.lib','netadaptercxstub.lib','sdport.lib','sercx2.lib','sercx.lib') {
             Get-ChildItem $kits -Recurse -Filter $l -ErrorAction SilentlyContinue |
               Where-Object { $_.FullName -match 'arm64' } |
               ForEach-Object { Write-Host ("{0,-22} {1}" -f $l, $_.FullName) }
