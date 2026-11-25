@@ -843,7 +843,7 @@ function Audio-Endpoints($Cfg, [string]$Sai) {
     }
     return , $hits
 }
-function Ep-Text($List) { return ((@($List) | ForEach-Object { "$($_.name) ($($epState[[int]$_.state]))" }) -join '; ') }
+function Ep-Text($List) { return ((@($List) | Where-Object { $_ } | ForEach-Object { "$($_.name) ($($epState[[int]$_.state]))" }) -join '; ') }
 
 function Audio-Role-Cfg([string]$Role, [string]$DefName) {
     $cfg = $M.audio."${Role}Endpoint"
@@ -865,7 +865,7 @@ if ($ca -eq 'no') {
         $why = 'no HDMI render endpoint'
         if ($hit.Count) { $why = 'the HDMI endpoint is not active: needs a monitor with speakers on HDMI' }
         $v = Ep-Text $hit
-        if (-not $hit.Count) { $v = 'render endpoints: ' + (Ep-Text (@($audioEp) | Where-Object { $_ -and $_.flow -ne 'capture' })) }
+        if (-not $hit.Count) { $v = "render endpoints: " + (Ep-Text (@($audioEp) | Where-Object { $_ -and $_.flow -ne 'capture' })); if ($v -eq 'render endpoints: ') { $v = 'no render endpoint' } }
         $st = 'FAIL'; if ($ca -eq 'optional') { $st = 'SKIP'; $why = "optional here: $why" }
         Add-Result 'audio.hdmi' 'Audio: HDMI endpoint' $st $v $exp "$why (read via $audioSrc)"
     }
