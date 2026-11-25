@@ -785,6 +785,25 @@ runtime_msg(fakechip *F, u16 Id, const u8 *P, u32 Len)
         c[AIC_SM_CONNECT_IND_QOS] = 1;
         aic_put16(c + AIC_SM_CONNECT_IND_AID, 1);
         aic_put16(c + AIC_SM_CONNECT_IND_FREQ, a->Freq);
+        {
+            /* the elements on the air: the request's (SSID, rates, then the
+             * host's own elements from SM_CONNECT), the response's (rates) */
+            static const u8 rates[] = { 1, 8, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24 };
+            u8 *ie = c + AIC_SM_CONNECT_IND_IE_BUF;
+            u32 n = 0, l = (u32)strlen(a->Ssid), extra = aic_get16(P + AIC_SM_CONNECT_IE_LEN);
+
+            ie[n++] = 0;
+            ie[n++] = (u8)l;
+            memcpy(ie + n, a->Ssid, l);
+            n += l;
+            memcpy(ie + n, rates, sizeof(rates));
+            n += sizeof(rates);
+            memcpy(ie + n, P + AIC_SM_CONNECT_IE_BUF, extra);
+            n += extra;
+            aic_put16(c + AIC_SM_CONNECT_IND_REQ_IE_LEN, n);
+            memcpy(ie + n, rates, sizeof(rates));
+            aic_put16(c + AIC_SM_CONNECT_IND_RSP_IE_LEN, sizeof(rates));
+        }
         send_msg(F, AIC_SM_CONNECT_IND, c, AIC_SM_CONNECT_IND_LEN);
         if (a->Wpa2) {
             aic_wpa_pmk(a->Passphrase, (u32)strlen(a->Passphrase), (const u8 *)a->Ssid,

@@ -275,6 +275,9 @@
 #define AIC_SM_CONNECT_IND_BSSID        2
 #define AIC_SM_CONNECT_IND_AP_IDX       10
 #define AIC_SM_CONNECT_IND_QOS          12
+#define AIC_SM_CONNECT_IND_REQ_IE_LEN   14
+#define AIC_SM_CONNECT_IND_RSP_IE_LEN   16
+#define AIC_SM_CONNECT_IND_IE_BUF       20
 #define AIC_SM_CONNECT_IND_AID          820
 #define AIC_SM_CONNECT_IND_FREQ         824
 

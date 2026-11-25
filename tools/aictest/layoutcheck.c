@@ -88,6 +88,9 @@ OF(sm_connect_req, auth_type, AIC_SM_CONNECT_AUTH_TYPE); OF(sm_connect_req, uaps
 OF(sm_connect_req, vif_idx, AIC_SM_CONNECT_VIF_IDX); OF(sm_connect_req, ie_buf, AIC_SM_CONNECT_IE_BUF);
 SZ(sm_connect_ind, AIC_SM_CONNECT_IND_LEN); OF(sm_connect_ind, bssid, AIC_SM_CONNECT_IND_BSSID);
 OF(sm_connect_ind, ap_idx, AIC_SM_CONNECT_IND_AP_IDX); OF(sm_connect_ind, qos, AIC_SM_CONNECT_IND_QOS);
+OF(sm_connect_ind, assoc_req_ie_len, AIC_SM_CONNECT_IND_REQ_IE_LEN);
+OF(sm_connect_ind, assoc_rsp_ie_len, AIC_SM_CONNECT_IND_RSP_IE_LEN);
+OF(sm_connect_ind, assoc_ie_buf, AIC_SM_CONNECT_IND_IE_BUF);
 OF(sm_connect_ind, aid, AIC_SM_CONNECT_IND_AID); OF(sm_connect_ind, center_freq, AIC_SM_CONNECT_IND_FREQ);
 SZ(sm_disconnect_req, AIC_SM_DISCONNECT_REQ_LEN); OF(sm_disconnect_ind, vif_idx, 2);
 SZ(hostdesc, AIC_HOSTDESC_LEN); OF(hostdesc, packet_len, AIC_HD_PACKET_LEN);

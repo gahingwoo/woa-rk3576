@@ -178,6 +178,20 @@ aic_rx_to_eth(const u8 *Pkt, u32 PktLen, u8 *Out, u32 OutMax)
 static void
 deliver(aic_dev *Dev, const u8 *Eth, u32 Len)
 {
+    if (Dev->HostAuth) {
+        /* WiFiCx: the operating system's supplicant gets the EAPOL frames,
+         * so everything goes up from association on (the firmware keeps
+         * the port closed to anything but EAPOL until the pairwise key) */
+        if (Len >= 14 && Eth[12] == 0x88 && Eth[13] == 0x8E) {
+            Dev->Stats.RxEapol++;
+        }
+        if (Dev->Ops->rx_eth && (Dev->Link == AIC_LINK_ASSOCIATED || Dev->Link == AIC_LINK_UP)) {
+            Dev->Ops->rx_eth(Dev->Ctx, Eth, Len);
+        } else {
+            Dev->Stats.RxDataDropped++;
+        }
+        return;
+    }
     if (Len >= 14 && Eth[12] == 0x88 && Eth[13] == 0x8E) {
         u8 next = (u8)((Dev->EapolHead + 1) % AIC_EAPOL_QUEUE);
 
@@ -244,6 +258,100 @@ aic_data_rx(aic_dev *Dev, const u8 *Pkt, u32 Len)
         }
     }
     Dev->Stats.RxDataDropped++;
+}
+
+/* ------------------------------------------- native 802.11 frames */
+
+/* RFC 1042 encapsulation, and 802.1H (bridge tunnel) for the two
+ * ethertypes that IEEE 802.1H keeps out of RFC 1042. */
+static const u8 k_rfc1042[6] = { 0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00 };
+static const u8 k_bridge_tunnel[6] = { 0xAA, 0xAA, 0x03, 0x00, 0x00, 0xF8 };
+
+int
+aic_eth_to_80211(const u8 *Bssid, const u8 *Eth, u32 EthLen, u8 *Out, u32 OutMax)
+{
+    u32 type, body, n;
+
+    if (EthLen < 14) {
+        return AIC_E_FORMAT;
+    }
+    type = aic_be16(Eth + 12);
+    body = EthLen - 14;
+    n = AIC_80211_HDR + (type >= 0x0600 ? 8 : 0) + body;
+    if (n > OutMax) {
+        return AIC_E_SPACE;
+    }
+    aic_memset(Out, 0, AIC_80211_HDR);
+    Out[0] = 0x08;                  /* data */
+    Out[1] = 0x02;                  /* From DS */
+    aic_memcpy(Out + 4, Eth, 6);    /* A1: the destination (us, or a group) */
+    aic_memcpy(Out + 10, Bssid, 6); /* A2: the AP */
+    aic_memcpy(Out + 16, Eth + 6, 6);   /* A3: the source */
+    n = AIC_80211_HDR;
+    if (type >= 0x0600) {
+        aic_memcpy(Out + n, (type == 0x80F3 || type == 0x8137) ? k_bridge_tunnel : k_rfc1042, 6);
+        Out[n + 6] = Eth[12];
+        Out[n + 7] = Eth[13];
+        n += 8;
+    } else if (type < body) {
+        body = type;                /* an 802.3 length: the LLC frame, minus padding */
+    }
+    aic_memcpy(Out + n, Eth + 14, body);
+    return (int)(n + body);
+}
+
+int
+aic_80211_to_eth(const u8 *F, u32 Len, u8 *Out, u32 OutMax)
+{
+    const u8 *da, *sa, *b;
+    u32 hdr = AIC_80211_HDR, blen;
+
+    if (Len < AIC_80211_HDR || (F[0] & 0x0C) != 0x08 || (F[0] & 0x40) || (F[1] & 0x40)) {
+        return 0;                   /* not data, null data, or protected */
+    }
+    switch (F[1] & 3) {
+    case 1:                         /* To DS: A1 BSSID, A2 SA, A3 DA */
+        da = F + 16;
+        sa = F + 10;
+        break;
+    case 0:                         /* no DS bits: A1 DA, A2 SA */
+        da = F + 4;
+        sa = F + 10;
+        break;
+    default:
+        return 0;
+    }
+    if (F[0] & 0x80) {              /* QoS data */
+        hdr += 2;
+        if (F[1] & 0x80) {          /* +HTC */
+            hdr += 4;
+        }
+    }
+    if (Len < hdr) {
+        return 0;
+    }
+    b = F + hdr;
+    blen = Len - hdr;
+    if (blen >= 8 && (aic_memcmp(b, k_rfc1042, 6) == 0 || aic_memcmp(b, k_bridge_tunnel, 6) == 0)) {
+        if (14 + blen - 8 > OutMax) {
+            return AIC_E_SPACE;
+        }
+        aic_memcpy(Out, da, 6);
+        aic_memcpy(Out + 6, sa, 6);
+        Out[12] = b[6];
+        Out[13] = b[7];
+        aic_memcpy(Out + 14, b + 8, blen - 8);
+        return (int)(14 + blen - 8);
+    }
+    /* any other LLC frame goes as 802.3 with a length */
+    if (blen == 0 || blen >= 0x0600 || 14 + blen > OutMax) {
+        return blen == 0 ? 0 : AIC_E_SPACE;
+    }
+    aic_memcpy(Out, da, 6);
+    aic_memcpy(Out + 6, sa, 6);
+    aic_put_be16(Out + 12, blen);
+    aic_memcpy(Out + 14, b, blen);
+    return (int)(14 + blen);
 }
 
 /* ------------------------------------------------------- frame FIFO */

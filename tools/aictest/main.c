@@ -3,7 +3,9 @@
  * against a simulated AIC8800D80 and access point (fakechip.c).
  *
  *   aictest                 crypto vectors, then loader, runtime, WPA2,
- *                           data path and error cases with synthetic files
+ *                           data path and error cases with synthetic files,
+ *                           then the WiFiCx model (Windows' supplicant,
+ *                           native 802.11 frames)
  *   aictest files DIR [--fw-version HEX]
  *                           parse and download the real firmware files in
  *                           DIR (as install-firmware.ps1 fetches them)
@@ -656,6 +658,392 @@ test_ethernet(void)
     harness_free(h);
 }
 
+/* ------------------------------------------ WiFiCx: Windows' supplicant
+ *
+ * In WiFiCx mode Windows keeps the network list, runs the WPA2 4-way
+ * handshake itself and hands the keys down; frames cross as native 802.11
+ * data frames. Done here by hand the way Windows does it, using only what
+ * the driver reports to it: the beacon bodies from the scan, the
+ * association request body (its RSN element goes into message 2) and the
+ * EAPOL frames as 802.11 frames from the RX path.
+ */
+
+typedef struct scanrec {
+    u8  Bssid[6];
+    u8  Body[512];
+    u32 Len;
+    int Probe;
+    u8  Channel;
+    s8  Rssi;
+} scanrec;
+
+static scanrec g_scan[8];
+static u32 g_scan_count, g_scan_calls;
+
+static void
+hscan(void *Ctx, const aic_bss *B, const u8 *Body, u32 Len, int Probe)
+{
+    u32 i;
+
+    (void)Ctx;
+    g_scan_calls++;
+    for (i = 0; i < g_scan_count; i++) {
+        if (memcmp(g_scan[i].Bssid, B->Bssid, 6) == 0) {
+            break;
+        }
+    }
+    if (i == g_scan_count) {
+        if (g_scan_count == 8) {
+            return;
+        }
+        g_scan_count++;
+    }
+    memcpy(g_scan[i].Bssid, B->Bssid, 6);
+    g_scan[i].Len = Len < sizeof(g_scan[i].Body) ? Len : (u32)sizeof(g_scan[i].Body);
+    memcpy(g_scan[i].Body, Body, g_scan[i].Len);
+    g_scan[i].Probe = Probe;
+    g_scan[i].Channel = B->Channel;
+    g_scan[i].Rssi = B->Rssi;
+}
+
+/* An element in a body of fixed fields (Skip bytes) and elements. */
+static const u8 *
+find_ie(const u8 *Body, u32 Len, u32 Skip, u8 Id)
+{
+    u32 o;
+
+    for (o = Skip; o + 2 <= Len && o + 2 + Body[o + 1] <= Len; o += 2u + Body[o + 1]) {
+        if (Body[o] == Id) {
+            return Body + o;
+        }
+    }
+    return NULL;
+}
+
+/* What the driver's TX queue does with a frame from Windows. */
+static int
+os_send80211(harness *h, const u8 *F, u32 Len)
+{
+    u8 eth[2048];
+    int n = aic_80211_to_eth(F, Len, eth, sizeof(eth));
+
+    if (n <= 0) {
+        return n;
+    }
+    os_send(h, eth, (u32)n);
+    return n;
+}
+
+/* A data frame from Windows: To DS, A1 the AP, A2 us, A3 the destination,
+ * RFC 1042 header, ethertype. */
+static u32
+os_frame(const aic_dev *D, const u8 *Da, u16 Type, const u8 *Payload, u32 Len, u8 *F)
+{
+    memset(F, 0, 24);
+    F[0] = 0x08;
+    F[1] = 0x01;
+    memcpy(F + 4, D->Bssid, 6);
+    memcpy(F + 10, D->Mac, 6);
+    memcpy(F + 16, Da, 6);
+    memcpy(F + 24, "\xAA\xAA\x03\x00\x00\x00", 6);
+    aic_put_be16(F + 30, Type);
+    memcpy(F + 32, Payload, Len);
+    return 32 + Len;
+}
+
+/* The next received frame of this ethertype as Windows gets it (802.11);
+ * returns its length, the payload at *Payload. */
+static u32
+os_recv80211(harness *h, u16 Type, u8 *F, const u8 **Payload)
+{
+    u8 eth[2048];
+    u32 n = os_recv(h, Type, eth);
+    int m;
+
+    if (n == 0) {
+        return 0;
+    }
+    m = aic_eth_to_80211(h->D.Bssid, eth, n, F, 2400);
+    CHECK(m == (int)n + AIC_80211_OVERHEAD, "802.11 RX frame length %d for %u", m, n);
+    CHECK(F[0] == 0x08 && F[1] == 0x02 && memcmp(F + 10, h->D.Bssid, 6) == 0 &&
+          memcmp(F + 24, "\xAA\xAA\x03\x00\x00\x00", 6) == 0 && aic_be16(F + 30) == Type,
+          "802.11 RX header: From DS, A2 the AP, RFC 1042");
+    *Payload = F + 32;
+    return m > 0 ? (u32)m : 0;
+}
+
+typedef struct os_supp {
+    u8 Pmk[32], Snonce[32], Anonce[32], Ptk[48], Gtk[32];
+    u8 GtkLen, GtkIdx;
+    u8 Replay[8];
+} os_supp;
+
+static void
+os_ptk(os_supp *S, const u8 *Aa, const u8 *Spa)
+{
+    u8 d[76];
+    int a1 = memcmp(Aa, Spa, 6) < 0, n1 = memcmp(S->Anonce, S->Snonce, 32) < 0;
+
+    memcpy(d, a1 ? Aa : Spa, 6);
+    memcpy(d + 6, a1 ? Spa : Aa, 6);
+    memcpy(d + 12, n1 ? S->Anonce : S->Snonce, 32);
+    memcpy(d + 44, n1 ? S->Snonce : S->Anonce, 32);
+    aic_prf_sha1(S->Pmk, 32, "Pairwise key expansion", d, sizeof(d), S->Ptk, 48);
+}
+
+/* EAPOL-Key from Windows; Data is the key data. */
+static u32
+os_eapol(os_supp *S, u16 Info, const u8 *Nonce, const u8 *Data, u32 DataLen, u8 *E)
+{
+    u32 len = 99 + DataLen;
+    u8 h[20];
+
+    memset(E, 0, len);
+    E[0] = 2;
+    E[1] = 3;
+    aic_put_be16(E + 2, len - 4);
+    E[4] = 2;
+    aic_put_be16(E + 5, Info);
+    memcpy(E + 9, S->Replay, 8);
+    if (Nonce) {
+        memcpy(E + 17, Nonce, 32);
+    }
+    aic_put_be16(E + 97, DataLen);
+    if (DataLen) {
+        memcpy(E + 99, Data, DataLen);
+    }
+    aic_hmac_sha1(S->Ptk, 16, E, len, h);
+    memcpy(E + 81, h, 16);
+    return len;
+}
+
+static void
+test_wificx_host_auth(void)
+{
+    harness *h = runtime_up("correct horse battery");
+    aic_dev *d = &h->D;
+    fakechip *F = &h->F;
+    const scanrec *home = NULL;
+    const u8 *p, *rsn_req, *rsn_beacon;
+    u8 f[2400], e[512], body[512], wrapped[256], plain[256];
+    u32 n, i, blen, kd;
+    os_supp S;
+    int idx, rc;
+
+    g_scan_count = g_scan_calls = 0;
+    h->Ops.scan_bss = hscan;
+    d->HostAuth = 1;
+    h->UseQ = 1;
+
+    /* scan without blocking, as the front end does it */
+    CHECK(aic_scan_start(d) == AIC_OK, "scan start");
+    for (i = 0; i < 10 && !(d->Events & AIC_EV_SCAN_DONE); i++) {
+        fake_wait(F, 50);
+    }
+    CHECK((d->Events & AIC_EV_SCAN_DONE) && d->ScanStatus == 0 && d->BssCount == 3, "scan done event, %u networks",
+          d->BssCount);
+    d->Events &= (u8)~AIC_EV_SCAN_DONE;
+    CHECK(g_scan_calls == 6 && g_scan_count == 3, "scan_bss: %u calls, %u networks", g_scan_calls, g_scan_count);
+    for (i = 0; i < g_scan_count; i++) {
+        if (memcmp(g_scan[i].Bssid, F->Aps[0].Bssid, 6) == 0) {
+            home = &g_scan[i];
+        }
+    }
+    CHECK(home && home->Channel == 6 && home->Rssi == -48 && !home->Probe, "home network reported, channel 6");
+    if (home == NULL) {
+        harness_free(h);
+        return;
+    }
+    /* the body Windows gets starts at the Timestamp: beacon interval 100 at
+     * 8, capability at 10, the SSID element at 12 */
+    CHECK(aic_get16(home->Body + 8) == 100 && aic_get16(home->Body + 10) == 0x0411 && home->Body[12] == 0 &&
+          home->Body[13] == 4 && memcmp(home->Body + 14, "home", 4) == 0, "beacon body from the Timestamp on");
+    rsn_beacon = find_ie(home->Body, home->Len, 12, 48);
+    CHECK(rsn_beacon != NULL, "beacon RSN element");
+
+    /* Windows asks for the network by BSSID and hands the body back; a
+     * scan of its own may have emptied the list meanwhile */
+    d->BssCount = 0;
+    idx = aic_bss_from_body(d, home->Bssid, 2437, home->Rssi, home->Body, home->Len);
+    CHECK(idx == 0 && d->Bss[0].Security == AIC_SEC_WPA2_PSK && d->Bss[0].SsidLen == 4 && d->Bss[0].Channel == 6,
+          "network rebuilt from the body Windows hands back");
+    CHECK(aic_find_bssid(d, home->Bssid) == 0, "found by BSSID");
+    CHECK(aic_bss_from_body(d, home->Bssid, 2437, -40, home->Body, 8) < 0, "short body refused");
+
+    rc = aic_connect_start(d, idx);
+    /* the simulated AP answers at once, so the association may already be in */
+    CHECK(rc == AIC_OK && d->Link != AIC_LINK_DOWN, "connect start without a passphrase: rc %d", rc);
+    for (i = 0; i < 10 && !(d->Events & AIC_EV_ASSOC); i++) {
+        fake_wait(F, 20);
+    }
+    CHECK((d->Events & AIC_EV_ASSOC) && d->Link == AIC_LINK_ASSOCIATED && d->ConnectStatus == 0,
+          "association event, link %d", d->Link);
+    CHECK(aic_poll(d) == 0 && d->Stats.RxEapol == 1, "the core leaves message 1 to the OS");
+
+    /* the association result Windows gets */
+    blen = aic_assoc_req_body(d, body, sizeof(body));
+    CHECK(blen > 4 && (aic_get16(body) & 0x0011) == 0x0011, "association request body, %u bytes", blen);
+    rsn_req = find_ie(body, blen, 4, 48);
+    CHECK(rsn_req && rsn_req[1] == 20 && find_ie(body, blen, 4, 0) != NULL, "request body has SSID and RSN");
+    n = aic_assoc_rsp_body(d, f, sizeof(f));
+    CHECK(n == 6 + 10 && aic_get16(f + 2) == 0 && (aic_get16(f + 4) & 0x3FFF) == 1, "association response body");
+    {
+        u8 small[3];
+
+        CHECK(aic_assoc_req_body(d, small, sizeof(small)) == 0 && aic_assoc_rsp_body(d, small, 3) == 0,
+              "bodies refuse a short buffer");
+    }
+
+    /* message 1, as an 802.11 frame */
+    memset(&S, 0, sizeof(S));
+    aic_wpa_pmk("correct horse battery", 21, (const u8 *)"home", 4, S.Pmk);
+    memset(S.Snonce, 0x5A, 32);
+    n = os_recv80211(h, 0x888E, f, &p);
+    CHECK(n && p[1] == 3 && aic_be16(p + 5) == 0x008A, "message 1 reaches Windows");
+    if (n == 0 || rsn_req == NULL) {
+        harness_free(h);
+        return;
+    }
+    memcpy(S.Anonce, p + 17, 32);
+    memcpy(S.Replay, p + 9, 8);
+    os_ptk(&S, d->Bssid, d->Mac);
+
+    /* message 2 carries the RSN element of our association request */
+    n = os_eapol(&S, 0x010A, S.Snonce, rsn_req, 2u + rsn_req[1], e);
+    n = os_frame(d, d->Bssid, 0x888E, e, n, f);
+    CHECK(os_send80211(h, f, n) > 0 && F->Msg2Ok, "message 2 accepted by the AP");
+
+    /* message 3: MIC, the AP's RSN element as in its beacon, the GTK */
+    n = os_recv80211(h, 0x888E, f, &p);
+    CHECK(n && aic_be16(p + 5) == 0x13CA, "message 3 reaches Windows");
+    if (n == 0) {
+        harness_free(h);
+        return;
+    }
+    {
+        u8 mic[16], hm[20];
+
+        memcpy(e, p, 4u + aic_be16(p + 2));
+        memcpy(mic, e + 81, 16);
+        memset(e + 81, 0, 16);
+        aic_hmac_sha1(S.Ptk, 16, e, 4u + aic_be16(p + 2), hm);
+        CHECK(memcmp(mic, hm, 16) == 0, "message 3 MIC");
+    }
+    kd = aic_be16(p + 97);
+    memcpy(wrapped, p + 99, kd);
+    CHECK(kd >= 24 && aic_aes_unwrap(S.Ptk + 16, wrapped, kd, plain) == AIC_OK, "key data unwraps");
+    CHECK(rsn_beacon && memcmp(plain, rsn_beacon, 2u + rsn_beacon[1]) == 0, "message 3 RSN element = the beacon's");
+    {
+        const u8 *g = find_ie(plain, kd - 8, 0, 0xDD);
+
+        CHECK(g && g[1] == 22 && memcmp(g + 2, "\x00\x0f\xac\x01", 4) == 0, "GTK KDE");
+        if (g) {
+            S.GtkIdx = g[6] & 3;
+            S.GtkLen = 16;
+            memcpy(S.Gtk, g + 8, 16);
+        }
+    }
+    memcpy(S.Replay, p + 9, 8);
+    n = os_eapol(&S, 0x030A, NULL, NULL, 0, e);
+    n = os_frame(d, d->Bssid, 0x888E, e, n, f);
+    CHECK(os_send80211(h, f, n) > 0 && F->Msg4Ok, "message 4 accepted by the AP");
+
+    /* SET_ADD_CIPHER_KEYS: pairwise, then group */
+    CHECK(d->Link == AIC_LINK_ASSOCIATED && !F->PortOpen, "port closed before the pairwise key");
+    rc = aic_host_set_key(d, 1, 0, S.Ptk + 32, 16, AIC_MAC_CIPHER_CCMP);
+    CHECK(rc == AIC_OK && F->PairwiseKeyOk && F->PortOpen == 1 && d->Link == AIC_LINK_UP,
+          "pairwise key from Windows: rc %d", rc);
+    rc = aic_host_set_key(d, 0, S.GtkIdx, S.Gtk, S.GtkLen, AIC_MAC_CIPHER_CCMP);
+    CHECK(rc == AIC_OK && F->GroupKeyOk, "group key from Windows: rc %d", rc);
+
+    /* ARP for the gateway, as 802.11 both ways */
+    {
+        static const u8 bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        u8 a[28];
+
+        aic_put_be16(a, 1); aic_put_be16(a + 2, 0x0800); a[4] = 6; a[5] = 4; aic_put_be16(a + 6, 1);
+        memcpy(a + 8, d->Mac, 6);
+        a[14] = 192; a[15] = 168; a[16] = 50; a[17] = 23;
+        memset(a + 18, 0, 6);
+        a[24] = 192; a[25] = 168; a[26] = 50; a[27] = 1;
+        n = os_frame(d, bcast, 0x0806, a, sizeof(a), f);
+        CHECK(os_send80211(h, f, n) == 14 + 28, "ARP request sent as 802.11");
+        n = os_recv80211(h, 0x0806, f, &p);
+        CHECK(n && aic_be16(p + 6) == 2 && memcmp(f + 4, d->Mac, 6) == 0 &&
+              memcmp(f + 16, "\x00\x11\x22\x33\x44\x55", 6) == 0, "ARP reply as 802.11 from the gateway");
+    }
+    CHECK(F->TxDataBad == 0 && h->Q.Drops == 0, "no bad frames, no drops");
+
+    /* the AP leaves */
+    fake_ap_deauth(F, 7);
+    fake_wait(F, 0);
+    CHECK((d->Events & AIC_EV_DISCONNECT) && d->Link == AIC_LINK_DOWN, "disconnect event");
+    CHECK(aic_host_set_key(d, 1, 0, S.Ptk + 32, 16, AIC_MAC_CIPHER_CCMP) == AIC_E_STATE, "no key without a link");
+    harness_free(h);
+}
+
+/* The 802.11 <-> Ethernet conversions on their own. */
+static void
+test_80211_frames(void)
+{
+    static const u8 bssid[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60 };
+    static const u8 me[6] = { 0x88, 0x00, 0x00, 0x00, 0x00, 0x01 };
+    static const u8 gw[6] = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 };
+    u8 eth[1600], f[1700], back[1600];
+    int n, m;
+    u32 i;
+
+    memcpy(eth, me, 6);
+    memcpy(eth + 6, gw, 6);
+    aic_put_be16(eth + 12, 0x0800);
+    for (i = 14; i < 1514; i++) eth[i] = (u8)i;
+    n = aic_eth_to_80211(bssid, eth, 1514, f, sizeof(f));
+    CHECK(n == 1514 + AIC_80211_OVERHEAD && memcmp(f + 4, me, 6) == 0 && memcmp(f + 10, bssid, 6) == 0 &&
+          memcmp(f + 16, gw, 6) == 0 && memcmp(f + 32, eth + 14, 1500) == 0, "full-size frame to 802.11");
+    CHECK(aic_eth_to_80211(bssid, eth, 1514, f, 1500) == AIC_E_SPACE, "RX conversion checks the buffer");
+
+    /* IPX goes in a bridge tunnel header, and comes back with its type */
+    aic_put_be16(eth + 12, 0x8137);
+    n = aic_eth_to_80211(bssid, eth, 100, f, sizeof(f));
+    CHECK(n == 100 + AIC_80211_OVERHEAD && f[29] == 0xF8, "IPX: 802.1H header");
+
+    /* Windows' TX frame: To DS, QoS, +HTC */
+    memset(f, 0, 32);
+    f[0] = 0x88;                /* QoS data */
+    f[1] = 0x81;                /* To DS, +HTC */
+    memcpy(f + 4, bssid, 6);
+    memcpy(f + 10, me, 6);
+    memcpy(f + 16, gw, 6);
+    memcpy(f + 30, "\xAA\xAA\x03\x00\x00\x00\x08\x06", 8);
+    for (i = 0; i < 28; i++) f[38 + i] = (u8)(0x40 + i);
+    m = aic_80211_to_eth(f, 38 + 28, back, sizeof(back));
+    CHECK(m == 14 + 28 && memcmp(back, gw, 6) == 0 && memcmp(back + 6, me, 6) == 0 && aic_be16(back + 12) == 0x0806 &&
+          back[14] == 0x40, "QoS +HTC To DS frame to Ethernet");
+    f[1] = 0x41;                /* protected: Windows never sends that */
+    CHECK(aic_80211_to_eth(f, 38 + 28, back, sizeof(back)) == 0, "protected frame refused");
+    f[0] = 0x80;                /* a beacon */
+    f[1] = 0x00;
+    CHECK(aic_80211_to_eth(f, 38 + 28, back, sizeof(back)) == 0, "management frame refused");
+    f[0] = 0x48;                /* null data */
+    CHECK(aic_80211_to_eth(f, 24, back, sizeof(back)) == 0, "null data refused");
+
+    /* an LLC frame without SNAP: 802.3 with a length, and back */
+    memset(f, 0, 24);
+    f[0] = 0x08;
+    f[1] = 0x01;
+    memcpy(f + 4, bssid, 6);
+    memcpy(f + 10, me, 6);
+    memcpy(f + 16, gw, 6);
+    memcpy(f + 24, "\x42\x42\x03\x00\x00\x00\x00\x00\x00\x00", 10);
+    m = aic_80211_to_eth(f, 34, back, sizeof(back));
+    CHECK(m == 24 && aic_be16(back + 12) == 10 && back[14] == 0x42, "LLC frame as 802.3 length frame");
+    memset(back + 24, 0, 22);   /* padded to the Ethernet minimum on the way back */
+    n = aic_eth_to_80211(bssid, back, 46, f, sizeof(f));
+    CHECK(n == 24 + 10 && f[24] == 0x42, "length frame keeps its LLC header, padding dropped");
+    CHECK(aic_80211_to_eth(f, 20, back, sizeof(back)) == 0 && aic_eth_to_80211(bssid, eth, 10, f, 100) < 0,
+          "short frames refused");
+}
+
 /* Garbage must never crash the receive path (ASan build). */
 static void
 test_rx_fuzz(void)
@@ -784,6 +1172,8 @@ main(int argc, char **argv)
         test_wrong_passphrase();
         test_open_network();
         test_ethernet();
+        test_wificx_host_auth();
+        test_80211_frames();
         test_rx_fuzz();
     }
     printf("%d checks, %d failed\n", g_checks, g_fail);

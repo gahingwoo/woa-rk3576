@@ -64,14 +64,20 @@ typedef unsigned long long u64;
  * delay_ms: sleep.
  * log:      optional, one short line for the debugger.
  * rx_eth:   optional, an Ethernet frame for the operating system (not
- *           EAPOL, which the core keeps).
+ *           EAPOL, which the core keeps, unless Dev->HostAuth is set).
+ * scan_bss: optional, each scan result as it arrives: the network as parsed
+ *           and the frame body (beacon or probe response from the
+ *           Timestamp on, no 802.11 header, no FCS), for an operating
+ *           system that keeps its own network list (WiFiCx).
  */
+struct aic_bss;
 typedef struct aic_bus_ops {
     int  (*send)(void *Ctx, int Msg, const u8 *Buf, u32 Len);
     void (*wait)(void *Ctx, u32 Ms);
     void (*delay_ms)(void *Ctx, u32 Ms);
     void (*log)(void *Ctx, const char *Msg);
     void (*rx_eth)(void *Ctx, const u8 *Frame, u32 Len);
+    void (*scan_bss)(void *Ctx, const struct aic_bss *Bss, const u8 *Body, u32 BodyLen, int ProbeResp);
 } aic_bus_ops;
 
 /* A firmware file, loaded by the caller (the kernel reads it from disk). */
@@ -112,6 +118,7 @@ typedef struct aic_bss {
     u8  Ssid[32];
     u16 Freq;               /* MHz */
     u8  Band;               /* 0 = 2.4 GHz, 1 = 5 GHz */
+    u8  Channel;            /* from Freq */
     s8  Rssi;
     u16 Capability;
     u8  Security;           /* AIC_SEC_* */
@@ -126,6 +133,12 @@ typedef struct aic_bss {
 #define AIC_SEC_WPA         2   /* WPA1 only: not supported for connect */
 #define AIC_SEC_WPA2_PSK    3   /* RSN with PSK and CCMP pairwise */
 #define AIC_SEC_RSN_OTHER   4   /* RSN, but SAE/802.1X only or no CCMP */
+
+/* Events for a caller that does not block in aic_scan()/aic_connect()
+ * (the WiFiCx front end): set by the indications, cleared by the caller. */
+#define AIC_EV_SCAN_DONE    0x01    /* SCANU_START_CFM: the scan ended */
+#define AIC_EV_ASSOC        0x02    /* SM_CONNECT_IND: associated, or failed (ConnectStatus) */
+#define AIC_EV_DISCONNECT   0x04    /* SM_DISCONNECT_IND: the link went down */
 
 /* Link and handshake state. */
 enum aic_link {
@@ -170,6 +183,8 @@ typedef struct aic_wpa {
     u8  Msg;                /* last message number handled (1..4) */
     u32 NonceCounter;
 } aic_wpa;
+
+#define AIC_ASSOC_IE_MAX  800     /* sm_connect_ind.assoc_ie_buf */
 
 #define AIC_EAPOL_QUEUE   4
 #define AIC_EAPOL_MAX     512
@@ -234,6 +249,20 @@ typedef struct aic_dev {
 
     aic_wpa Wpa;
 
+    /* 1: the operating system runs the 4-way handshake (WiFiCx). EAPOL
+     * frames go up through rx_eth like any data frame from association on,
+     * aic_poll() does nothing, and the keys come from aic_host_set_key(). */
+    u8  HostAuth;
+    volatile u8 Events;         /* AIC_EV_* */
+
+    /* From SM_CONNECT_IND: the information elements of the association
+     * request the firmware sent and of the AP's response, as they were on
+     * the air (Windows' supplicant takes our RSN element from the request). */
+    u8  AssocIe[AIC_ASSOC_IE_MAX];
+    u16 AssocReqIeLen;          /* the request's, at AssocIe */
+    u16 AssocRspIeLen;          /* the response's, after it */
+    u16 AssocCapability;        /* the AP's capability field, from the network joined */
+
     /* EAPOL frames from aic_rx(), handled by aic_poll(). Each one is an
      * Ethernet frame (destination, source, 0x888E, EAPOL). */
     u8  EapolBuf[AIC_EAPOL_QUEUE][AIC_EAPOL_MAX];
@@ -297,12 +326,44 @@ int aic_wlan_init(aic_dev *Dev);
  * results in Dev->Bss. */
 int aic_scan(aic_dev *Dev, u32 TimeoutMs);
 
+/* SCANU_START without waiting: AIC_EV_SCAN_DONE (and Dev->ScanDone) when
+ * the firmware is done; the results go to Dev->Bss and ops->scan_bss. */
+int aic_scan_start(aic_dev *Dev);
+
 /* Index of the strongest network named Ssid, or -1. */
 int aic_find_bss(const aic_dev *Dev, const u8 *Ssid, u32 SsidLen);
+
+/* Index of the network with this BSSID, or -1. */
+int aic_find_bssid(const aic_dev *Dev, const u8 *Bssid);
+
+/* Add or refresh a network from a frame body (beacon or probe response from
+ * the Timestamp on), as the operating system hands it back when it asks for
+ * a connection. Returns its index, or -1 if the list is full or the body is
+ * too short. */
+int aic_bss_from_body(aic_dev *Dev, const u8 *Bssid, u16 Freq, s8 Rssi, const u8 *Body, u32 Len);
 
 /* Join Bss[Index] with the PMK in Dev->Wpa (WPA2-PSK) or open; returns when
  * the link is up (keys installed, port open) or on failure. */
 int aic_connect(aic_dev *Dev, int Index, u32 TimeoutMs);
+
+/* SM_CONNECT without waiting: Link is AIC_LINK_ASSOCIATING until
+ * AIC_EV_ASSOC, then AIC_LINK_ASSOCIATED or AIC_LINK_DOWN (ConnectStatus).
+ * With HostAuth the RSN element is ours as aic_connect() sends it and no
+ * passphrase is needed: the operating system runs the handshake. */
+int aic_connect_start(aic_dev *Dev, int Index);
+
+/* The association request and response frame bodies (from the capability
+ * field on) as the operating system wants them after a connection: the
+ * fixed fields, then the elements from SM_CONNECT_IND. When the firmware
+ * reported no request elements, the request is rebuilt from the SSID and
+ * the RSN element we sent. Return the length, 0 if Max is too small. */
+u32 aic_assoc_req_body(const aic_dev *Dev, u8 *Out, u32 Max);
+u32 aic_assoc_rsp_body(const aic_dev *Dev, u8 *Out, u32 Max);
+
+/* With HostAuth: install a key the operating system derived. The pairwise
+ * key also opens the port (ME_SET_CONTROL_PORT) and brings the link up.
+ * Cipher is AIC_MAC_CIPHER_*. */
+int aic_host_set_key(aic_dev *Dev, int Pairwise, u8 KeyIdx, const u8 *Key, u32 KeyLen, u8 Cipher);
 
 int aic_disconnect(aic_dev *Dev);
 
@@ -330,6 +391,22 @@ int aic_tx_eth(aic_dev *Dev, const u8 *Eth, u32 EthLen);
  * Ethernet frame. Returns the frame length, 0 for a frame to drop, or a
  * negative error. Pure function. */
 int aic_rx_to_eth(const u8 *Pkt, u32 PktLen, u8 *Out, u32 OutMax);
+
+/* Native 802.11 data frames, as WiFiCx hands them over and wants them back.
+ *
+ * aic_eth_to_80211: an Ethernet frame the firmware delivered to the data
+ *   frame Windows receives: a 24-byte header with From DS set (A1 = DA,
+ *   A2 = Bssid, A3 = SA), then the LLC/SNAP header (RFC 1042, or 802.1H
+ *   for AppleTalk ARP and IPX) and the payload. A frame with an 802.3
+ *   length instead of an ethertype keeps its own LLC header.
+ * aic_80211_to_eth: a data frame Windows sends (To DS, possibly QoS or
+ *   +HTC, not protected) to the Ethernet frame the firmware takes.
+ * Both return the length written, 0 for a frame that is not one to pass,
+ * or a negative error. Pure functions. */
+#define AIC_80211_HDR       24
+#define AIC_80211_OVERHEAD  (AIC_80211_HDR + 8 - 14)    /* + header + LLC/SNAP - Ethernet header */
+int aic_eth_to_80211(const u8 *Bssid, const u8 *Eth, u32 EthLen, u8 *Out, u32 OutMax);
+int aic_80211_to_eth(const u8 *Frame, u32 Len, u8 *Out, u32 OutMax);
 
 /* A FIFO of Ethernet frames from the core's receive path to the operating
  * system's receive queue. No locking: the driver holds a spin lock around

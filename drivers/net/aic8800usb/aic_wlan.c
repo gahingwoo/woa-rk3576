@@ -250,16 +250,97 @@ parse_rsn(aic_bss *B, const u8 *Ie, u32 Len)
     }
 }
 
-static void
-scan_result(aic_dev *Dev, const u8 *P, u32 Len)
+static u8
+freq_chan(u16 Freq)
 {
-    const u8 *f = P + AIC_SCANU_RESULT_PAYLOAD;
-    u32 flen, off, i;
-    aic_bss *b = NULL;
+    if (Freq == 2484) {
+        return 14;
+    }
+    if (Freq >= 2412 && Freq < 2484) {
+        return (u8)((Freq - 2407) / 5);
+    }
+    if (Freq >= 5000 && Freq < 5900) {
+        return (u8)((Freq - 5000) / 5);
+    }
+    return 0;
+}
+
+/* The fixed fields and elements of a beacon or probe response body
+ * (Timestamp 8, Beacon Interval 2, Capability 2, then the elements). */
+static void
+parse_body(aic_bss *B, const u8 *Body, u32 Len)
+{
+    u32 off;
     u8 ssid_len = 0;
     const u8 *ssid = NULL, *rsn = NULL;
     u32 rsn_len = 0;
     int wpa = 0;
+
+    B->Capability = aic_get16(Body + 10);
+    for (off = 12; off + 2 <= Len; off += 2u + Body[off + 1]) {
+        u8 id = Body[off], l = Body[off + 1];
+
+        if (off + 2 + l > Len) {
+            break;
+        }
+        if (id == 0 && l <= 32) {
+            ssid = Body + off + 2;
+            ssid_len = l;
+        } else if (id == 48) {
+            rsn = Body + off + 2;
+            rsn_len = l;
+        } else if (id == 221 && l >= 4 && Body[off + 2] == 0x00 && Body[off + 3] == 0x50 &&
+                   Body[off + 4] == 0xF2 && Body[off + 5] == 0x01) {
+            wpa = 1;
+        }
+    }
+    if (ssid && (ssid_len || B->SsidLen == 0)) {
+        B->SsidLen = ssid_len;
+        aic_memcpy(B->Ssid, ssid, ssid_len);
+    }
+    B->RsnIeLen = 0;
+    if (rsn) {
+        parse_rsn(B, rsn, rsn_len);
+        if (rsn_len + 2 <= AIC_MAX_RSN_IE) {
+            B->RsnIe[0] = 48;
+            B->RsnIe[1] = (u8)rsn_len;
+            aic_memcpy(B->RsnIe + 2, rsn, rsn_len);
+            B->RsnIeLen = (u8)(rsn_len + 2);
+        }
+    } else if (wpa) {
+        B->Security = AIC_SEC_WPA;
+    } else if (B->Capability & 0x0010) {
+        B->Security = AIC_SEC_WEP;
+    } else {
+        B->Security = AIC_SEC_OPEN;
+    }
+}
+
+/* The entry for Bssid, a new one if there is room, or NULL. */
+static aic_bss *
+bss_slot(aic_dev *Dev, const u8 *Bssid)
+{
+    aic_bss *b;
+    int i = aic_find_bssid(Dev, Bssid);
+
+    if (i >= 0) {
+        return &Dev->Bss[i];
+    }
+    if (Dev->BssCount >= AIC_MAX_BSS) {
+        return NULL;
+    }
+    b = &Dev->Bss[Dev->BssCount++];
+    aic_memset(b, 0, sizeof(*b));
+    aic_memcpy(b->Bssid, Bssid, 6);
+    return b;
+}
+
+static void
+scan_result(aic_dev *Dev, const u8 *P, u32 Len)
+{
+    const u8 *f = P + AIC_SCANU_RESULT_PAYLOAD;
+    u32 flen;
+    aic_bss *b;
 
     if (Len < AIC_SCANU_RESULT_PAYLOAD) {
         return;
@@ -272,69 +353,61 @@ scan_result(aic_dev *Dev, const u8 *P, u32 Len)
         return;
     }
     Dev->Stats.ScanResults++;
-    for (i = 0; i < Dev->BssCount; i++) {
-        if (aic_memcmp(Dev->Bss[i].Bssid, f + 16, 6) == 0) {
-            b = &Dev->Bss[i];
-            break;
-        }
-    }
+    b = bss_slot(Dev, f + 16);
     if (b == NULL) {
-        if (Dev->BssCount >= AIC_MAX_BSS) {
-            return;
-        }
-        b = &Dev->Bss[Dev->BssCount++];
-        aic_memset(b, 0, sizeof(*b));
-        aic_memcpy(b->Bssid, f + 16, 6);
+        return;
     }
     b->Seen++;
     b->Freq = aic_get16(P + 4);
     b->Band = P[6];
+    b->Channel = freq_chan(b->Freq);
     b->Rssi = (s8)P[9];
-    b->Capability = aic_get16(f + 34);
-    for (off = 36; off + 2 <= flen; off += 2 + f[off + 1]) {
-        u8 id = f[off], l = f[off + 1];
-
-        if (off + 2 + l > flen) {
-            break;
-        }
-        if (id == 0 && l <= 32) {
-            ssid = f + off + 2;
-            ssid_len = l;
-        } else if (id == 48) {
-            rsn = f + off + 2;
-            rsn_len = l;
-        } else if (id == 221 && l >= 4 && f[off + 2] == 0x00 && f[off + 3] == 0x50 &&
-                   f[off + 4] == 0xF2 && f[off + 5] == 0x01) {
-            wpa = 1;
-        }
-    }
-    if (ssid && (ssid_len || b->SsidLen == 0)) {
-        b->SsidLen = ssid_len;
-        aic_memcpy(b->Ssid, ssid, ssid_len);
-    }
-    if (rsn) {
-        parse_rsn(b, rsn, rsn_len);
-        if (rsn_len + 2 <= AIC_MAX_RSN_IE) {
-            b->RsnIe[0] = 48;
-            b->RsnIe[1] = (u8)rsn_len;
-            aic_memcpy(b->RsnIe + 2, rsn, rsn_len);
-            b->RsnIeLen = (u8)(rsn_len + 2);
-        }
-    } else if (wpa) {
-        b->Security = AIC_SEC_WPA;
-    } else if (b->Capability & 0x0010) {
-        b->Security = AIC_SEC_WEP;
-    } else {
-        b->Security = AIC_SEC_OPEN;
+    parse_body(b, f + 24, flen - 24);
+    if (Dev->Ops->scan_bss) {
+        /* frame control subtype 5 is a probe response, 8 a beacon */
+        Dev->Ops->scan_bss(Dev->Ctx, b, f + 24, flen - 24, (f[0] & 0xF0) == 0x50);
     }
 }
 
 int
-aic_scan(aic_dev *Dev, u32 TimeoutMs)
+aic_find_bssid(const aic_dev *Dev, const u8 *Bssid)
+{
+    u32 i;
+
+    for (i = 0; i < Dev->BssCount; i++) {
+        if (aic_memcmp(Dev->Bss[i].Bssid, Bssid, 6) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+int
+aic_bss_from_body(aic_dev *Dev, const u8 *Bssid, u16 Freq, s8 Rssi, const u8 *Body, u32 Len)
+{
+    aic_bss *b;
+
+    if (Len < 12 || freq_chan(Freq) == 0) {
+        return -1;
+    }
+    b = bss_slot(Dev, Bssid);
+    if (b == NULL) {
+        return -1;
+    }
+    b->Freq = Freq;
+    b->Band = Freq < 3000 ? 0 : 1;
+    b->Channel = freq_chan(Freq);
+    b->Rssi = Rssi;
+    b->Seen++;
+    parse_body(b, Body, Len);
+    return (int)(b - Dev->Bss);
+}
+
+int
+aic_scan_start(aic_dev *Dev)
 {
     u8 *p = Dev->Scratch;
-    u32 n24, n5 = 0, waited = 0;
-    int rc;
+    u32 n24, n5 = 0;
 
     if (!Dev->VifUp) {
         return AIC_E_STATE;
@@ -351,10 +424,29 @@ aic_scan(aic_dev *Dev, u32 TimeoutMs)
     p[AIC_SCANU_CHAN_CNT] = (u8)(n24 + n5);
     p[AIC_SCANU_SSID_CNT] = 1;
     p[AIC_SCANU_NO_CCK] = 0;
-    Dev->BssCount = 0;
+    /* The list starts over, except for the network joined: the link needs
+     * its entry (Dev->CurBss) for as long as it is up. */
+    if (Dev->Link != AIC_LINK_DOWN && Dev->CurBss < Dev->BssCount) {
+        if (Dev->CurBss != 0) {
+            aic_memcpy(&Dev->Bss[0], &Dev->Bss[Dev->CurBss], sizeof(aic_bss));
+            Dev->CurBss = 0;
+        }
+        Dev->BssCount = 1;
+    } else {
+        Dev->BssCount = 0;
+    }
     Dev->ScanDone = 0;
-    rc = aic_cmd(Dev, AIC_SCANU_START_REQ, AIC_TASK_SCANU, p, AIC_SCANU_START_REQ_LEN,
-                 AIC_SCANU_START_CFM_ADDTIONAL, NULL, 0);
+    Dev->Events &= (u8)~AIC_EV_SCAN_DONE;
+    return aic_cmd(Dev, AIC_SCANU_START_REQ, AIC_TASK_SCANU, p, AIC_SCANU_START_REQ_LEN,
+                   AIC_SCANU_START_CFM_ADDTIONAL, NULL, 0);
+}
+
+int
+aic_scan(aic_dev *Dev, u32 TimeoutMs)
+{
+    u32 waited = 0;
+    int rc = aic_scan_start(Dev);
+
     if (rc != AIC_OK) {
         return rc;
     }
@@ -447,7 +539,7 @@ aic_key_add(aic_dev *Dev, int Pairwise, u8 KeyIdx, const u8 *Key, u32 KeyLen, u8
 }
 
 int
-aic_connect(aic_dev *Dev, int Index, u32 TimeoutMs)
+aic_connect_start(aic_dev *Dev, int Index)
 {
     const aic_bss *b;
     u8 *p = Dev->Scratch, cfm[1];
@@ -462,7 +554,7 @@ aic_connect(aic_dev *Dev, int Index, u32 TimeoutMs)
         aic_set_error(Dev, "network security %x is not supported", b->Security);
         return AIC_E_AUTH;
     }
-    if (b->Security == AIC_SEC_WPA2_PSK && !Dev->Wpa.HavePmk) {
+    if (b->Security == AIC_SEC_WPA2_PSK && !Dev->Wpa.HavePmk && !Dev->HostAuth) {
         aic_set_error(Dev, "no passphrase for a WPA2 network", 0);
         return AIC_E_STATE;
     }
@@ -472,6 +564,7 @@ aic_connect(aic_dev *Dev, int Index, u32 TimeoutMs)
     aic_memcpy(p + AIC_SM_CONNECT_BSSID, b->Bssid, 6);
     put_chan(p + AIC_SM_CONNECT_CHAN, b->Freq, b->Band, 0);
     p[AIC_SM_CONNECT_CHAN + 4] = 0;
+    Dev->AssocRsnIeLen = 0;
     if (b->Security == AIC_SEC_WPA2_PSK) {
         ie_len = aic_wpa_build_rsn_ie(b, p + AIC_SM_CONNECT_IE_BUF, AIC_SM_CONNECT_IE_MAX);
         aic_memcpy(Dev->AssocRsnIe, p + AIC_SM_CONNECT_IE_BUF, ie_len);
@@ -495,6 +588,10 @@ aic_connect(aic_dev *Dev, int Index, u32 TimeoutMs)
     Dev->Wpa.ReplayValid = 0;
     Dev->Wpa.Msg = 0;
     Dev->CurBss = (u8)Index;
+    Dev->AssocCapability = b->Capability;
+    Dev->AssocReqIeLen = 0;
+    Dev->AssocRspIeLen = 0;
+    Dev->Events &= (u8)~(AIC_EV_ASSOC | AIC_EV_DISCONNECT);
     Dev->Link = AIC_LINK_ASSOCIATING;
     Dev->ConnectStatus = 0xFFFF;
     cfm[0] = 0xFF;
@@ -509,6 +606,17 @@ aic_connect(aic_dev *Dev, int Index, u32 TimeoutMs)
         aic_set_error(Dev, "connect request refused, status %x", cfm[0]);
         return AIC_E_FIRMWARE;
     }
+    return AIC_OK;
+}
+
+int
+aic_connect(aic_dev *Dev, int Index, u32 TimeoutMs)
+{
+    int rc = aic_connect_start(Dev, Index);
+
+    if (rc != AIC_OK) {
+        return rc;
+    }
     if (!wait_for(Dev, TimeoutMs, assoc_done) || Dev->Link != AIC_LINK_ASSOCIATED) {
         if (Dev->Link == AIC_LINK_ASSOCIATING) {
             Dev->Link = AIC_LINK_DOWN;
@@ -518,9 +626,12 @@ aic_connect(aic_dev *Dev, int Index, u32 TimeoutMs)
         aic_set_error(Dev, "association failed, 802.11 status %x", Dev->ConnectStatus);
         return AIC_E_AUTH;
     }
-    if (b->Security == AIC_SEC_OPEN) {
+    if (Dev->Bss[Index].Security == AIC_SEC_OPEN) {
         Dev->Link = AIC_LINK_UP;
         return AIC_OK;
+    }
+    if (Dev->HostAuth) {
+        return AIC_OK;          /* the operating system's supplicant takes over */
     }
     if (!wait_for(Dev, TimeoutMs, keys_done) || !Dev->Wpa.Done) {
         if (Dev->LastError[0] == 0) {
@@ -535,6 +646,86 @@ aic_connect(aic_dev *Dev, int Index, u32 TimeoutMs)
     }
     Dev->Link = AIC_LINK_UP;
     return AIC_OK;
+}
+
+/* An element, if Out has room for it. */
+static u32
+put_ie(u8 *Out, u32 Off, u32 Max, u8 Id, const u8 *Data, u32 Len)
+{
+    if (Off + 2 + Len > Max) {
+        return Off;
+    }
+    Out[Off] = Id;
+    Out[Off + 1] = (u8)Len;
+    aic_memcpy(Out + Off + 2, Data, Len);
+    return Off + 2 + Len;
+}
+
+u32
+aic_assoc_req_body(const aic_dev *Dev, u8 *Out, u32 Max)
+{
+    static const u8 rates[] = { 0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24 };
+    const aic_bss *b = Dev->CurBss < Dev->BssCount ? &Dev->Bss[Dev->CurBss] : NULL;
+    u32 n;
+
+    if (Max < 4) {
+        return 0;
+    }
+    /* Capability: ESS, and Privacy for a protected network, as the AP
+     * advertises them; Listen Interval: the SM_CONNECT value (0) means the
+     * firmware's default, which the request carries as 1. */
+    aic_put16(Out, (u32)(Dev->AssocCapability & 0x0411) | 0x0001);
+    aic_put16(Out + 2, 1);
+    n = 4;
+    if (Dev->AssocReqIeLen != 0) {
+        if (n + Dev->AssocReqIeLen > Max) {
+            return 0;
+        }
+        aic_memcpy(Out + n, Dev->AssocIe, Dev->AssocReqIeLen);
+        return n + Dev->AssocReqIeLen;
+    }
+    if (b != NULL) {
+        n = put_ie(Out, n, Max, 0, b->Ssid, b->SsidLen);
+    }
+    n = put_ie(Out, n, Max, 1, rates, sizeof(rates));
+    if (Dev->AssocRsnIeLen >= 2 && n + Dev->AssocRsnIeLen <= Max) {
+        aic_memcpy(Out + n, Dev->AssocRsnIe, Dev->AssocRsnIeLen);
+        n += Dev->AssocRsnIeLen;
+    }
+    return n;
+}
+
+u32
+aic_assoc_rsp_body(const aic_dev *Dev, u8 *Out, u32 Max)
+{
+    if (Max < 6u + Dev->AssocRspIeLen) {
+        return 0;
+    }
+    aic_put16(Out, Dev->AssocCapability);
+    aic_put16(Out + 2, Dev->ConnectStatus == 0xFFFF ? 1 : Dev->ConnectStatus);
+    aic_put16(Out + 4, (u32)Dev->Aid | 0xC000);     /* the AID field has its two top bits set */
+    aic_memcpy(Out + 6, Dev->AssocIe + Dev->AssocReqIeLen, Dev->AssocRspIeLen);
+    return 6u + Dev->AssocRspIeLen;
+}
+
+int
+aic_host_set_key(aic_dev *Dev, int Pairwise, u8 KeyIdx, const u8 *Key, u32 KeyLen, u8 Cipher)
+{
+    int rc;
+
+    if (!Dev->HostAuth || Dev->Link == AIC_LINK_DOWN || Dev->Link == AIC_LINK_ASSOCIATING) {
+        return AIC_E_STATE;
+    }
+    rc = aic_key_add(Dev, Pairwise, KeyIdx, Key, KeyLen, Cipher);
+    if (rc != AIC_OK || !Pairwise) {
+        return rc;
+    }
+    rc = aic_set_port(Dev, 1);
+    if (rc == AIC_OK) {
+        Dev->Wpa.Done = 1;
+        Dev->Link = AIC_LINK_UP;
+    }
+    return rc;
 }
 
 int
@@ -567,6 +758,7 @@ aic_wlan_ind(aic_dev *Dev, u16 Id, const u8 *P, u32 Len)
         Dev->ScanStatus = Len >= 2 ? P[1] : 0xFF;
         Dev->ScanResultCnt = Len >= 3 ? P[2] : 0;
         Dev->ScanDone = 1;
+        Dev->Events |= AIC_EV_SCAN_DONE;
         break;
     case AIC_SM_CONNECT_IND:
         if (Len < AIC_SM_CONNECT_IND_FREQ + 2) {
@@ -584,11 +776,28 @@ aic_wlan_ind(aic_dev *Dev, u16 Id, const u8 *P, u32 Len)
         } else {
             Dev->Link = AIC_LINK_DOWN;
         }
+        {
+            u32 req = aic_get16(P + AIC_SM_CONNECT_IND_REQ_IE_LEN);
+            u32 rsp = aic_get16(P + AIC_SM_CONNECT_IND_RSP_IE_LEN);
+
+            /* both lists, back to back in assoc_ie_buf; dropped whole if
+             * they do not fit (the request is then rebuilt) */
+            if (req + rsp <= AIC_ASSOC_IE_MAX && AIC_SM_CONNECT_IND_IE_BUF + req + rsp <= Len) {
+                aic_memcpy(Dev->AssocIe, P + AIC_SM_CONNECT_IND_IE_BUF, req + rsp);
+                Dev->AssocReqIeLen = (u16)req;
+                Dev->AssocRspIeLen = (u16)rsp;
+            } else {
+                Dev->AssocReqIeLen = 0;
+                Dev->AssocRspIeLen = 0;
+            }
+        }
+        Dev->Events |= AIC_EV_ASSOC;
         break;
     case AIC_SM_DISCONNECT_IND:
         Dev->DisconnectReason = Len >= 2 ? aic_get16(P) : 0;
         Dev->Link = AIC_LINK_DOWN;
         Dev->Wpa.Done = 0;
+        Dev->Events |= AIC_EV_DISCONNECT;
         break;
     case AIC_MM_FW_PANIC_IND:
     case AIC_MM_FW_ASSERT_IND:
@@ -616,6 +825,9 @@ aic_poll(aic_dev *Dev)
 {
     int did = 0;
 
+    if (Dev->HostAuth) {
+        return 0;               /* EAPOL goes to the operating system */
+    }
     while (Dev->EapolTail != Dev->EapolHead) {
         u8 slot = Dev->EapolTail;
 
