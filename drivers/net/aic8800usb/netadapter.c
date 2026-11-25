@@ -484,7 +484,8 @@ AicNetCreateAdapter(_In_ PAIC_DEVICE_CONTEXT Ctx)
             return status;
         }
     }
-    Ctx->TxFreeMask = (AIC_TX_SLOTS == 32) ? 0xFFFFFFFFu : ((1u << AIC_TX_SLOTS) - 1);
+    C_ASSERT(AIC_TX_SLOTS == 32);   /* one bit per slot in TxFreeMask */
+    Ctx->TxFreeMask = 0xFFFFFFFFu;
     return STATUS_SUCCESS;
 }
 
