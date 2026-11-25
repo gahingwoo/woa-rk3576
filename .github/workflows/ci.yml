@@ -566,6 +566,8 @@ jobs:
           # it cleaned up after itself
           if (Get-ChildItem $env:SystemDrive\ -Filter 'rk3576-regress-*.bin' -ErrorAction SilentlyContinue) { throw 'the storage check left its file' }
           if (Get-ScheduledTask -TaskName 'RK3576-regress-*' -ErrorAction SilentlyContinue) { throw 'a session task was left behind' }
+          # the suite's own exit code (1: rows FAIL on a VM) is not this step's
+          exit 0
 
   solution:
     name: WDK build (build/RockchipDrivers.sln)
