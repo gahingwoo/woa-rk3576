@@ -245,7 +245,11 @@ function Counter-Value {
         $d = Read-Counter $Path
         foreach ($k in $d.Keys) { return [double]$d[$k] }
         $script:CounterError = 'no instance'
-    } catch { $script:CounterError = $_.Exception.Message }
+    } catch {
+        $e = $_.Exception
+        while ($e.InnerException) { $e = $e.InnerException }
+        $script:CounterError = $e.Message
+    }
     return $null
 }
 
@@ -817,7 +821,8 @@ $rw = Fact 'storageRw' {
     (New-Object System.Random).NextBytes($data)
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
-        $s = New-Object System.IO.FileStream($f, 'Create', 'Write', 'None', 1MB, [System.IO.FileOptions]::WriteThrough)
+        # typed arguments: with strings, Windows PowerShell 5.1 finds the six-argument constructor ambiguous
+        $s = New-Object System.IO.FileStream($f, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, [int]1MB, [System.IO.FileOptions]::WriteThrough)
         $s.Write($data, 0, $data.Length); $s.Flush($true); $s.Close()
         $wms = $sw.ElapsedMilliseconds
         $sha = [System.Security.Cryptography.SHA256]::Create()
