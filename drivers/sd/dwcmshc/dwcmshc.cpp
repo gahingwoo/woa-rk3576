@@ -51,6 +51,25 @@ static PLIST_ENTRY gPlatformInfoList;
 static FAST_MUTEX gPlatformInfoListLock;
 
 //
+// sdport's own DriverUnload, chained from MshcDriverUnload.
+//
+static PDRIVER_UNLOAD gSdportDriverUnload;
+static DRIVER_UNLOAD MshcDriverUnload;
+
+static
+VOID
+MshcDriverUnload(
+    _In_ PDRIVER_OBJECT DriverObject
+    )
+{
+    if (gSdportDriverUnload != NULL) {
+        gSdportDriverUnload(DriverObject);
+    }
+
+    WPP_CLEANUP(DriverObject);
+}
+
+//
 // Supported controllers
 //
 static MSHC_PLATFORM_DRIVER_DATA SupportedPlatforms[] = {
@@ -177,6 +196,15 @@ DriverEntry(
     // Hook up the IRP dispatch routines.
     //
     Status = SdPortInitialize(DriverObject, RegistryPath, &InitializationData);
+    if (NT_SUCCESS(Status) && !gCrashdumpMode) {
+        //
+        // sdport installs its own unload routine (SdhostUnload).  Run it,
+        // then tear WPP down, once the image is really going away.
+        //
+        gSdportDriverUnload = DriverObject->DriverUnload;
+        DriverObject->DriverUnload = MshcDriverUnload;
+    }
+
     if (!NT_SUCCESS(Status)) {
         MSHC_LOG_ERROR(
             DriverLogHandle,
@@ -364,6 +392,17 @@ MshcSlotInitialize(
         }
     }
 
+    //
+    // Work from a private copy from here on (see PlatformInfoCopy).
+    //
+    if (PlatformCapabilities != NULL) {
+        RtlCopyMemory(&MshcExtension->PlatformInfoCopy,
+                      MshcExtension->PlatformInfo,
+                      sizeof(MSHC_PLATFORM_INFO));
+        MshcExtension->PlatformInfo = &MshcExtension->PlatformInfoCopy;
+        PlatformCapabilities = &MshcExtension->PlatformInfo->Capabilities;
+    }
+
     if (!CrashdumpMode) {
         ExReleaseFastMutex(&gPlatformInfoListLock);
     }
@@ -546,8 +585,8 @@ MshcSlotIssueBusOperation(
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
 
-    // If SlotInitialize() failed, it's not safe to continue...
-    if (!MshcExtension->Initialized) {
+    // If SlotInitialize() failed, or Cleanup has run, it's not safe to continue...
+    if (!MshcExtension->Initialized || MshcExtension->Shutdown) {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
@@ -683,6 +722,10 @@ MshcSlotGetCardDetectState(
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
 
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return FALSE;
+    }
+
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
     Present = MshcIsCardInserted(MshcExtension);
@@ -707,6 +750,10 @@ MshcSlotGetWriteProtectState(
     BOOLEAN WriteProtected;
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
+
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return FALSE;
+    }
 
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
@@ -736,6 +783,29 @@ MshcSlotInterrupt(
     BOOLEAN Handled;
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
+
+    //
+    // After MshcCleanup (sdport disconnects the interrupt only after it), or
+    // on a slot that never initialised, there is nothing to service: the
+    // log and the platform info may be gone.
+    //
+    *Events = 0;
+    *Errors = 0;
+    *CardChange = FALSE;
+    *SdioInterrupt = FALSE;
+    *Tuning = FALSE;
+
+    if (MshcExtension->Shutdown) {
+        return FALSE;
+    }
+
+    if (!MshcExtension->Initialized) {
+        if (MshcExtension->BaseAddress != NULL) {
+            MshcWriteRegister(MshcExtension, MSHC_INTMASK, 0);
+            MshcWriteRegister(MshcExtension, MSHC_RINTSTS, 0xFFFFFFFF);
+        }
+        return FALSE;
+    }
 
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
@@ -966,6 +1036,10 @@ MshcSlotIssueRequest(
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
 
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
     if (Request->Type == SdRequestTypeCommandNoTransfer) {
@@ -1064,6 +1138,10 @@ MshcSlotGetResponse(
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
 
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return;
+    }
+
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
     MSHC_LOG_INFO(
@@ -1158,6 +1236,10 @@ MshcSlotToggleEvents(
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
 
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return;
+    }
+
     MSHC_LOG_ENTER(
         MshcExtension->LogHandle,
         MshcExtension,
@@ -1213,6 +1295,10 @@ MshcSlotClearEvents(
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
 
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return;
+    }
+
     MSHC_LOG_ENTER(
         MshcExtension->LogHandle,
         MshcExtension,
@@ -1242,6 +1328,10 @@ MshcRequestDpc(
     PMSHC_EXTENSION MshcExtension;
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
+
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return;
+    }
 
     //
     // WORKAROUND:
@@ -1388,27 +1478,55 @@ MshcCleanup(
     _In_ PSD_MINIPORT Miniport
     )
 {
+    LARGE_INTEGER Delay;
+    ULONG Waits;
+
     MSHC_LOG_ENTER(DriverLogHandle, NULL, "()");
+
+    //
+    // sdport calls Cleanup first in SdhostFdoFreeDeviceResources and
+    // disconnects the controller and card-detect interrupts only after it
+    // returns, so the ISR (and whatever sdport still has queued) can run
+    // after this.  Stop every callback and quiet the controller before
+    // anything is freed.
+    //
+    for (ULONG Index = 0; Index < Miniport->SlotCount; Index++) {
+        PMSHC_EXTENSION MshcExtension =
+            (PMSHC_EXTENSION)Miniport->SlotExtensionList[Index]->PrivateExtension;
+
+        InterlockedExchange(&MshcExtension->Shutdown, 1);
+
+        if (MshcExtension->BaseAddress != NULL) {
+            MshcWriteRegister(MshcExtension, MSHC_INTMASK, 0);
+            MshcWriteRegister(MshcExtension, MSHC_IDINTEN, 0);
+            MshcEnableGlobalInterrupt(MshcExtension, FALSE);
+            MshcAcknowledgeInterrupts(MshcExtension, MSHC_INT_ALL, MSHC_IDINT_ALL);
+        }
+    }
 
     if (!gCrashdumpMode) {
         ExAcquireFastMutex(&gPlatformInfoListLock);
     }
 
-    if (!IsListEmpty(gPlatformInfoList)) {
-        for (PLIST_ENTRY Entry = gPlatformInfoList->Flink;
-             Entry != gPlatformInfoList;
-             Entry = Entry->Flink) {
+    //
+    // Take the next link before freeing the entry: reading Entry->Flink of a
+    // freed entry walked freed pool.
+    //
+    for (PLIST_ENTRY Entry = gPlatformInfoList->Flink, Next;
+         Entry != gPlatformInfoList;
+         Entry = Next) {
 
-            PMSHC_PLATFORM_INFO_LIST_ENTRY PlatformInfoEntry =
-                CONTAINING_RECORD(Entry, MSHC_PLATFORM_INFO_LIST_ENTRY, ListEntry);
+        PMSHC_PLATFORM_INFO_LIST_ENTRY PlatformInfoEntry =
+            CONTAINING_RECORD(Entry, MSHC_PLATFORM_INFO_LIST_ENTRY, ListEntry);
 
-            if (PlatformInfoEntry->MiniportFdo != Miniport->ConfigurationInfo.DeviceObject) {
-                continue;
-            }
+        Next = Entry->Flink;
 
-            RemoveEntryList(Entry);
-            ExFreePoolWithTag(PlatformInfoEntry, MSHC_ALLOC_TAG);
+        if (PlatformInfoEntry->MiniportFdo != Miniport->ConfigurationInfo.DeviceObject) {
+            continue;
         }
+
+        RemoveEntryList(Entry);
+        ExFreePoolWithTag(PlatformInfoEntry, MSHC_ALLOC_TAG);
     }
 
     if (!gCrashdumpMode) {
@@ -1419,8 +1537,24 @@ MshcCleanup(
         PMSHC_EXTENSION MshcExtension =
             (PMSHC_EXTENSION)Miniport->SlotExtensionList[Index]->PrivateExtension;
 
-        if (MshcExtension->CompleteRequestBusyWorkItem) {
-            IoFreeWorkItem(MshcExtension->CompleteRequestBusyWorkItem);
+        //
+        // A busy work item still queued or running keeps its work item: free
+        // it only once it is idle, and leak it rather than free it under a
+        // running worker.
+        //
+        if (MshcExtension->CompleteRequestBusyWorkItem != NULL) {
+            Delay.QuadPart = -10LL * 10000LL;
+            for (Waits = 0; Waits < 200; Waits++) {
+                if (InterlockedCompareExchange(&MshcExtension->BusyWorkerActive, 0, 0) == 0) {
+                    break;
+                }
+                (VOID)KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+            }
+
+            if (InterlockedCompareExchange(&MshcExtension->BusyWorkerActive, 0, 0) == 0) {
+                IoFreeWorkItem(MshcExtension->CompleteRequestBusyWorkItem);
+            }
+            MshcExtension->CompleteRequestBusyWorkItem = NULL;
         }
 
         if (MshcExtension->IsSdio) {
@@ -1429,13 +1563,17 @@ MshcCleanup(
 
         MshcRockchipCleanup(MshcExtension);
 
-        MshcLogCleanup(MshcExtension);
+        if (!gCrashdumpMode) {
+            MshcLogCleanup(MshcExtension);
+        }
     }
 
-    if (IsListEmpty(gPlatformInfoList)) {
-        PDEVICE_OBJECT Fdo = (PDEVICE_OBJECT)Miniport->ConfigurationInfo.DeviceObject;
-        WPP_CLEANUP(Fdo->DriverObject);
-    }
+    //
+    // WPP is torn down in MshcDriverUnload, not here.  Doing it when the last
+    // controller went away left a driver image that was still loaded (a
+    // device restart, or the other controller starting later) logging
+    // through a dead WPP context.
+    //
 }
 
 //
@@ -2690,6 +2828,7 @@ MshcCompleteRequest(
                 (Request != MshcExtension->LocalRequest) &&
                 (InterlockedCompareExchangePointer(
                     (PVOID volatile *)&MshcExtension->BusyRequest, Request, NULL) == NULL)) {
+                InterlockedIncrement(&MshcExtension->BusyWorkerActive);
                 IoQueueWorkItem(
                     MshcExtension->CompleteRequestBusyWorkItem,
                     MshcCompleteRequestBusyWorker,
@@ -2803,11 +2942,15 @@ MshcCompleteRequestBusyWorker(
 
     Request = (PSDPORT_REQUEST)InterlockedExchangePointer(
         (PVOID volatile *)&MshcExtension->BusyRequest, NULL);
-    if (Request == NULL) {
-        return;
+    if ((Request != NULL) && !MshcExtension->Shutdown) {
+        MshcCompleteRequestAfterBusy(MshcExtension, Request);
     }
 
-    MshcCompleteRequestAfterBusy(MshcExtension, Request);
+    //
+    // Last touch of the extension: MshcCleanup waits for this before it
+    // frees the work item.
+    //
+    InterlockedDecrement(&MshcExtension->BusyWorkerActive);
 }
 
 _Use_decl_annotations_
@@ -3634,7 +3777,20 @@ MshcLogCleanup(
     PMSHC_EXTENSION MshcExtension
     )
 {
-    WppRecorderLogDelete(MshcExtension->LogHandle);
+    RECORDER_LOG LogHandle = MshcExtension->LogHandle;
+    RECORDER_LOG DefaultLog = WppRecorderLogGetDefault();
+
+    //
+    // Anything that still logs for this slot after Cleanup (sdport keeps the
+    // interrupt connected a little longer) goes to the driver's default log,
+    // which lives until MshcDriverUnload.  The default log is never deleted
+    // here: MshcLogInit falls back to it when it cannot create one.
+    //
+    MshcExtension->LogHandle = DefaultLog;
+
+    if ((LogHandle != NULL) && (LogHandle != DefaultLog)) {
+        WppRecorderLogDelete(LogHandle);
+    }
 }
 
 _Use_decl_annotations_

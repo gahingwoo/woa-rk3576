@@ -230,6 +230,39 @@ package's image, the SDIO controller runs old code that knows nothing about
 it. Remove the old package before testing, and check with `sc qc dwcmshc`
 that the image path is the new package's DriverStore folder.
 
+#### Second board run, 2026-11-25: the SD slot alone, and teardown
+
+The `SdioDiag` key did not exist after the 0xD1 and the service's image
+path was the old package's: the 0xD1 came from the old image driving the
+SDIO controller. Then, with SDIO off and no card: the new package staged on
+the SD slot (`ConfigFlags 0x20`) made Windows reboot-loop, and removing the
+old package while Windows ran (`pnputil /delete-driver ... /uninstall`)
+killed it too. No stop code was captured.
+
+Both are a running `dwcmshc` instance being torn down (the reinstall
+restarts the device on every boot until it succeeds), and the teardown was
+broken in every build, old and new. sdport 22621.608 calls the miniport's
+`Cleanup` first in `SdhostFdoFreeDeviceResources` and disconnects the
+controller and card-detect interrupts only after it returns. `MshcCleanup`:
+
+- freed the platform info entry the ISR and card-detect path read through
+  `PlatformInfo`, and walked the list through the freed entry
+  (`Entry = Entry->Flink` after `ExFreePoolWithTag`);
+- deleted the slot's IFR log while the ISR could still log to it;
+- left the controller's interrupts enabled;
+- freed the busy work item without knowing whether it was queued;
+- ran `WPP_CLEANUP` when the last controller went away, leaving an image
+  that stays loaded (a restart, or the other controller) logging through a
+  dead WPP context.
+
+Now: each slot keeps its own copy of the platform info; `Cleanup` first
+sets `Shutdown`, masks and acknowledges the controller, then frees, walking
+the list safely; every callback returns at once on `Shutdown`; the log falls
+back to the driver's default log; the busy work item is freed only when
+idle; WPP is torn down in a `DriverUnload` chained in front of sdport's. The
+CI check also covers this order now. Two instances (SD slot and SDIO)
+share only the platform list (under its mutex) and the driver-wide log.
+
 ### W3 and later
 
 Moved to [docs/dev/wifi.md](dev/wifi.md#stages). The stages there are W3

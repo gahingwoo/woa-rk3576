@@ -17,6 +17,10 @@
 #    exactly one place, MshcCompleteRequest, behind a compare-exchange on
 #    SdportRequest. Fail if a second call appears or the guard goes away.
 #
+# 3. Teardown. sdport 22621.608 calls the miniport's Cleanup first in
+#    SdhostFdoFreeDeviceResources and disconnects the interrupts after it,
+#    so callbacks can still arrive. See the checks at the end of main().
+#
 # The parser is crude on purpose: the driver's style puts a function's name
 # on its own line followed by "(", and the body's braces in column 0.
 #
@@ -73,6 +77,9 @@ def main():
     bodies = {}
     for src in SOURCES:
         text = (DRIVER / src).read_text(encoding="utf-8-sig")
+        # Comments name functions too; only code counts.
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        text = re.sub(r"//[^\n]*", "", text)
         bodies.update(functions(text))
 
     fail = 0
@@ -112,9 +119,31 @@ def main():
             print("FAIL: MshcCompleteRequest must hand a request to sdport once, behind the SdportRequest compare-exchange")
             fail = 1
 
+    # Teardown. sdport calls Cleanup before it disconnects the interrupts, so:
+    # the ISR must check Shutdown before it logs or touches platform info;
+    # Cleanup must set Shutdown before it frees anything; WPP is torn down
+    # only at driver unload (and on a failed DriverEntry), never in Cleanup.
+    isr = bodies.get("MshcSlotInterrupt", "")
+    if isr.find("Shutdown") < 0 or isr.find("Shutdown") > isr.find("MSHC_LOG"):
+        print("FAIL: MshcSlotInterrupt must return on Shutdown before its first log call")
+        fail = 1
+    cleanup = bodies.get("MshcCleanup", "")
+    first_free = min([i for i in (cleanup.find("ExFreePoolWithTag"), cleanup.find("IoFreeWorkItem"),
+                                  cleanup.find("MshcLogCleanup")) if i >= 0] or [len(cleanup)])
+    if cleanup.find("Shutdown") < 0 or cleanup.find("Shutdown") > first_free:
+        print("FAIL: MshcCleanup must set Shutdown before it frees anything")
+        fail = 1
+    if re.search(r"Entry\s*=\s*Entry->Flink", cleanup):
+        print("FAIL: MshcCleanup walks the list through a freed entry (Entry = Entry->Flink)")
+        fail = 1
+    wpp = sorted(fn for fn, body in bodies.items() if "WPP_CLEANUP" in body)
+    if wpp != ["DriverEntry", "MshcDriverUnload"]:
+        print(f"FAIL: WPP_CLEANUP belongs in DriverEntry (failure) and MshcDriverUnload only, found in {wpp}")
+        fail = 1
+
     if not fail:
         print(f"OK: {len(bodies)} functions; no DISPATCH-only call under {', '.join(DIRQL_ROOTS)}; "
-              "one guarded SdPortCompleteRequest")
+              "one guarded SdPortCompleteRequest; teardown order")
     return fail
 
 

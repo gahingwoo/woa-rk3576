@@ -555,6 +555,22 @@ struct _MSHC_EXTENSION {
     PMSHC_PLATFORM_OPERATIONS PlatformOperations;
 
     //
+    // This slot's own copy of its platform info; PlatformInfo points here
+    // once MshcSlotInitialize has found the list entry.  The list entry is
+    // freed in MshcCleanup, and sdport disconnects the interrupts only after
+    // Cleanup returns (SdhostFdoFreeDeviceResources, sdport 22621.608), so
+    // nothing reachable from the ISR may point into the list.
+    //
+    MSHC_PLATFORM_INFO PlatformInfoCopy;
+
+    //
+    // Set by MshcCleanup before it tears anything down.  Every sdport
+    // callback that can still arrive afterwards (the ISR first of all)
+    // returns at once when it is set.
+    //
+    volatile LONG Shutdown;
+
+    //
     // Slot location
     //
     ULONG SlotId;
@@ -666,6 +682,7 @@ struct _MSHC_EXTENSION {
     // The sdport request whose completion waits in the busy work item.
     //
     PSDPORT_REQUEST volatile BusyRequest;
+    volatile LONG BusyWorkerActive;
 
     //
     // FIFO configuration for the current transfer
