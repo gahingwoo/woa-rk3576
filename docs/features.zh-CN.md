@@ -51,7 +51,7 @@ DSI 屏的 GT9271 配合 [gt9271](../drivers/input/gt9271) 可用，支持十点
 
 - 两块板的 WiFi（见[无线](dev/wireless.zh-CN.md)）。
 - CM5-IO 的蓝牙。
-- 泰山派 3M 上 EC20 模块的网络接口。
+- 泰山派 3M 上 EC20 模块的网络接口（MBIM 方案已规划，尚未试过：[EC20](dev/ec20.zh-CN.md)）。
 - 泰山派 3M 上有效的 RTC 时间（见[故障排查](troubleshooting.zh-CN.md#每次启动后时间都不对)）。
 
 ## 视频解码器

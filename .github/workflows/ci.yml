@@ -721,6 +721,43 @@ jobs:
           # both scripts exit 1 here by design (no RhProxy on the runner)
           $global:LASTEXITCODE = 0
 
+  ec20-tools:
+    name: EC20 usbnet mode scripts (shellcheck, Windows PowerShell 5.1)
+    # tools/ec20 switches the TaishanPi 3M's EC20 between QMI and MBIM. No
+    # modem on a runner: both scripts must get as far as looking for the AT
+    # port and stop there with exit code 3.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse, ASCII, and run -Status without a modem
+        shell: powershell
+        run: |
+          $f = (Resolve-Path tools\ec20\ec20-mode.ps1).Path
+          $tok = $null; $err = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$tok, [ref]$err)
+          if ($err) { $err | Out-Host; throw 'ec20-mode.ps1 does not parse' }
+          if ([System.IO.File]::ReadAllBytes($f) | Where-Object { $_ -ge 0x80 }) { throw 'ec20-mode.ps1 is not ASCII' }
+          $ErrorActionPreference = 'Continue'
+          $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $f -Status 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 3) { throw "ec20-mode.ps1 -Status exited $code, expected 3 (no AT port)" }
+          if ($out -notmatch 'No COM port on the EC20 AT interface') { throw 'did not reach the port lookup' }
+          $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $f 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 3) { throw "ec20-mode.ps1 (switch) exited $LASTEXITCODE, expected 3" }
+          # the step's own exit code would otherwise be the script's 3
+          exit 0
+  ec20-tools-linux:
+    name: EC20 usbnet mode script (shellcheck, Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck and run status without a modem
+        run: |
+          shellcheck -S warning tools/ec20/ec20-mode.sh
+          set +e; tools/ec20/ec20-mode.sh status; code=$?; set -e
+          [ "$code" -eq 3 ] || { echo "::error::ec20-mode.sh status exited $code, expected 3"; exit 1; }
+
   solution:
     name: WDK build (build/RockchipDrivers.sln)
     # The drivers imported from worproject/Rockchip-Windows-Drivers build as one

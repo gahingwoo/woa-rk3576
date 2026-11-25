@@ -84,7 +84,7 @@ Maskrom Studio's CI tier uses the `ci` release.
 - [Debugging](docs/dev/debugging.md): collecting data in WinPE and Windows,
   the kernel debugger
 - [Audio](docs/dev/audio.md), [display](docs/dev/display.md),
-  [wireless](docs/dev/wireless.md)
+  [wireless](docs/dev/wireless.md), [EC20 4G](docs/dev/ec20.md)
 - [History](docs/history/README.md): dated notes kept as written
 
 ```cmd

@@ -73,7 +73,7 @@ headset microphones do not (SCO goes over a PCM link that has no driver).
 
 - WiFi on both boards ([wireless](dev/wireless.md)).
 - Bluetooth on the CM5-IO.
-- The EC20 modem's network interface on the TaishanPi 3M.
+- The EC20 modem's network interface on the TaishanPi 3M (the MBIM path is planned, not yet tried: [EC20](dev/ec20.md)).
 - A valid RTC time on the TaishanPi 3M ([troubleshooting](troubleshooting.md#the-clock-is-wrong-after-every-boot)).
 
 ## Video decoder
