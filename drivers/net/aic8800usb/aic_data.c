@@ -245,3 +245,38 @@ aic_data_rx(aic_dev *Dev, const u8 *Pkt, u32 Len)
     }
     Dev->Stats.RxDataDropped++;
 }
+
+/* ------------------------------------------------------- frame FIFO */
+
+int
+aic_frameq_push(aic_frameq *Q, const u8 *Frame, u32 Len)
+{
+    u32 next = (Q->Head + 1) % AIC_FRAMEQ_SLOTS;
+
+    if (next == Q->Tail || Len == 0 || Len > AIC_FRAMEQ_MAX) {
+        Q->Drops++;
+        return 0;
+    }
+    aic_memcpy(Q->Buf[Q->Head], Frame, Len);
+    Q->Len[Q->Head] = (u16)Len;
+    Q->Head = next;
+    return 1;
+}
+
+const u8 *
+aic_frameq_peek(const aic_frameq *Q, u32 *Len)
+{
+    if (Q->Head == Q->Tail) {
+        return NULL;
+    }
+    *Len = Q->Len[Q->Tail];
+    return Q->Buf[Q->Tail];
+}
+
+void
+aic_frameq_pop(aic_frameq *Q)
+{
+    if (Q->Head != Q->Tail) {
+        Q->Tail = (Q->Tail + 1) % AIC_FRAMEQ_SLOTS;
+    }
+}

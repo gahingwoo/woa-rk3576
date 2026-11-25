@@ -1,0 +1,67 @@
+;
+; aic8800ldr.inf - AICSemi AIC8800D80 USB Wi-Fi (Radxa ROCK 4D), the ROM
+; loader face of the chip: USB\VID_A69C&PID_8D80 at power-on. The driver
+; (aic8800usb.sys, here as the service aic8800ldr) downloads the firmware;
+; the chip then leaves the bus and comes back as PID_8D81, which
+; aic8800usb.inf binds as a network adapter. Install both INFs.
+;
+; The firmware files are not part of this package; see README.md and
+; install-firmware.ps1. Settings (Stage, FirmwareDir) are read from
+; HKLM\SYSTEM\CurrentControlSet\Services\aic8800usb\Parameters; at Stage 0
+; nothing is sent to the chip.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = aic8800ldr.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+aic8800usb.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%AIC.LoaderDesc% = AICLDR_Inst,USB\VID_A69C&PID_8D80
+
+[AICLDR_Inst.NT]
+CopyFiles = AICLDR_CopyFiles
+
+[AICLDR_CopyFiles]
+aic8800usb.sys
+
+[AICLDR_Inst.NT.Services]
+AddService = aic8800ldr,0x00000002,AICLDR_Service
+
+[AICLDR_Service]
+DisplayName   = %AIC.LdrSvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\aic8800usb.sys
+
+[AICLDR_Inst.NT.Wdf]
+KmdfService = aic8800ldr, AICLDR_wdfsect
+
+[AICLDR_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName    = "woa-rk3576"
+DiskName        = "AIC8800D80 Wi-Fi Installation Disk"
+AIC.LoaderDesc  = "AIC8800D80 USB Wi-Fi (firmware loader)"
+AIC.LdrSvcDesc  = "AIC8800D80 USB Wi-Fi firmware loader"

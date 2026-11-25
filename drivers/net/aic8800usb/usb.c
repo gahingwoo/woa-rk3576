@@ -269,10 +269,20 @@ AicOpLog(void *C, const char *Msg)
     AIC_LOG("%s", Msg);
 }
 
+static void
+AicOpRxEth(void *C, const u8 *Frame, u32 Len)
+{
+    PAIC_DEVICE_CONTEXT ctx = (PAIC_DEVICE_CONTEXT)C;
+
+    if (ctx->Adapter != NULL) {
+        AicNetRxFrame(ctx, Frame, Len);
+    }
+}
+
 const aic_bus_ops AicUsbOps = {
     AicOpSend,
     AicOpWait,
     AicOpDelay,
     AicOpLog,
-    NULL,       /* rx_eth: no network interface at these stages */
+    AicOpRxEth,
 };

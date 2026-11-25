@@ -70,6 +70,8 @@ typedef struct fakechip {
     u8  LastTxEth[2048];
     u32 LastTxEthLen;
     int ZeroPacketSeen;
+    /* the AP's LAN side: a DHCP server, ARP and ping for the gateway */
+    u32 DhcpOffers, DhcpAcks, ArpReplies, EchoReplies, IpChecksumBad;
     char Error[200];
 } fakechip;
 
@@ -87,3 +89,7 @@ void fake_ap_deauth(fakechip *F, u16 Reason);
 /* RAM image helpers */
 u32  fake_ram_word(fakechip *F, u32 Addr);
 u32  fake_reg(fakechip *F, u32 Addr);
+/* the LAN behind the simulated AP */
+#define FAKE_GW_IP      0xC0A83201u     /* 192.168.50.1 */
+#define FAKE_LEASE_IP   0xC0A83217u     /* 192.168.50.23 */
+u16  fake_ip_checksum(const u8 *P, u32 Len);

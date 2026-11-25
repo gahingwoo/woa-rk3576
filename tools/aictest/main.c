@@ -124,6 +124,8 @@ typedef struct harness {
     u8 Rx[16][2048];
     u32 RxLen[16];
     u32 RxCount;
+    aic_frameq Q;           /* what the driver's RX queue would hand Windows */
+    int UseQ;
 } harness;
 
 static harness *g_h;
@@ -141,6 +143,10 @@ static void
 hrx(void *Ctx, const u8 *Frame, u32 Len)
 {
     (void)Ctx;
+    if (g_h->UseQ) {
+        (void)aic_frameq_push(&g_h->Q, Frame, Len);
+        return;
+    }
     if (g_h->RxCount < 16 && Len <= 2048) {
         memcpy(g_h->Rx[g_h->RxCount], Frame, Len);
         g_h->RxLen[g_h->RxCount++] = Len;
@@ -457,6 +463,199 @@ test_open_network(void)
     harness_free(h);
 }
 
+
+/* ------------------------------------------------- Ethernet end to end
+ *
+ * What Windows does over the adapter, done here by hand: DHCP discover,
+ * offer, request, ack; ARP for the gateway; ping it. Frames go out the way
+ * the driver's TX queue sends them (aic_build_tx, data pipe) and come back
+ * through the core's receive path into an aic_frameq, as the driver's RX
+ * queue takes them.
+ */
+
+static void
+os_send(harness *h, const u8 *Eth, u32 Len)
+{
+    u8 b[2100];
+    int n = aic_build_tx(&h->D, Eth, Len, b, sizeof(b));
+
+    CHECK(n > 0, "build tx %d", n);
+    if (n > 0) {
+        fake_send(&h->F, 0, b, (u32)n);
+    }
+}
+
+/* Next queued frame of the given ethertype (others are dropped), or 0. */
+static u32
+os_recv(harness *h, u16 Type, u8 *Out)
+{
+    const u8 *f;
+    u32 len;
+
+    fake_wait(&h->F, 0);
+    while ((f = aic_frameq_peek(&h->Q, &len)) != NULL) {
+        int match = aic_be16(f + 12) == Type;
+
+        if (match) {
+            memcpy(Out, f, len);
+        }
+        aic_frameq_pop(&h->Q);
+        if (match) {
+            return len;
+        }
+    }
+    return 0;
+}
+
+static u32
+ip_udp(u8 *F, const u8 *Src, u32 SrcIp, u32 DstIp, const u8 *Udp, u32 UdpLen)
+{
+    u8 *ip = F + 14;
+
+    memset(F, 0xFF, 6);
+    memcpy(F + 6, Src, 6);
+    aic_put_be16(F + 12, 0x0800);
+    memset(ip, 0, 20);
+    ip[0] = 0x45;
+    aic_put_be16(ip + 2, 20 + UdpLen);
+    ip[8] = 128;
+    ip[9] = 17;
+    ip[12] = (u8)(SrcIp >> 24); ip[13] = (u8)(SrcIp >> 16); ip[14] = (u8)(SrcIp >> 8); ip[15] = (u8)SrcIp;
+    ip[16] = (u8)(DstIp >> 24); ip[17] = (u8)(DstIp >> 16); ip[18] = (u8)(DstIp >> 8); ip[19] = (u8)DstIp;
+    aic_put_be16(ip + 10, fake_ip_checksum(ip, 20));
+    memcpy(ip + 20, Udp, UdpLen);
+    return 14 + 20 + UdpLen;
+}
+
+static u32
+dhcp_msg(u8 *F, const u8 *Mac, u8 Type, u32 Want)
+{
+    u8 u[8 + 260], *b = u + 8;
+    u32 n = 240;
+
+    memset(u, 0, sizeof(u));
+    aic_put_be16(u, 68);
+    aic_put_be16(u + 2, 67);
+    b[0] = 1; b[1] = 1; b[2] = 6;
+    b[4] = 0x12; b[5] = 0x34; b[6] = 0x56; b[7] = 0x78;
+    aic_put_be16(b + 10, 0x8000);   /* broadcast replies */
+    memcpy(b + 28, Mac, 6);
+    b[236] = 0x63; b[237] = 0x82; b[238] = 0x53; b[239] = 0x63;
+    b[n++] = 53; b[n++] = 1; b[n++] = Type;
+    if (Want) {
+        b[n++] = 50; b[n++] = 4;
+        b[n++] = (u8)(Want >> 24); b[n++] = (u8)(Want >> 16); b[n++] = (u8)(Want >> 8); b[n++] = (u8)Want;
+    }
+    b[n++] = 55; b[n++] = 3; b[n++] = 1; b[n++] = 3; b[n++] = 6;
+    b[n++] = 255;
+    aic_put_be16(u + 4, 8 + n);
+    return ip_udp(F, Mac, 0, 0xFFFFFFFF, u, 8 + n);
+}
+
+/* yiaddr and the option 53 type of a DHCP reply, 0 if it is not one. */
+static u8
+dhcp_reply(const u8 *F, u32 Len, u32 *Yi)
+{
+    const u8 *ip = F + 14, *b = ip + 28, *o;
+
+    if (Len < 14 + 28 + 240 || ip[9] != 17 || aic_be16(ip + 20) != 67 || aic_be16(ip + 22) != 68 ||
+        fake_ip_checksum(ip, 20) != 0 || b[0] != 2) {
+        return 0;
+    }
+    *Yi = (u32)b[16] << 24 | (u32)b[17] << 16 | (u32)b[18] << 8 | b[19];
+    for (o = b + 240; o < F + Len && *o != 255; o += (*o == 0) ? 1 : 2 + o[1]) {
+        if (*o == 53) {
+            return o[2];
+        }
+    }
+    return 0;
+}
+
+static void
+test_ethernet(void)
+{
+    harness *h = runtime_up("correct horse battery");
+    aic_dev *d = &h->D;
+    u8 f[1600], r[2048];
+    u32 n, yi = 0, i;
+    u8 gw_mac[6];
+
+    CHECK(aic_scan(d, 5000) == AIC_OK, "scan");
+    aic_wpa_pmk("correct horse battery", 21, (const u8 *)"home", 4, d->Wpa.Pmk);
+    d->Wpa.HavePmk = 1;
+    CHECK(aic_connect(d, aic_find_bss(d, (const u8 *)"home", 4), 5000) == AIC_OK, "connect");
+    h->UseQ = 1;
+
+    n = dhcp_msg(f, d->Mac, 1, 0);
+    os_send(h, f, n);
+    n = os_recv(h, 0x0800, r);
+    CHECK(n && dhcp_reply(r, n, &yi) == 2 && yi == FAKE_LEASE_IP, "DHCP offer: len %u yiaddr %08x", n, yi);
+    CHECK(n && memcmp(r + 6, "\x00\x11\x22\x33\x44\x55", 6) == 0 && r[0] == 0xFF, "offer is a broadcast from the gateway");
+    n = dhcp_msg(f, d->Mac, 3, yi);
+    os_send(h, f, n);
+    n = os_recv(h, 0x0800, r);
+    CHECK(n && dhcp_reply(r, n, &yi) == 5 && yi == FAKE_LEASE_IP, "DHCP ack");
+    CHECK(h->F.DhcpOffers == 1 && h->F.DhcpAcks == 1, "server saw discover and request");
+
+    /* ARP for the gateway */
+    memset(f, 0xFF, 6);
+    memcpy(f + 6, d->Mac, 6);
+    aic_put_be16(f + 12, 0x0806);
+    {
+        u8 *a = f + 14;
+
+        aic_put_be16(a, 1); aic_put_be16(a + 2, 0x0800); a[4] = 6; a[5] = 4; aic_put_be16(a + 6, 1);
+        memcpy(a + 8, d->Mac, 6);
+        a[14] = 192; a[15] = 168; a[16] = 50; a[17] = 23;
+        memset(a + 18, 0, 6);
+        a[24] = 192; a[25] = 168; a[26] = 50; a[27] = 1;
+    }
+    memset(f + 42, 0, 18);
+    os_send(h, f, 60);
+    n = os_recv(h, 0x0806, r);
+    CHECK(n >= 42 && aic_be16(r + 20) == 2 && memcmp(r, d->Mac, 6) == 0, "ARP reply for the gateway");
+    memcpy(gw_mac, r + 22, 6);
+
+    /* ping the gateway, 1400-byte payload so the frame spans USB packets */
+    {
+        u8 *ip = f + 14, *ic = ip + 20;
+        u32 ilen = 8 + 1400;
+
+        memcpy(f, gw_mac, 6);
+        memcpy(f + 6, d->Mac, 6);
+        aic_put_be16(f + 12, 0x0800);
+        memset(ip, 0, 20);
+        ip[0] = 0x45; aic_put_be16(ip + 2, 20 + ilen); ip[8] = 128; ip[9] = 1;
+        ip[12] = 192; ip[13] = 168; ip[14] = 50; ip[15] = 23;
+        ip[16] = 192; ip[17] = 168; ip[18] = 50; ip[19] = 1;
+        aic_put_be16(ip + 10, fake_ip_checksum(ip, 20));
+        memset(ic, 0, 8);
+        ic[0] = 8; ic[5] = 1; ic[7] = 1;
+        for (i = 0; i < 1400; i++) ic[8 + i] = (u8)(i * 7);
+        aic_put_be16(ic + 2, fake_ip_checksum(ic, ilen));
+        os_send(h, f, 14 + 20 + ilen);
+        n = os_recv(h, 0x0800, r);
+        CHECK(n == 14 + 20 + ilen && r[14 + 9] == 1 && r[34] == 0 && fake_ip_checksum(r + 34, ilen) == 0 &&
+              memcmp(r + 42, ic + 8, 1400) == 0, "echo reply, %u bytes", n);
+    }
+    CHECK(h->F.IpChecksumBad == 0 && h->F.TxDataBad == 0 && h->Q.Drops == 0, "no bad frames, no drops");
+
+    /* the FIFO itself: full, too long, order */
+    {
+        aic_frameq *q = calloc(1, sizeof(*q));
+        u32 l;
+
+        for (i = 0; i < AIC_FRAMEQ_SLOTS + 3; i++) {
+            f[0] = (u8)i;
+            (void)aic_frameq_push(q, f, 60);
+        }
+        CHECK(q->Drops == 4 && aic_frameq_peek(q, &l)[0] == 0 && l == 60, "frame FIFO full and ordered");
+        CHECK(aic_frameq_push(q, f, AIC_FRAMEQ_MAX + 1) == 0, "frame FIFO refuses long frames");
+        free(q);
+    }
+    harness_free(h);
+}
+
 /* Garbage must never crash the receive path (ASan build). */
 static void
 test_rx_fuzz(void)
@@ -584,6 +783,7 @@ main(int argc, char **argv)
         test_runtime();
         test_wrong_passphrase();
         test_open_network();
+        test_ethernet();
         test_rx_fuzz();
     }
     printf("%d checks, %d failed\n", g_checks, g_fail);

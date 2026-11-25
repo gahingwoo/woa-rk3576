@@ -331,6 +331,24 @@ int aic_tx_eth(aic_dev *Dev, const u8 *Eth, u32 EthLen);
  * negative error. Pure function. */
 int aic_rx_to_eth(const u8 *Pkt, u32 PktLen, u8 *Out, u32 OutMax);
 
+/* A FIFO of Ethernet frames from the core's receive path to the operating
+ * system's receive queue. No locking: the driver holds a spin lock around
+ * each call. Frames longer than AIC_FRAMEQ_MAX are refused. */
+#define AIC_FRAMEQ_SLOTS 64
+#define AIC_FRAMEQ_MAX   1536
+typedef struct aic_frameq {
+    u8  Buf[AIC_FRAMEQ_SLOTS][AIC_FRAMEQ_MAX];
+    u16 Len[AIC_FRAMEQ_SLOTS];
+    u32 Head, Tail;
+    u32 Drops;
+} aic_frameq;
+
+/* 1 if queued, 0 if full or too long (counted in Drops). */
+int aic_frameq_push(aic_frameq *Q, const u8 *Frame, u32 Len);
+/* The oldest frame, or NULL; aic_frameq_pop() releases it. */
+const u8 *aic_frameq_peek(const aic_frameq *Q, u32 *Len);
+void aic_frameq_pop(aic_frameq *Q);
+
 /* -------------------------------------------------- WPA2 (aic_wpa.c) */
 
 /* PMK = PBKDF2-HMAC-SHA1(passphrase, SSID, 4096, 32). */

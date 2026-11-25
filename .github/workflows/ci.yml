@@ -136,10 +136,12 @@ jobs:
 
   aic8800-package:
     name: AIC8800D80 Wi-Fi bring-up package, test-signed (aic8800usb)
-    # For a ROCK 4D board session: aic8800usb test-signed with a certificate
-    # made for this run, with signer.cer, install-firmware.ps1, the
-    # bring-up helper and the README, for pnputil on an installed Windows
-    # (docs/dev/aic8800.md). Not put on the WinPE media.
+    # For a ROCK 4D board session: aic8800usb.sys with its two INFs (the
+    # loader, Class System, and the network adapter, Class Net), test-signed
+    # with a certificate made for this run, with signer.cer,
+    # install-firmware.ps1, the bring-up helper and the README, for pnputil
+    # on an installed Windows (docs/dev/aic8800.md). Not put on the WinPE
+    # media.
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -176,7 +178,7 @@ jobs:
             Write-Host ("   {0,-14} {1}" -f $sig.Status, (Split-Path $sig.Path -Leaf))
             if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
           }
-          foreach ($f in 'aic8800usb.inf', 'aic8800usb.sys', 'aic8800usb.cat') {
+          foreach ($f in 'aic8800usb.inf', 'aic8800usb.sys', 'aic8800usb.cat', 'aic8800ldr.inf', 'aic8800ldr.cat') {
             if (-not (Test-Path (Join-Path $d $f))) { throw "package: $f missing" }
           }
           Copy-Item drivers\net\aic8800usb\install-firmware.ps1, drivers\net\aic8800usb\aic-bringup.ps1, `

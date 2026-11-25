@@ -31,6 +31,8 @@ static EVT_WDF_DEVICE_SELF_MANAGED_IO_SUSPEND AicEvtSelfManagedIoSuspend;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_RESTART AicEvtSelfManagedIoRestart;
 static KSTART_ROUTINE AicWorkerMain;
 
+static BOOLEAN g_LoaderService;     /* this image runs as aic8800ldr */
+
 /* ------------------------------------------------------------ registry */
 
 /*
@@ -46,11 +48,18 @@ OpenKey(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_ ACCESS_MASK Access, _Out_ WDFKEY *Key
     return WdfDeviceOpenRegistryKey(Ctx->Device, PLUGPLAY_REGKEY_DEVICE, Access, WDF_NO_OBJECT_ATTRIBUTES, Key);
 }
 
-static NTSTATUS
-OpenParams(_In_ ACCESS_MASK Access, _Out_ WDFKEY *Key)
+/* Services\aic8800usb\Parameters by its absolute path: the loader
+ * service (aic8800ldr) reads the same settings. */
+NTSTATUS
+AicOpenParams(_In_ ACCESS_MASK Access, _Out_ WDFKEY *Key)
 {
-    return WdfDriverOpenParametersRegistryKey(WdfGetDriver(), Access, WDF_NO_OBJECT_ATTRIBUTES, Key);
+    UNICODE_STRING path;
+
+    RtlInitUnicodeString(&path, AIC_PARAMS_PATH);
+    return WdfRegistryOpenKey(NULL, &path, Access, WDF_NO_OBJECT_ATTRIBUTES, Key);
 }
+
+#define OpenParams AicOpenParams
 
 /* The settings key that has Name: Parameters, else Device Parameters. */
 static NTSTATUS
@@ -294,8 +303,7 @@ OpenBootKey(_Out_ WDFKEY *Key)
     UNICODE_STRING n;
     NTSTATUS status;
 
-    status = WdfDriverOpenParametersRegistryKey(WdfGetDriver(), KEY_READ | KEY_WRITE, WDF_NO_OBJECT_ATTRIBUTES,
-                                                &params);
+    status = AicOpenParams(KEY_READ | KEY_WRITE, &params);
     if (!NT_SUCCESS(status)) {
         return status;
     }
@@ -362,6 +370,14 @@ PutStats(_In_ PAIC_DEVICE_CONTEXT Ctx)
     AicPutULong(Ctx, L"UsbRingDrops", Ctx->RingDrops);
     AicPutULong(Ctx, L"UsbReaderErrors", Ctx->ReaderErrors);
     AicPutULong(Ctx, L"LinkState", (ULONG)d->Link);
+    if (Ctx->Adapter) {
+        AicPutULong(Ctx, L"NetTxFrames", Ctx->TxFrames);
+        AicPutULong(Ctx, L"NetTxDrops", Ctx->TxDrops);
+        AicPutULong(Ctx, L"NetTxErrors", Ctx->TxErrors);
+        AicPutULong(Ctx, L"NetRxFrames", Ctx->RxFrames);
+        AicPutULong(Ctx, L"NetRxDrops", Ctx->RxDrops);
+        AicPutULong(Ctx, L"NetLinkReported", Ctx->LinkReported);
+    }
     if (d->LastError[0]) {
         AicPutString(Ctx, L"LastError", d->LastError);
     }
@@ -605,14 +621,19 @@ ScanAndJoin(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_ int Join)
     return rc;
 }
 
+/*
+ * In PrepareHardware (readers running): the stale-firmware check, the chip
+ * ID, and from stage 2 the firmware init, so that the adapter can start
+ * with the module's MAC address. Sets Ctx->FwReady.
+ */
 static VOID
-RuntimeStage(_In_ PAIC_DEVICE_CONTEXT Ctx)
+RuntimeInit(_In_ PAIC_DEVICE_CONTEXT Ctx)
 {
     aic_dev *d = &Ctx->Aic;
     CHAR mac[18];
-    ULONG tick = 0, retry = 0;
     int rc;
 
+    Ctx->FwReady = FALSE;
     if (GetBoot(L"FirmwareLoaded") != 1) {
         ULONG reboots = GetBoot(L"Reboots");
 
@@ -633,7 +654,6 @@ RuntimeStage(_In_ PAIC_DEVICE_CONTEXT Ctx)
     if (rc != AIC_OK || Ctx->Stage < AIC_STAGE_SCAN) {
         return;
     }
-
     AicCrumb(Ctx, "runtime: init");
     rc = aic_wlan_init(d);
     AicPutString(Ctx, L"FwVersion", d->FwVersion);
@@ -646,24 +666,38 @@ RuntimeStage(_In_ PAIC_DEVICE_CONTEXT Ctx)
         AicCrumb(Ctx, "runtime: init failed");
         return;
     }
-    rc = ScanAndJoin(Ctx, Ctx->Stage >= AIC_STAGE_CONNECT);
+    Ctx->FwReady = TRUE;
+}
+
+/* The worker: scan, join, then keep the link and report it to Windows. */
+static VOID
+RuntimeStage(_In_ PAIC_DEVICE_CONTEXT Ctx)
+{
+    aic_dev *d = &Ctx->Aic;
+    ULONG tick = 0, retry = 0;
+
+    if (!Ctx->FwReady) {
+        return;
+    }
+    (VOID)ScanAndJoin(Ctx, Ctx->Stage >= AIC_STAGE_CONNECT);
     PutStats(Ctx);
     if (Ctx->Stage < AIC_STAGE_CONNECT) {
         return;
     }
-
-    /* Keep the link: group rekeys, reconnect after a drop. */
+    AicNetUpdateLink(Ctx);
     while (!Ctx->Stopping) {
         if (!aic_poll(d)) {
             AicUsbOps.wait(Ctx, 200);
             tick++;
         }
+        AicNetUpdateLink(Ctx);
         if (d->Link == AIC_LINK_DOWN && tick >= 25) {
             tick = 0;
             if (++retry <= 20) {
                 AicPutULong(Ctx, L"Reconnects", retry);
                 AicPutULong(Ctx, L"DisconnectReason", d->DisconnectReason);
                 (VOID)ScanAndJoin(Ctx, 1);
+                AicNetUpdateLink(Ctx);
             }
         }
         if (tick && (tick % 50) == 0) {
@@ -671,6 +705,7 @@ RuntimeStage(_In_ PAIC_DEVICE_CONTEXT Ctx)
         }
     }
     (VOID)aic_disconnect(d);
+    AicNetUpdateLink(Ctx);
 }
 
 static VOID
@@ -719,7 +754,15 @@ AicEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
     ctx->Aic.TxBufSize = AIC_CMD_BUF_MAX + 2048;
     aic_init(&ctx->Aic);
     AicCrumb(ctx, ctx->Runtime ? "prepare: runtime firmware (PID_8D81)" : "prepare: ROM loader (PID_8D80)");
-    return STATUS_SUCCESS;
+    if (ctx->Adapter == NULL) {
+        return STATUS_SUCCESS;          /* the loader service */
+    }
+    if (ctx->Runtime && ctx->Stage >= AIC_STAGE_FIRMWARE && NT_SUCCESS(AicUsbStartReaders(ctx))) {
+        RuntimeInit(ctx);
+    }
+    status = AicNetStart(ctx);
+    AicPutULong(ctx, L"AdapterStartStatus", (ULONG)status);
+    return status;
 }
 
 static NTSTATUS
@@ -728,6 +771,7 @@ AicEvtReleaseHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Translated)
     PAIC_DEVICE_CONTEXT ctx = AicGetContext(Device);
 
     UNREFERENCED_PARAMETER(Translated);
+    AicUsbStopReaders(ctx);
     if (ctx->Ring) {
         ExFreePoolWithTag(ctx->Ring, AIC_POOL_TAG);
         ctx->Ring = NULL;
@@ -817,6 +861,7 @@ static VOID
 AicEvtDeviceCleanup(_In_ WDFOBJECT Object)
 {
     StopWorker(AicGetContext((WDFDEVICE)Object));
+    AicNetFree(AicGetContext((WDFDEVICE)Object));
 }
 
 static NTSTATUS
@@ -829,6 +874,12 @@ AicEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Driver);
+    if (!g_LoaderService) {
+        status = NetDeviceInitConfig(DeviceInit);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+    }
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = AicEvtPrepareHardware;
     pnp.EvtDeviceReleaseHardware = AicEvtReleaseHardware;
@@ -851,13 +902,29 @@ AicEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     KeInitializeSpinLock(&ctx->RingLock);
     KeInitializeEvent(&ctx->RxEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&ctx->StopEvent, NotificationEvent, FALSE);
+    KeInitializeSpinLock(&ctx->DataLock);
+    if (!g_LoaderService) {
+        return AicNetCreateAdapter(ctx);
+    }
     return STATUS_SUCCESS;
 }
 
 NTSTATUS
 DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 {
+    static const WCHAR ldr[] = L"\\aic8800ldr";
+    const USHORT n = (USHORT)(sizeof(ldr) - sizeof(WCHAR));
     WDF_DRIVER_CONFIG config;
+
+    /* Which service is this: ...\Services\aic8800ldr is the loader. */
+    if (RegistryPath->Length >= n) {
+        UNICODE_STRING tail, want;
+
+        tail.Buffer = (PWCH)((PUCHAR)RegistryPath->Buffer + RegistryPath->Length - n);
+        tail.Length = tail.MaximumLength = n;
+        RtlInitUnicodeString(&want, ldr);
+        g_LoaderService = RtlEqualUnicodeString(&tail, &want, TRUE);
+    }
 
     WDF_DRIVER_CONFIG_INIT(&config, AicEvtDeviceAdd);
     return WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &config, WDF_NO_HANDLE);

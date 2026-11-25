@@ -4,10 +4,21 @@
 #       every AIC8800 USB device (loader PID_8D80, runtime PID_8D81 and its
 #       Bluetooth interfaces), its PnP state, and what the driver recorded
 #       under its Device Parameters (the stored PMK is not printed)
-#   aic-bringup.ps1 -Stage 3 -Ssid home -Passphrase 'secret'
-#       write the settings (service Parameters key, read by both device
-#       instances). The driver replaces Passphrase by Pmk the first time it
-#       uses it. Restart Windows afterwards: the stages run at device start.
+#   aic-bringup.ps1 -Connect -Ssid home
+#       join "home" with all stages on (Stage 4: the adapter carries
+#       traffic). The passphrase is asked for without echo; it is never
+#       printed, logged or kept in PowerShell's history. The driver replaces
+#       it by the PMK the first time it uses it.
+#   aic-bringup.ps1 -Stage 3 -Ssid home
+#       a single stage, for the step-by-step board session
+#
+# Settings go to HKLM\SYSTEM\CurrentControlSet\Services\aic8800usb\Parameters,
+# read by both services (aic8800ldr and aic8800usb); -Connect also limits that
+# key to SYSTEM and Administrators, since it holds the PMK. Restart Windows
+# afterwards: the stages run at device start.
+#
+# Passing -Passphrase on the command line works too, but then it is in the
+# console history; prefer the prompt.
 #
 # Run as administrator.
 #
@@ -18,25 +29,58 @@ param(
     [int] $Stage = -1,
     [string] $Ssid = '',
     [string] $Passphrase = '',
+    [switch] $Connect,
     [switch] $Status
 )
 
 $ErrorActionPreference = 'Stop'
 $params = 'HKLM:\SYSTEM\CurrentControlSet\Services\aic8800usb\Parameters'
 
-if ($Stage -ge 0 -or $Ssid -ne '' -or $Passphrase -ne '') {
-    New-Item -Path $params -Force | Out-Null
-    if ($Stage -ge 0) { Set-ItemProperty -Path $params -Name Stage -Type DWord -Value $Stage }
-    if ($Ssid -ne '') { Set-ItemProperty -Path $params -Name Ssid -Type String -Value $Ssid }
-    if ($Passphrase -ne '') {
-        if ($Passphrase.Length -lt 8 -or $Passphrase.Length -gt 64) { throw 'a WPA2 passphrase has 8 to 63 characters (or 64 hex digits)' }
-        Set-ItemProperty -Path $params -Name Passphrase -Type String -Value $Passphrase
-        Remove-ItemProperty -Path $params -Name Pmk -ErrorAction SilentlyContinue
+function Protect-Key([string] $Path) {
+    # Only SYSTEM and Administrators: the key holds the PMK.
+    $acl = New-Object System.Security.AccessControl.RegistrySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in 'S-1-5-18', 'S-1-5-32-544') {     # SYSTEM, Administrators (any language)
+        $who = New-Object System.Security.Principal.SecurityIdentifier($sid)
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule($who, 'FullControl',
+            'ContainerInherit,ObjectInherit', 'None', 'Allow')))
     }
-    Write-Host 'Settings written. Restart Windows for them to take effect.'
+    Set-Acl -Path $Path -AclObject $acl
 }
 
-if ($Status -or ($Stage -lt 0 -and $Ssid -eq '' -and $Passphrase -eq '')) {
+if ($Connect) {
+    if ($Ssid -eq '') { throw '-Connect needs -Ssid' }
+    if ($Stage -lt 0) { $Stage = 4 }
+    if ($Passphrase -eq '') {
+        $sec = Read-Host -AsSecureString "Passphrase for '$Ssid'"
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+        try { $Passphrase = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    }
+}
+
+if ($Stage -ge 0 -or $Ssid -ne '' -or $Passphrase -ne '') {
+    New-Item -Path $params -Force | Out-Null
+    if ($Connect) { Protect-Key $params }
+    if ($Stage -ge 0) { Set-ItemProperty -Path $params -Name Stage -Type DWord -Value $Stage }
+    if ($Ssid -ne '') {
+        Set-ItemProperty -Path $params -Name Ssid -Type String -Value $Ssid
+        # a different network: the old PMK (which is per SSID) no longer fits
+        Remove-ItemProperty -Path $params -Name Pmk -ErrorAction SilentlyContinue
+    }
+    if ($Passphrase -ne '') {
+        if ($Passphrase.Length -lt 8 -or $Passphrase.Length -gt 64) {
+            $Passphrase = $null
+            throw 'a WPA2 passphrase has 8 to 63 characters (or 64 hex digits)'
+        }
+        Set-ItemProperty -Path $params -Name Passphrase -Type String -Value $Passphrase
+        Remove-ItemProperty -Path $params -Name Pmk -ErrorAction SilentlyContinue
+        $Passphrase = $null
+    }
+    Write-Host 'Settings written (passphrase not shown). Restart Windows for them to take effect.'
+}
+
+if ($Status -or ($Stage -lt 0 -and $Ssid -eq '' -and -not $Connect)) {
     if (Test-Path $params) {
         $p = Get-ItemProperty -Path $params
         Write-Host ("Settings: Stage={0} Ssid='{1}' Passphrase={2} Pmk={3}" -f $p.Stage, $p.Ssid,
@@ -64,6 +108,14 @@ if ($Status -or ($Stage -lt 0 -and $Ssid -eq '' -and $Passphrase -eq '')) {
         }
     }
     Write-Host ''
+    $nic = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like 'AIC8800*' }
+    foreach ($n in $nic) {
+        Write-Host ("Adapter: {0}  {1}  {2}  {3}" -f $n.Name, $n.Status, $n.MacAddress, $n.LinkSpeed)
+        Get-NetIPAddress -InterfaceIndex $n.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host ("   IPv4 {0}/{1} ({2})" -f $_.IPAddress, $_.PrefixLength, $_.PrefixOrigin) }
+        Get-NetRoute -InterfaceIndex $n.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host ("   gateway {0}" -f $_.NextHop) }
+    }
     Get-PnpDevice -Class Bluetooth -PresentOnly -ErrorAction SilentlyContinue |
         ForEach-Object { Write-Host ("Bluetooth: {0}  [{1}] {2}" -f $_.InstanceId, $_.Status, $_.FriendlyName) }
 }

@@ -49,6 +49,10 @@
     <!-- Must be declared here: the WDK targets read it at Cpp.props time. -->
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
     <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
+    <!-- NetAdapterCx 2.1, as dwc_eqos: present on every Windows 11. -->
+    <NetAdapterDriver>true</NetAdapterDriver>
+    <NETADAPTER_VERSION_MAJOR>2</NETADAPTER_VERSION_MAJOR>
+    <NETADAPTER_VERSION_MINOR>1</NETADAPTER_VERSION_MINOR>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -75,6 +79,7 @@
     <ClCompile Include="driver.c" />
     <ClCompile Include="usb.c" />
     <ClCompile Include="files.c" />
+    <ClCompile Include="netadapter.c" />
     <ClCompile Include="aic_core.c" />
     <ClCompile Include="aic_fw.c" />
     <ClCompile Include="aic_wlan.c" />
@@ -91,6 +96,7 @@
 
   <ItemGroup>
     <Inf Include="aic8800usb.inf" />
+    <Inf Include="aic8800ldr.inf" />
   </ItemGroup>
 
 

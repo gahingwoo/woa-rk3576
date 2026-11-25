@@ -34,7 +34,7 @@ AicLoadFile(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG MaxBytes,
     /* FirmwareDir: the service's Parameters key, then Device Parameters */
     RtlInitUnicodeString(&valueName, L"FirmwareDir");
     dir.Length = 0;
-    if (NT_SUCCESS(WdfDriverOpenParametersRegistryKey(WdfGetDriver(), KEY_READ, WDF_NO_OBJECT_ATTRIBUTES, &key))) {
+    if (NT_SUCCESS(AicOpenParams(KEY_READ, &key))) {
         if (!NT_SUCCESS(WdfRegistryQueryUnicodeString(key, &valueName, NULL, &dir))) {
             dir.Length = 0;
         }

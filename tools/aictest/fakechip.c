@@ -439,6 +439,151 @@ ap_rx_eapol(fakechip *F, u8 *E, u32 Len)
     FAIL("EAPOL in handshake state %d", F->HsState);
 }
 
+
+/* -------------------------------------------------------------- LAN */
+
+u16
+fake_ip_checksum(const u8 *P, u32 Len)
+{
+    u32 sum = 0, i;
+
+    for (i = 0; i + 1 < Len; i += 2) {
+        sum += (u32)(P[i] << 8 | P[i + 1]);
+    }
+    if (Len & 1) {
+        sum += (u32)(P[Len - 1] << 8);
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    return (u16)~sum;
+}
+
+static void
+put_be32(u8 *P, u32 V)
+{
+    P[0] = (u8)(V >> 24); P[1] = (u8)(V >> 16); P[2] = (u8)(V >> 8); P[3] = (u8)V;
+}
+
+static u32
+get_be32(const u8 *P)
+{
+    return (u32)P[0] << 24 | (u32)P[1] << 16 | (u32)P[2] << 8 | P[3];
+}
+
+/* An IPv4 packet from the gateway: header + Payload (UDP or ICMP body
+ * already complete), to Dst (an Ethernet address). */
+static void
+lan_send_ip(fakechip *F, const u8 *DstMac, u32 DstIp, u8 Proto, const u8 *Body, u32 Len)
+{
+    u8 ip[1500];
+
+    memset(ip, 0, 20);
+    ip[0] = 0x45;
+    aic_put_be16(ip + 2, 20 + Len);
+    ip[8] = 64;
+    ip[9] = Proto;
+    put_be32(ip + 12, FAKE_GW_IP);
+    put_be32(ip + 16, DstIp);
+    aic_put_be16(ip + 10, fake_ip_checksum(ip, 20));
+    memcpy(ip + 20, Body, Len);
+    fake_ap_send_data(F, DstMac, 0x0800, ip, 20 + Len, 1, 1);
+}
+
+static void
+lan_dhcp(fakechip *F, const u8 *Udp, u32 Len)
+{
+    static const u8 bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    const u8 *b = Udp + 8, *o;
+    u8 r[8 + 300], *rb = r + 8, type = 0;
+    u32 blen = Len - 8, n;
+
+    if (Len < 8 + 240 || b[0] != 1 || get_be32(b + 236) != 0x63825363) {
+        FAIL("DHCP from the STA is malformed");
+        return;
+    }
+    for (o = b + 240; o < b + blen && *o != 255; o += (*o == 0) ? 1 : 2 + o[1]) {
+        if (*o == 53 && o[1] == 1) {
+            type = o[2];
+        }
+    }
+    if (type != 1 && type != 3) {
+        FAIL("DHCP message type %u", type);
+        return;
+    }
+    memset(r, 0, sizeof(r));
+    rb[0] = 2;                          /* BOOTREPLY */
+    rb[1] = 1;
+    rb[2] = 6;
+    memcpy(rb + 4, b + 4, 4);           /* xid */
+    put_be32(rb + 16, FAKE_LEASE_IP);   /* yiaddr */
+    put_be32(rb + 20, FAKE_GW_IP);      /* siaddr */
+    memcpy(rb + 28, b + 28, 16);        /* chaddr */
+    put_be32(rb + 236, 0x63825363);
+    n = 240;
+    rb[n++] = 53; rb[n++] = 1; rb[n++] = type == 1 ? 2 : 5;
+    rb[n++] = 54; rb[n++] = 4; put_be32(rb + n, FAKE_GW_IP); n += 4;
+    rb[n++] = 51; rb[n++] = 4; put_be32(rb + n, 86400); n += 4;
+    rb[n++] = 1; rb[n++] = 4; put_be32(rb + n, 0xFFFFFF00); n += 4;
+    rb[n++] = 3; rb[n++] = 4; put_be32(rb + n, FAKE_GW_IP); n += 4;
+    rb[n++] = 6; rb[n++] = 4; put_be32(rb + n, FAKE_GW_IP); n += 4;
+    rb[n++] = 255;
+    aic_put_be16(r, 67);
+    aic_put_be16(r + 2, 68);
+    aic_put_be16(r + 4, 8 + n);
+    aic_put_be16(r + 6, 0);             /* UDP checksum optional on IPv4 */
+    if (type == 1) {
+        F->DhcpOffers++;
+    } else {
+        F->DhcpAcks++;
+    }
+    lan_send_ip(F, bcast, 0xFFFFFFFF, 17, r, 8 + n);
+}
+
+/* A frame the STA sent to the LAN (keys are in place, port open). */
+static void
+lan_rx(fakechip *F, const u8 *Eth, u32 Len)
+{
+    u16 type = aic_be16(Eth + 12);
+    const u8 *p = Eth + 14;
+    u32 plen = Len - 14;
+
+    if (type == 0x0806 && plen >= 28 && aic_be16(p + 6) == 1 && get_be32(p + 24) == FAKE_GW_IP) {
+        u8 a[28];
+
+        memcpy(a, p, 8);
+        aic_put_be16(a + 6, 2);
+        memcpy(a + 8, k_lan_mac, 6);
+        put_be32(a + 14, FAKE_GW_IP);
+        memcpy(a + 18, p + 8, 10);      /* the asker's MAC and IP */
+        F->ArpReplies++;
+        fake_ap_send_data(F, Eth + 6, 0x0806, a, 28, 1, 1);
+        return;
+    }
+    if (type != 0x0800 || plen < 20 || (p[0] >> 4) != 4) {
+        return;
+    }
+    if (fake_ip_checksum(p, (u32)(p[0] & 15) * 4) != 0) {
+        F->IpChecksumBad++;
+        return;
+    }
+    if (p[9] == 17 && plen >= 28 && aic_be16(p + 22) == 67) {
+        lan_dhcp(F, p + 20, aic_be16(p + 2) - 20);
+        return;
+    }
+    if (p[9] == 1 && get_be32(p + 16) == FAKE_GW_IP && p[20] == 8) {
+        u8 icmp[1500];
+        u32 ilen = aic_be16(p + 2) - 20;
+
+        memcpy(icmp, p + 20, ilen);
+        icmp[0] = 0;                    /* echo reply */
+        aic_put_be16(icmp + 2, 0);
+        aic_put_be16(icmp + 2, fake_ip_checksum(icmp, ilen));
+        F->EchoReplies++;
+        lan_send_ip(F, Eth + 6, get_be32(p + 12), 1, icmp, ilen);
+    }
+}
+
 /* ------------------------------------------------------------ TX path */
 
 static void
@@ -485,6 +630,10 @@ tx_data(fakechip *F, const u8 *Buf, u32 Len)
             return;
         }
         ap_rx_eapol(F, eth + 14, plen);
+        return;
+    }
+    if (F->Joined >= 0 && F->PortOpen) {
+        lan_rx(F, eth, 14 + plen);
     }
 }
 
