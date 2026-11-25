@@ -12,6 +12,8 @@ Status on 2026-11-24:
   UART4.
 - Wi-Fi: not working on either board, and nothing is built. The assessment
   below still holds.
+- ROCK 4D (AIC8800D80 on USB, a different chip): a bring-up driver is on
+  branch `aic8800-usb`, not tried on a board; see [aic8800.md](aic8800.md).
 
 The assessment as written on 2026-11-21, before Bluetooth worked, is in
 [history](../history/2026-11-21-wireless-assessment.md); its Bluetooth plan

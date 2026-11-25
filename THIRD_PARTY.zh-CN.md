@@ -32,6 +32,7 @@
 | `drivers/video/vdpu383/lib/vdpu383_cabac.c` | Rockchip Electronics（MPP） | Apache-2.0 OR MIT（文件头） |
 | `drivers/video/vdpu383/lib/vdpu383_h264.c`，寄存器布局 | 移植自 Rockchip MPP，mpp/hal/rkdec | Apache-2.0 OR MIT，按 MIT 使用；整个文件连同这里做的修改为 GPL-2.0-only（文件头） |
 | `drivers/video/vdpu383/warmup.c`，预热数据和顺序 | Rockchip Electronics，厂商内核 mpp_hack_rk3576.c | GPL-2.0+ OR MIT，按 GPL-2.0 使用；该文件为 GPL-2.0-only（文件头） |
+| `drivers/net/aic8800usb`：协议数值、消息布局、下载顺序 | AICSemi、RivieraWaves（radxa-pkg/aic8800 中的 Linux 驱动） | GPL-2；未复制代码；这些文件为 GPL-2.0-only（`LICENSING.md`） |
 
 有两项没有明确的许可证：`dwcsdhc` 和 `csaudiork3x`。
 
@@ -55,6 +56,8 @@ Ampak 为 AP6256 做的版本（armbian/firmware）没有写明许可证；Raspb
 （RPi-Distro/bluez-firmware）采用 Cypress 的许可证，允许以目标代码形式再分发，用于 Cypress 的器件。
 驱动的 `install-firmware.ps1` 在板子上下载其中之一，固定在某个 commit，并校验其 SHA-256。
 为了 BthX 接口参考过 Microsoft 的 SerialHCIBus 示例（MS-PL），但没有使用其中的任何代码，因为 MS-PL 和 GPL-2.0 不能合并。
+
+`drivers/net/aic8800usb` 需要 AICSemi 的 AIC8800D80 固件和 ROM 补丁，AICSemi 发布时没有附许可证。它们不在本仓库里，也不在本仓库构建的任何包里；驱动的 `install-firmware.ps1` 在板子上从 radxa-pkg/aic8800 的固定提交下载，并逐个核对 SHA-256。
 
 ## 未导入的部分
 

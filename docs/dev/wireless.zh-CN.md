@@ -8,6 +8,7 @@
   没有语音（SCO）。这个驱动自己驱动 UART6，不另外用 SerCx2 UART 驱动，并把 HCI 链路交给系统自带的 BthMini；具体做法见它的 README。
 - CM5-IO 上的蓝牙：没写。它的模块是另一颗芯片，接在 UART4 上。
 - Wi-Fi：两块板子都不能用，也没有做任何东西。下面的评估仍然成立。
+- ROCK 4D（USB 接口的 AIC8800D80，另一颗芯片）：分支 `aic8800-usb` 上有一个 bring-up 驱动，还没在板子上试过；见 [aic8800.zh-CN.md](aic8800.zh-CN.md)。
 
 2026-11-21 写的评估原文（当时蓝牙还不能用）在
 [history](../history/2026-11-21-wireless-assessment.md)；其中的蓝牙方案（SerCx2 驱动加 cywbtserialbus）最后没有采用。
