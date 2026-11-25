@@ -19,7 +19,7 @@
 
 #define V383_POOL_TAG   '383V'
 
-/* IOMMU (rockchip-iommu.c) */
+/* IOMMU (rockchip-iommu.c). Two instances, +0x800 and +0x900, one table. */
 #define RK_MMU_DTE_ADDR         0x00
 #define RK_MMU_STATUS           0x04
 #define RK_MMU_COMMAND          0x08
@@ -28,19 +28,44 @@
 #define RK_MMU_INT_CLEAR        0x18
 #define RK_MMU_INT_MASK         0x1C
 #define RK_MMU_INT_STATUS       0x20
+#define RK_MMU_AUTO_GATING      0x24
 #define RK_MMU_STATUS_PAGING    0x01
+#define RK_MMU_STATUS_FAULT     0x02
 #define RK_MMU_STATUS_STALL     0x04
+#define RK_MMU_STATUS_FAULT_IS_WRITE 0x20
+#define RK_MMU_CMD_ENABLE_PAGING  0
 #define RK_MMU_CMD_DISABLE_PAGING 1
 #define RK_MMU_CMD_ENABLE_STALL   2
 #define RK_MMU_CMD_DISABLE_STALL  3
+#define RK_MMU_CMD_ZAP_CACHE      4
+#define RK_MMU_CMD_PAGE_FAULT_DONE 5
+#define RK_MMU_IRQ_PAGE_FAULT   0x01
+#define RK_MMU_IRQ_BUS_ERROR    0x02
+#define RK_MMU_IRQ_MASK         (RK_MMU_IRQ_PAGE_FAULT | RK_MMU_IRQ_BUS_ERROR)
+#define RK_MMU_AUTO_GATING_DISABLE_FETCH_DTE_TIME_LIMIT 0x80000000u
+
+/*
+ * IO address space of the decoder with paging on: 32 bits, a directory of
+ * 1024 entries, each a page table of 1024 4 KiB pages (4 MiB). Addresses
+ * below V383_IOVA_FIRST are never handed out, so 0 stays "no buffer" in
+ * the address check and a small garbage address faults.
+ */
+#define V383_IOVA_PAGES         0x100000u           /* 4 GiB / 4 KiB */
+#define V383_IOVA_FIRST         0x01000000u         /* 16 MiB */
+#define V383_PT_COUNT           1024u
+/* more page faults than this in one decode: the IOMMU interrupt is masked
+ * until the decode has been stopped, so a runaway core cannot storm */
+#define V383_MMU_FAULTS_PER_RUN 32
 
 typedef struct _V383_ALLOC {
     LIST_ENTRY      Link;
     ULONG           Handle;
     WDFFILEOBJECT   Owner;
     PEPROCESS       Process;
-    PVOID           Kva;
-    PHYSICAL_ADDRESS Pa;
+    BOOLEAN         Iova;       /* pages from MmAllocatePagesForMdlEx, mapped at Dma */
+    PVOID           Kva;        /* contiguous path only */
+    PHYSICAL_ADDRESS Pa;        /* contiguous path only */
+    ULONG           Dma;        /* what the decoder is given: IO address or physical */
     SIZE_T          Size;
     PMDL            Mdl;
     PVOID           UserVa;
@@ -79,6 +104,32 @@ typedef struct _DEVICE_CONTEXT {
     PVOID           WarmVa;
     PHYSICAL_ADDRESS WarmPa;
     VDPU383_WARMUP_RESULT Warm;
+
+    /* IOMMU. IommuSetting: Device Parameters "Iommu" (default 1; 0 = the
+     * old physically contiguous buffers with paging off). IommuOn: the
+     * tables exist and paging was turned on at D0 entry, so buffers are
+     * mapped. MmuLock serialises the tables, the IO address bitmap and the
+     * IOMMU commands. */
+    ULONG           IommuSetting;
+    BOOLEAN         IommuOn;
+    BOOLEAN         MmuLive;        /* in D0 with paging on: TLB zaps go to the hardware */
+    BOOLEAN         SramMapped;
+    ULONG           WarmMappedIova; /* the warm-up buffer's identity mapping, or 0 */
+    FAST_MUTEX      MmuLock;
+    PULONG          Dt;
+    PHYSICAL_ADDRESS DtPa;
+    PULONG          PtVa[V383_PT_COUNT];
+    ULONG64         PtPa[V383_PT_COUNT];
+    RTL_BITMAP      IovaMap;
+    PULONG          IovaBits;
+    ULONG           IovaHint;
+    ULONG           IovaPagesMapped;
+    ULONG           MmuEnables;
+    volatile LONG   RunMmuFaults;   /* fault interrupts during the current decode */
+    ULONG           RunFaultAddr;
+    ULONG           RunFaultStatus;
+    volatile LONG   MmuFaults;      /* all of them */
+    ULONG           AllocFailures;
 
     /* DMA buffers handed to user mode */
     WDFWAITLOCK     AllocLock;

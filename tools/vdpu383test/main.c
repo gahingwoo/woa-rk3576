@@ -9,7 +9,8 @@
  *                                         (non-link) submit path
  *   vdpu383test regs [offset] [count]     read registers (byte offset, words)
  *   vdpu383test reset                     IP reset (link 0x44)
- *   vdpu383test decode IN.264 [options]   decode an Annex B file
+ *   vdpu383test decode IN.264 [options]   decode an Annex B file (H.264, or HEVC
+ *                                         Main: told apart by the first NAL unit)
  *   vdpu383test replay DIR/replay.txt     run one dumped picture again
  *   vdpu383test selftest                  checks that need no hardware
  *
@@ -28,6 +29,12 @@
  *   --link-vendor   link 0x54 = 0x7FFFFF and 0x58 = 0x01000000 (vendor kernel)
  *                   instead of mainline's (register 13, 0)
  *   --null          no device: parse and build registers only
+ *   --hevc, --h264  the codec, when the first NAL unit does not tell
+ *
+ * HEVC: every picture's reference sets are also derived from its slice
+ * headers as the decoder derives them, once with the SPS's sets (the
+ * parser's) and once with the table the builder rebuilds from DXVA alone,
+ * and compared with what DXVA states ("rps check" at the end).
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
  * SPDX-License-Identifier: GPL-2.0-only
@@ -63,6 +70,7 @@ static double now_ms(void)
 
 #include "dev.h"
 #include "h264parse.h"
+#include "hevcparse.h"
 #include "md5.h"
 
 /* ------------------------------------------------------------- helpers */
@@ -114,6 +122,7 @@ static const char *run_result_name(unsigned r)
     case VDPU383_RUN_HW_ERROR: return "HW-ERROR";
     case VDPU383_RUN_BAD_ADDRESS: return "BAD-ADDRESS";
     case VDPU383_RUN_BUSY: return "BUSY";
+    case VDPU383_RUN_MMU_FAULT: return "MMU-FAULT";
     default: return "?";
     }
 }
@@ -162,6 +171,11 @@ static int cmd_info(void)
     printf("IOMMU last fault    status 0x%08x/0x%08x addr 0x%08x/0x%08x\n",
            in.mmu_last_status[0], in.mmu_last_status[1], in.mmu_last_fault_addr[0], in.mmu_last_fault_addr[1]);
     printf("runs %u, timeouts %u\n", in.runs, in.timeouts);
+    if (in.interface_version >= 2)
+        printf("buffers             %s (Iommu setting %u); directory 0x%08x, %u pages mapped, "
+               "%u IOMMU faults, paging programmed %u times, %u failed allocations\n",
+               in.iommu ? "IO addresses, IOMMU paging on" : "physical, contiguous", in.iommu_setting,
+               in.iommu_dt_dma, in.iova_pages, in.mmu_faults, in.mmu_enables, in.alloc_failures);
     printf("warm-up at D0 entry: ran %u timed_out %u irq 0x%08x status 0x%08x (", in.warmup.ran,
            in.warmup.timed_out, in.warmup.irq, in.warmup.status);
     print_status_bits(in.warmup.status & 0xFFFF);
@@ -322,6 +336,10 @@ typedef struct Dec {
 
     unsigned pictures, hw_errors;
     double   hw_ms;
+
+    /* HEVC */
+    V383_HevcRpsTable rebuilt;
+    unsigned rps_real_bad, rps_rebuilt_bad, rps_unsupported, rps_logged;
 } Dec;
 
 static unsigned popcount(unsigned v)
@@ -566,6 +584,8 @@ static int decode_cb(void *ctx, const H264Picture *pic)
         if (out.result == VDPU383_RUN_BAD_ADDRESS)
             printf("    rejected: register %u = 0x%08x is not in a buffer of this process\n",
                    out.bad_reg, out.bad_reg < V383_NUM_REGS ? in->regs[out.bad_reg] : 0);
+        if (out.result == VDPU383_RUN_MMU_FAULT)
+            printf("    IOMMU fault at IO address 0x%08x\n", out.bad_reg);
         printf("    mmu status 0x%08x/0x%08x rawstat 0x%08x/0x%08x reset_status 0x%08x\n",
                out.mmu_status[0], out.mmu_status[1], out.mmu_int_rawstat[0], out.mmu_int_rawstat[1],
                out.reset_status);
@@ -640,10 +660,183 @@ static void output_cb(void *ctx, int slot, unsigned decode_index, int poc)
     d->out_count++;
 }
 
+/* ---------------------------------------------------------------- HEVC */
+
+static int setup_surfaces_hevc(Dec *d, const HevcPicture *pic)
+{
+    unsigned i, colmv, cb = 1u << (pic->pp.log2_min_luma_coding_block_size_minus3 + 3);
+
+    if (d->width == pic->width && d->height == pic->height && d->surf[0].handle)
+        return 0;
+    free_surfaces(d);
+    d->width = pic->width;
+    d->height = pic->height;
+    d->hor = d->stride_mpp ? mpp_stride(pic->width) : align_up(pic->width, 64);
+    d->ver = align_up(pic->height, 16);
+    colmv = v383_hevc_colmv_size(pic->width, pic->height, cb);
+    d->colmv_off = align_up(d->hor * d->ver * 2, 4096);
+    d->surf_size = d->colmv_off + align_up(colmv, 4096);
+    for (i = 0; i < HEVC_MAX_SLOTS; i++) {
+        if (dev_alloc(d->surf_size, &d->surf[i])) {
+            fprintf(stderr, "surface alloc (%u bytes): %s\n", d->surf_size, dev_error());
+            return -1;
+        }
+        memset(d->surf[i].cpu, 0, d->surf_size);
+        d->vs[i].dma = d->surf[i].dma;
+        d->vs[i].colmv_dma = d->surf[i].dma + d->colmv_off;
+    }
+    if (dev_alloc(v383_hevc_rcb_size(pic->width, pic->height) + 4096, &d->rcb)) {
+        fprintf(stderr, "rcb alloc: %s\n", dev_error());
+        return -1;
+    }
+    memset(d->rcb.cpu, 0, d->rcb.size);
+    printf("# HEVC %ux%u, stride %u x %u, %u surfaces of %u bytes, colmv at +0x%x\n",
+           pic->width, pic->height, d->hor, d->ver, HEVC_MAX_SLOTS, d->surf_size, d->colmv_off);
+    return 0;
+}
+
+static void rps_checks(Dec *d, const HevcPicture *pic)
+{
+    char why[160];
+    int rc;
+
+    if (v383_hevc_check_rps(&pic->pp, pic->stream, (unsigned)pic->stream_len, &pic->extra.rps, why, sizeof(why))) {
+        d->rps_real_bad++;
+        if (d->rps_logged++ < 10)
+            printf("    rps check, the SPS's sets: picture %u poc %d: %s\n", pic->decode_index, pic->poc, why);
+    }
+    rc = v383_hevc_rebuild_rps(&pic->pp, pic->stream, (unsigned)pic->stream_len, &d->rebuilt);
+    if (rc) {
+        d->rps_unsupported++;
+        if (d->rps_logged++ < 10)
+            printf("    rps check, rebuilt from DXVA: picture %u poc %d: no table (%d)\n", pic->decode_index,
+                   pic->poc, rc);
+    } else if (v383_hevc_check_rps(&pic->pp, pic->stream, (unsigned)pic->stream_len, &d->rebuilt, why, sizeof(why))) {
+        d->rps_rebuilt_bad++;
+        if (d->rps_logged++ < 10)
+            printf("    rps check, rebuilt from DXVA: picture %u poc %d: %s\n", pic->decode_index, pic->poc, why);
+    }
+}
+
+static int decode_cb_hevc(void *ctx, const HevcPicture *pic)
+{
+    Dec *d = (Dec *)ctx;
+    V383_HevcInput bi;
+    V383_RegFile rf;
+    VDPU383_RUN_IN *in;
+    VDPU383_RUN_OUT out;
+    unsigned need, r, i, refs = 0;
+    int rc;
+    double t0;
+    char hex[33];
+
+    if (setup_surfaces_hevc(d, pic))
+        return -1;
+    d->crop_l = pic->crop_left;
+    d->crop_r = pic->crop_right;
+    d->crop_t = pic->crop_top;
+    d->crop_b = pic->crop_bottom;
+
+    need = v383_hevc_stream_read_len((unsigned)pic->stream_len);
+    if (need > d->strm.size) {
+        dev_free(&d->strm);
+        if (dev_alloc(need > (4u << 20) ? need : (4u << 20), &d->strm)) {
+            fprintf(stderr, "stream alloc: %s\n", dev_error());
+            return -1;
+        }
+    }
+    memcpy(d->strm.cpu, pic->stream, pic->stream_len);
+    memset(d->strm.cpu + pic->stream_len, 0, need - pic->stream_len);
+
+    rps_checks(d, pic);
+
+    memset(&bi, 0, sizeof(bi));
+    bi.pp = &pic->pp;
+    bi.qm = &pic->qm;
+    bi.extra = d->dxva_only ? NULL : &pic->extra;
+    bi.stream_cpu = d->strm.cpu;
+    bi.stream_dma = d->strm.dma;
+    bi.stream_len = (unsigned)pic->stream_len;
+    bi.aux_cpu = d->aux.cpu;
+    bi.aux_dma = d->aux.dma;
+    bi.rcb_dma = d->rcb.dma;
+    bi.surfaces = d->vs;
+    bi.num_surfaces = HEVC_MAX_SLOTS;
+    bi.hor_stride = d->hor;
+    bi.ver_stride = d->ver;
+    bi.rebuild_scratch = &d->rebuilt;
+
+    rc = v383_hevc_build(&bi, &rf);
+    if (rc) {
+        fprintf(stderr, "picture %u: register builder failed (%d)\n", pic->decode_index, rc);
+        return -1;
+    }
+    if (d->dxva_only && v383_hevc_parse_pps_id(&pic->pp, pic->stream, (unsigned)pic->stream_len) !=
+                            (int)pic->extra.pps_id)
+        fprintf(stderr, "picture %u: pps id from the slice header disagrees with the parser\n", pic->decode_index);
+
+    in = (VDPU383_RUN_IN *)calloc(1, sizeof(*in));
+    if (!in)
+        return -1;
+    memcpy(in->regs, rf.regs, sizeof(in->regs));
+    memcpy(in->write_mask, rf.write_mask, sizeof(in->write_mask));
+    in->link_ip_timeout = d->link_vendor ? 0x7FFFFF : rf.core_timeout;
+    in->link_ip_enable = d->link_vendor ? 0x01000000 : 0;
+    in->timeout_ms = 2000;
+    in->flags = (d->readback ? VDPU383_RUN_READBACK : 0) | VDPU383_RUN_RESET_ON_ERROR;
+
+    if (d->print_regs) {
+        printf("# picture %u registers\n", pic->decode_index);
+        for (r = 0; r < V383_NUM_REGS; r++)
+            if (rf.write_mask[r / 32] & (1u << (r % 32)))
+                printf("reg %3u 0x%08x\n", r, rf.regs[r]);
+    }
+
+    t0 = now_ms();
+    if (dev_run(in, &out)) {
+        fprintf(stderr, "picture %u: %s\n", pic->decode_index, dev_error());
+        free(in);
+        return -1;
+    }
+    d->hw_ms += now_ms() - t0;
+    d->pictures++;
+
+    md5_hex(d->surf[V383_PIC_INDEX(pic->pp.CurrPic)].cpu, (size_t)d->hor * d->ver * 3 / 2, hex);
+    for (i = 0; i < 15; i++)
+        if (pic->pp.RefPicList[i].bPicEntry != 0xFF)
+            refs++;
+    printf("pic %4u slot %2u poc %5d nal %2u %s%s%s slices %u refs %u  %s irq 0x%08x status 0x%08x (",
+           pic->decode_index, V383_PIC_INDEX(pic->pp.CurrPic), pic->poc, pic->nal_type,
+           (pic->slice_types & 4) ? "I" : "", (pic->slice_types & 2) ? "P" : "", (pic->slice_types & 1) ? "B" : "",
+           pic->num_slices, refs, run_result_name(out.result), out.irq, out.status);
+    print_status_bits(out.status & 0xFFFF);
+    printf(") %u us\n", out.elapsed_us);
+    if (out.result != VDPU383_RUN_OK) {
+        d->hw_errors++;
+        if (out.result == VDPU383_RUN_BAD_ADDRESS)
+            printf("    rejected: register %u = 0x%08x is not in a buffer of this process\n",
+                   out.bad_reg, out.bad_reg < V383_NUM_REGS ? in->regs[out.bad_reg] : 0);
+        if (out.result == VDPU383_RUN_MMU_FAULT)
+            printf("    IOMMU fault at IO address 0x%08x\n", out.bad_reg);
+        printf("    mmu status 0x%08x/0x%08x rawstat 0x%08x/0x%08x reset_status 0x%08x\n",
+               out.mmu_status[0], out.mmu_status[1], out.mmu_int_rawstat[0], out.mmu_int_rawstat[1],
+               out.reset_status);
+    }
+    if (d->readback && d->print_regs) {
+        printf("# picture %u readback\n", pic->decode_index);
+        for (r = 0; r < V383_NUM_REGS; r++)
+            printf("rb %3u 0x%08x\n", r, out.regs[r]);
+    }
+    free(in);
+    return 0;
+}
+
 static int cmd_decode(int argc, char **argv)
 {
     Dec d;
     H264Parser p;
+    HevcParser *hp = NULL;
+    int codec = 0;              /* 0 by the stream, 1 H.264, 2 HEVC */
     uint8_t *data;
     size_t len;
     const char *in_path = NULL;
@@ -663,6 +856,8 @@ static int cmd_decode(int argc, char **argv)
         else if (!strcmp(argv[i], "--stride") && i + 1 < argc) d.stride_mpp = !strcmp(argv[++i], "mpp");
         else if (!strcmp(argv[i], "--link-vendor")) d.link_vendor = 1;
         else if (!strcmp(argv[i], "--null")) ;
+        else if (!strcmp(argv[i], "--hevc")) codec = 2;
+        else if (!strcmp(argv[i], "--h264")) codec = 1;
         else if (argv[i][0] != '-' && !in_path) in_path = argv[i];
         else {
             fprintf(stderr, "unknown option %s\n", argv[i]);
@@ -697,10 +892,29 @@ static int cmd_decode(int argc, char **argv)
         return 1;
     }
     md5_init(&d.total);
-    h264_init(&p, output_cb, &d);
-    rc = h264_run(&p, data, len, d.max_pictures, decode_cb, &d);
-    if (rc)
-        fprintf(stderr, "error: %s\n", p.err);
+    if (!codec)
+        codec = hevc_probe(data, len) ? 2 : 1;
+    if (codec == 2) {
+        if (d.dump_dir)
+            fprintf(stderr, "--dump: H.264 only, ignored\n");
+        d.dump_dir = NULL;
+        hp = (HevcParser *)calloc(1, sizeof(*hp));
+        if (!hp)
+            return 1;
+        hevc_init(hp, output_cb, &d);
+        rc = hevc_run(hp, data, len, d.max_pictures, decode_cb_hevc, &d);
+        if (rc)
+            fprintf(stderr, "error: %s\n", hp->err);
+        if (hp->skipped)
+            printf("RASL pictures skipped (their IRAP starts the stream): %u\n", hp->skipped);
+        printf("rps check: %u pictures; with the SPS's sets %u differ; rebuilt from DXVA %u differ, %u had no table\n",
+               d.pictures, d.rps_real_bad, d.rps_rebuilt_bad, d.rps_unsupported);
+    } else {
+        h264_init(&p, output_cb, &d);
+        rc = h264_run(&p, data, len, d.max_pictures, decode_cb, &d);
+        if (rc)
+            fprintf(stderr, "error: %s\n", p.err);
+    }
     md5_final(&d.total, hex);
     printf("pictures %u, frames out %u, hardware errors %u, %.1f ms in the decoder calls\n",
            d.pictures, d.out_count, d.hw_errors, d.hw_ms);
@@ -714,7 +928,12 @@ static int cmd_decode(int argc, char **argv)
             printf(" (but frame counts differ)");
         printf("\n");
     }
-    h264_free(&p);
+    if (hp) {
+        hevc_free(hp);
+        free(hp);
+    } else {
+        h264_free(&p);
+    }
     if (d.out)
         fclose(d.out);
     free_surfaces(&d);
@@ -723,7 +942,8 @@ static int cmd_decode(int argc, char **argv)
     free(data);
     free(d.ref);
     free(d.frame);
-    return (rc || d.hw_errors || d.mismatches) ? 2 : 0;
+    return (rc || d.hw_errors || d.mismatches || d.rps_real_bad || d.rps_rebuilt_bad ||
+            (d.dxva_only && d.rps_unsupported)) ? 2 : 0;
 }
 
 /* -------------------------------------------------------------- replay */

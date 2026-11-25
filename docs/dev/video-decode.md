@@ -52,6 +52,16 @@ serves avc1 to a browser that asks for it. HEVC next (mainline has
 `rkvdec-vdpu383-hevc.c`), then VP9 and AV1 (MPP only; not in mainline for
 VDPU383).
 
+## 2026-11-25: HEVC Main register builder (not run on the board)
+
+Branch `vdpu383-hevc`: `lib/vdpu383_hevc.c` (from MPP's VDPU383 HEVC HAL,
+checked against mainline's rkvdec-vdpu383-hevc.c) and an HEVC parser in
+vdpu383test. The decoder reads the SPS's short-term reference picture sets
+from a table, which DXVA does not carry; the builder rebuilds a table from
+DXVA alone that makes every slice derive the picture's sets, and checks it.
+75 JCT-VC conformance streams (FFmpeg fate-suite) pass the parser and those
+checks on Linux; the board test is in the driver README, section 5.
+
 ## Milestones
 
 | | Goal | Where | State | Effort |
@@ -88,8 +98,10 @@ for whoever does U4/U5 (or for a `video-decode` branch from `hpd-edge`):
    the fence from the interrupt, and on timeout performs `V383IpReset`.
 4. **IOMMU.** The decoder's IOMMU (`rockchip,rk3568-iommu`, at +0x800 and
    +0x900) is the same kind as the VOP2's: the scanout.c table code gains a
-   third client. The bring-up driver runs with paging off, so V2 results do
-   not depend on it.
+   third client. The bring-up driver ran with paging off until branch
+   `vdpu383-iommu`, which runs it with its own tables (vdpu383 README,
+   section 6): physically contiguous multi-MiB buffers could not be had on
+   the board. That table code (driver.c, IOMMU section) is what V3b moves.
 
 ## Encode: scope only
 
@@ -151,7 +163,7 @@ Pass: both boot as before; Device Manager has no new device.
 
 Pass: `LastStep` is `D0Entry: done`, `Version` non-zero and equal to the
 firmware's `version=`, `RegsPa` 0x27b00000; `vdpu383test info` prints the
-same version and both IOMMUs with paging off.
+same version and both IOMMUs with paging on (off with `Iommu` 0).
 
 Send back: both outputs, and the serial log if the firmware line is
 missing.
