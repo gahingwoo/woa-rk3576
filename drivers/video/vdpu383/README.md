@@ -334,7 +334,9 @@ NAME.webm -c copy -f ivf NAME.ivf`, with `-copyinkf` for
 vp90-2-16-intra-only), listed in
 [vp9-conformance.txt](../../../tools/vdpu383test/vp9-conformance.txt) with
 the frame count and the MD5 of FFmpeg 6.1.1's output, each frame at its own
-size (`-autoscale 0`), yuv420p or yuv420p10le. Made 2026-11-25. Off the
+size (`-autoscale 0`, `-fps_mode passthrough`: without it FFmpeg repeats
+frames to fill IVF timestamp gaps, which made 67 correct streams read
+MISMATCH on the first board run), yuv420p or yuv420p10le. Made 2026-11-25. Off the
 board, on Linux with `--null`, for every stream: the frame count is FFmpeg's,
 the uncompressed header parser agrees with FFmpeg's trace_headers on every
 frame (base_q_idx, refresh_frame_flags and both header sizes), every
@@ -375,6 +377,18 @@ specification; `-Extra '--vp9-mpp'` repeats a run the way MPP does it
 frame that does not keep it is written over its context). A stream that
 MATCHes only one way says which the hardware wants: vp90-2-16-intra-only
 is the one expected to tell them apart.
+
+First board run (2026-11-25, TaishanPi 3M, driver 3.37.25.177): 215 of
+216 right. 67 more read MISMATCH with every frame's `--frame-md5` equal
+to FFmpeg's: the references were wrong, not the decoder (FFmpeg's rawvideo
+output repeated frames to fill IVF timestamp gaps; remade with
+`-fps_mode passthrough`). The one real failure, vp90-2-trac3849 (every
+frame error resilient, segment ids predicted from the previous map):
+frames 5-9 wrong, the same with `--vp9-mpp`. An FFmpeg made to predict
+from the previous frame's map in error resilient mode gives the board's
+10 frame MD5s exactly, so the decoder reads register 181's map whatever
+the frame; the builder now clears that map where the specification
+clears it (`vdpu383_vp9.c`).
 
 Send back on failure: `vp9-results\vp9-results.txt`, the first failing
 stream's `NAME.txt`, then `vdpu383test decode NAME.ivf --frame-md5 --regs -n 4 > win.txt`
