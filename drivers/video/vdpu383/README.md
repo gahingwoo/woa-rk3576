@@ -31,9 +31,11 @@ in CI; the parser and the register builder also run on Linux with no decoder
 | [lib/v383_dxva.h](lib/v383_dxva.h) | the DXVA H.264 structures, byte for byte dxva.h's layout (checked against dxva.h at compile time) |
 | [lib/vdpu383_hevc.c](lib/vdpu383_hevc.c) | the same for HEVC Main: DXVA_PicParams_HEVC + DXVA_Qmatrix_HEVC + bitstream, from MPP, checked against mainline's rkvdec-vdpu383-hevc.c; rebuilds the SPS's reference picture sets, which DXVA does not carry (see the top of the file). Not run on the board |
 | [lib/v383_dxva_hevc.h](lib/v383_dxva_hevc.h) | the DXVA HEVC structures, dxva.h's layout |
+| [lib/vdpu383_vp9.c](lib/vdpu383_vp9.c) | VP9 profile 0 and 2 (8 and 10 bit 4:2:0): DXVA_PicParams_VP9 + the frame to registers, the global record and the probability tables. Registers and buffer handling from MPP's hal_vp9d_vdpu383.c (MIT); the packers written fresh to the layout of MPP's hal_vp9d_com.c (Apache-2.0 only, nothing copied), byte for byte equal to MPP's output. The decoder reads the compressed header and adapts the probabilities itself; the builder keeps the four frame contexts, the segment maps and the motion vectors between frames (V383_Vp9State). Not run on the board |
+| [lib/vdpu383_vp9_probs.c](lib/vdpu383_vp9_probs.c), [lib/v383_dxva_vp9.h](lib/v383_dxva_vp9.h) | the VP9 default and key-frame probabilities (mainline v4l2-vp9.c, GPL-2.0); the DXVA VP9 structures, dxva.h's layout |
 | [driver.c](driver.c), [warmup.c](warmup.c) | the KMDF driver for `ACPI\RKCP0383` |
 | [vdpu383_ioctl.h](vdpu383_ioctl.h) | the driver's interface (`\\.\VDPU383`) |
-| [../../../tools/vdpu383test](../../../tools/vdpu383test) | the test program and its H.264 parser |
+| [../../../tools/vdpu383test](../../../tools/vdpu383test) | the test program and its H.264, HEVC and VP9 (IVF) parsers |
 | [../../../tools/vdpu383-capture](../../../tools/vdpu383-capture) | what mainline Linux does with the same clips, and a register diff |
 
 The firmware side is edk2-rk3576 branch `vdpu383-acpi-v2` (the old
@@ -320,6 +322,62 @@ Then, in this order:
 A decode that faults prints `MMU-FAULT` and `IOMMU fault at IO address
 0x...`, the next decode runs normally. Send back on failure: `vdpu383test
 info`, the failing stream's `NAME.txt`, and the Device Parameters key.
+
+### 7. VP9 conformance (branch `vdpu383-vp9`)
+
+Streams: the libvpx test vectors in FFmpeg's fate-suite
+(`https://fate-suite.ffmpeg.org/vp9-test-vectors/`), all 215 profile 0
+ones and the profile 2 10-bit 4:2:0 one, remuxed to IVF (`ffmpeg -i
+NAME.webm -c copy -f ivf NAME.ivf`, with `-copyinkf` for
+vp90-2-16-intra-only), listed in
+[vp9-conformance.txt](../../../tools/vdpu383test/vp9-conformance.txt) with
+the frame count and the MD5 of FFmpeg 6.1.1's output, each frame at its own
+size (`-autoscale 0`), yuv420p or yuv420p10le. Made 2026-11-25. Off the
+board, on Linux with `--null`, for every stream: the frame count is FFmpeg's,
+the uncompressed header parser agrees with FFmpeg's trace_headers on every
+frame (base_q_idx, refresh_frame_flags and both header sizes), every
+address register points into the tool's buffers; the global record and the
+probability tables are byte for byte what MPP's packers write for the same
+frames (checked off-board against MPP's code; `selftest` keeps the MD5s).
+CI runs 22 of them. Nothing of it has run on the decoder.
+
+vdpu383test with VP9: CI artifact `rk3576-woa-vdpu383test-arm64` of branch
+`vdpu383-vp9`; vdpu383.sys of section 6 (`vdpu383-iommu`, now main) or the
+one installed, unchanged by this branch. As administrator, the streams in
+one folder:
+
+```
+vdpu383test decode D:\vp9\streams\vp90-2-00-quantizer-00.ivf --frame-md5
+powershell -ExecutionPolicy Bypass -File vp9-conformance.ps1 -Dir D:\vp9\streams -Only vp90-2-00
+powershell -ExecutionPolicy Bypass -File vp9-conformance.ps1 -Dir D:\vp9\streams
+powershell -ExecutionPolicy Bypass -File vp9-conformance.ps1 -Dir D:\vp9\streams -DxvaOnly -Out .\vp9-dxva
+```
+
+In that order: one key frame and one inter frame (quantizer-00); the
+quantizer, sharpness and size groups (vp90-2-00 to -03: intra and inter
+prediction, loop filter, odd sizes); then the features: deltaq, 05-resize
+(scaled references), 06-bilinear, 09-lf_deltas, 10-show-existing-frame
+(hidden frames, superframes), 15-segkey_adpq and segmentation-* (segment
+maps between frames), 16-intra-only (frame contexts: see below),
+parallelmode (forward-only probabilities), 2pass-akiyo and trac* (alt-ref,
+compound prediction), tiling-pedestrian (4 tile columns at 1080p), and
+vp92-2-20-10bit-yuv420 (10 bit; the output is unpacked from the decoder's
+4-in-5-bytes layout). A third-party mainline V4L2 driver for this decoder
+reports compound-prediction frames wrong with registers equal to MPP's
+(github.com/SympleNZ/rkvdec-vdpu383-vp9); the 2pass and trac streams show
+whether that applies here.
+
+Where MPP and the VP9 specification differ the builder follows the
+specification; `-Extra '--vp9-mpp'` repeats a run the way MPP does it
+(every intra frame resets the four contexts; the adapted context of a
+frame that does not keep it is written over its context). A stream that
+MATCHes only one way says which the hardware wants: vp90-2-16-intra-only
+is the one expected to tell them apart.
+
+Send back on failure: `vp9-results\vp9-results.txt`, the first failing
+stream's `NAME.txt`, then `vdpu383test decode NAME.ivf --frame-md5 --regs -n 4 > win.txt`
+and `vdpu383test info`. FFmpeg's per-frame MD5s are in the kit's
+`framemd5\NAME.framemd5`.
 
 ### Linux reference capture
 

@@ -32,6 +32,8 @@ Not from worproject. The vendor code is dual licensed; the option used is named:
 |---|---|---|
 | `drivers/video/vdpu383/lib/vdpu383_cabac.c` | Rockchip Electronics (MPP) | Apache-2.0 OR MIT (file header) |
 | `drivers/video/vdpu383/lib/vdpu383_h264.c`, register layouts | ported from Rockchip MPP, mpp/hal/rkdec | Apache-2.0 OR MIT, used as MIT; the file as a whole, with the changes made here, is GPL-2.0-only (file header) |
+| `drivers/video/vdpu383/lib/vdpu383_vp9.c`, register values and buffer handling | ported from Rockchip MPP, mpp/hal/rkdec/vp9d/hal_vp9d_vdpu383.c | Apache-2.0 OR MIT, used as MIT; the file is GPL-2.0-only (file header). The bit layouts of its packers follow MPP's hal_vp9d_com.c, which is Apache-2.0 only and of which no code is copied |
+| `drivers/video/vdpu383/lib/vdpu383_vp9_probs.c`, the VP9 probability tables | mainline Linux drivers/media/v4l2-core/v4l2-vp9.c, Collabora (values from libvpx) | GPL-2.0 (file header) |
 | `drivers/video/vdpu383/warmup.c`, warm-up data and sequence | Rockchip Electronics, vendor kernel mpp_hack_rk3576.c | GPL-2.0+ OR MIT, used as GPL-2.0; the file is GPL-2.0-only (file header) |
 
 Two entries have no explicit licence: `dwcsdhc` and `csaudiork3x`.

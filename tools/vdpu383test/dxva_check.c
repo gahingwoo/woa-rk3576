@@ -14,6 +14,7 @@
 
 #include "../../drivers/video/vdpu383/lib/v383_dxva.h"
 #include "../../drivers/video/vdpu383/lib/v383_dxva_hevc.h"
+#include "../../drivers/video/vdpu383/lib/v383_dxva_vp9.h"
 
 #define CAT2(a, b) a##b
 #define CAT(a, b) CAT2(a, b)
@@ -83,6 +84,55 @@ static int v383_dxva_hevc_bit_order_check(void)
            V383_HEVC_UNIFORM_SPACING((V383_DXVA_PicParams_HEVC *)&pp);
 }
 
+#define SAME_OFF_VP9(f) typedef char CAT(voff_check_, __LINE__)[ \
+    (offsetof(DXVA_PicParams_VP9, f) == offsetof(V383_DXVA_PicParams_VP9, f)) ? 1 : -1]
+
+SAME_SIZE(DXVA_PicParams_VP9, V383_DXVA_PicParams_VP9);
+SAME_SIZE(DXVA_segmentation_VP9, V383_DXVA_segmentation_VP9);
+SAME_SIZE(DXVA_Slice_VPx_Short, V383_DXVA_Slice_VPx_Short);
+SAME_SIZE(DXVA_PicEntry_VPx, V383_DXVA_PicEntry_VPx);
+SAME_OFF_VP9(profile);
+SAME_OFF_VP9(wFormatAndPictureInfoFlags);
+SAME_OFF_VP9(width);
+SAME_OFF_VP9(BitDepthMinus8Luma);
+SAME_OFF_VP9(interp_filter);
+SAME_OFF_VP9(ref_frame_map);
+SAME_OFF_VP9(ref_frame_coded_width);
+SAME_OFF_VP9(ref_frame_coded_height);
+SAME_OFF_VP9(frame_refs);
+SAME_OFF_VP9(ref_frame_sign_bias);
+SAME_OFF_VP9(filter_level);
+SAME_OFF_VP9(wControlInfoFlags);
+SAME_OFF_VP9(ref_deltas);
+SAME_OFF_VP9(mode_deltas);
+SAME_OFF_VP9(base_qindex);
+SAME_OFF_VP9(uv_ac_delta_q);
+SAME_OFF_VP9(stVP9Segments);
+SAME_OFF_VP9(log2_tile_cols);
+SAME_OFF_VP9(uncompressed_header_size_byte_aligned);
+SAME_OFF_VP9(first_partition_size);
+SAME_OFF_VP9(StatusReportFeedbackNumber);
+
+/* the bit order of the VP9 flag bytes and words */
+static int v383_dxva_vp9_bit_order_check(void)
+{
+    DXVA_PicParams_VP9 pp;
+    memset(&pp, 0, sizeof(pp));
+    pp.frame_parallel_decoding_mode = 1;
+    pp.frame_context_idx = 2;
+    pp.reset_frame_context = 3;
+    pp.allow_high_precision_mv = 1;
+    pp.use_prev_in_find_mv_refs = 1;
+    pp.stVP9Segments.abs_delta = 1;
+    return V383_VP9_PARALLEL_MODE((V383_DXVA_PicParams_VP9 *)&pp) &&
+           V383_VP9_FRAME_CTX_IDX((V383_DXVA_PicParams_VP9 *)&pp) == 2 &&
+           V383_VP9_RESET_CTX((V383_DXVA_PicParams_VP9 *)&pp) == 3 &&
+           V383_VP9_ALLOW_HP_MV((V383_DXVA_PicParams_VP9 *)&pp) &&
+           !V383_VP9_REFRESH_CTX((V383_DXVA_PicParams_VP9 *)&pp) &&
+           V383_VP9_USE_PREV_MVS((V383_DXVA_PicParams_VP9 *)&pp) &&
+           V383_VP9_SEG_ABS_DELTA((V383_DXVA_PicParams_VP9 *)&pp);
+}
+
 /* the bit order of wBitFields */
 static int v383_dxva_bit_order_check(void)
 {
@@ -95,7 +145,7 @@ static int v383_dxva_bit_order_check(void)
 
 int v383_dxva_check(void)
 {
-    return v383_dxva_bit_order_check() && v383_dxva_hevc_bit_order_check();
+    return v383_dxva_bit_order_check() && v383_dxva_hevc_bit_order_check() && v383_dxva_vp9_bit_order_check();
 }
 #else
 typedef int v383_dxva_check_not_on_this_platform;
