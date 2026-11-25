@@ -645,6 +645,42 @@ jobs:
           printf '#include "%s/rk3xsaradc_ioctl.h"\nint main(void){return sizeof(RK3X_SARADC_INFO)==4*54?0:1;}\n' "$PWD/$D" > hdr.c
           gcc -std=c11 -Wall -Wextra -Werror -o hdr hdr.c && ./hdr
 
+  pin40-scripts:
+    name: 40-pin PowerShell samples (Windows PowerShell 5.1)
+    # The scripts in tools/pin40 load WinRT types (Windows.Devices.Gpio, .I2c,
+    # .Spi, .Enumeration) the way they will on the board. The runner has no
+    # RhProxy, so each script must get as far as asking for a controller and
+    # stop there with its own message: a parse error or "Unable to find
+    # type" fails the job.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and load
+        shell: powershell
+        run: |
+          $fail = $false
+          foreach ($f in Get-ChildItem tools\pin40 -Filter *.ps1) {
+            $tok = $null; $err = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tok, [ref]$err)
+            if ($err) { $err | Out-Host; $fail = $true }
+          }
+          if ($fail) { throw 'parse errors' }
+          $cases = @(
+            @{ Script = 'tools\pin40\gpio-blink.ps1'; Args = @('-List') },
+            @{ Script = 'tools\pin40\i2c-scan.ps1';   Args = @() }
+          )
+          # the scripts end with an error on purpose here; their stderr must
+          # be read, not turned into a failure of this step
+          $ErrorActionPreference = 'Continue'
+          foreach ($c in $cases) {
+            $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $c.Script @($c.Args) 2>&1 | Out-String
+            Write-Host "== $($c.Script)"; Write-Host $out
+            if ($out -match 'Unable to find type|ParserError|TypeNotFound') { throw "$($c.Script): WinRT types did not load" }
+            if ($out -notmatch 'No GPIO controller|No I2C bus|I2C buses:') { throw "$($c.Script): did not reach the controller query" }
+          }
+          # both scripts exit 1 here by design (no RhProxy on the runner)
+          $global:LASTEXITCODE = 0
+
   solution:
     name: WDK build (build/RockchipDrivers.sln)
     # The drivers imported from worproject/Rockchip-Windows-Drivers build as one
@@ -688,6 +724,8 @@ jobs:
           - { name: spi,  proj: drivers/spi/rk3xspi/rk3xspi.vcxproj }
           - { name: touch, proj: drivers/input/gt9271/gt9271.vcxproj }
           - { name: bluetooth, proj: drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj }
+          - { name: uart, proj: drivers/serial/rk3xuart/rk3xuart.vcxproj }
+          - { name: serialtest, proj: tools/serialtest/serialtest.vcxproj }
           - { name: vdpu383, proj: drivers/video/vdpu383/vdpu383.vcxproj }
           - { name: vdpu383test, proj: tools/vdpu383test/vdpu383test.vcxproj }
           - { name: saradc, proj: drivers/adc/rk3xsaradc/rk3xsaradc.vcxproj }
@@ -717,16 +755,20 @@ jobs:
           # The class extensions do not all ship in Include\<ver>\km: SpbCx and
           # NetAdapterCx live in versioned class-extension trees that the WDK
           # targets add only when the project opts in. Locate them, do not guess.
-          foreach ($h in 'sdport.h','spbcx.h','gpioclx.h','netadaptercx.h','acpiioct.h','bthxddi.h','gpio.h') {
+          foreach ($h in 'sdport.h','spbcx.h','gpioclx.h','netadaptercx.h','acpiioct.h','bthxddi.h','gpio.h','sercx.h') {
             Get-ChildItem $kits -Recurse -Filter $h -ErrorAction SilentlyContinue |
               ForEach-Object { Write-Host ("{0,-18} {1}" -f $h, $_.FullName) }
           }
           Write-Host "--- class-extension import libs (arm64) ---"
-          foreach ($l in 'SpbCxStubs.lib','msgpioclxstub.lib','netadaptercxstub.lib','sdport.lib') {
+          foreach ($l in 'SpbCxStubs.lib','msgpioclxstub.lib','netadaptercxstub.lib','sdport.lib','sercx2.lib','sercx.lib') {
             Get-ChildItem $kits -Recurse -Filter $l -ErrorAction SilentlyContinue |
               Where-Object { $_.FullName -match 'arm64' } |
               ForEach-Object { Write-Host ("{0,-22} {1}" -f $l, $_.FullName) }
           }
+          Write-Host "--- SerCx libraries (arm64), whatever their name ---"
+          Get-ChildItem "$kits\Lib" -Recurse -Filter '*sercx*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'arm64' } |
+            ForEach-Object { Write-Host $_.FullName }
           Write-Host "--- WDK VS build targets ---"
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           Write-Host "VS: $vs"

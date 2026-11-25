@@ -91,7 +91,10 @@ jobs:
             'drivers/video/vdpu383/vdpu383.vcxproj',
             # binds ACPI\RKCP0ADC only, which firmware declares on boards
             # with ADC keys or an ADC jack; elsewhere it changes nothing
-            'drivers/adc/rk3xsaradc/rk3xsaradc.vcxproj'
+            'drivers/adc/rk3xsaradc/rk3xsaradc.vcxproj',
+            # binds ACPI\RKCP3006, which only the firmware's "40-pin UART"
+            # option publishes: nothing to bind on a board without it
+            'drivers/serial/rk3xuart/rk3xuart.vcxproj'
           )
           # Record the sdport miniport API surface into the log.
           #

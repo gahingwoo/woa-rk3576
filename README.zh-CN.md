@@ -30,6 +30,7 @@ Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 �
 | USB-C | USB 2.0 | 上电时插着的设备可用（ci 固件） | 系统自带 usbxhci |
 | 以太网 | 可用，DHCP | 可用，1 Gbps | dwc_eqos |
 | GPIO、I2C、SPI、DMA | 能启动 | 能启动 | rk3xgpio、rk3xi2c、rk3xspi、pl330dma |
+| 40 针排针：UART 作 COM 口，GPIO/I2C/SPI 供应用使用 | 固件在板子分支上；未试 | 未试（设置项，默认关闭） | rk3xuart、系统自带 rhproxy（[40 针排针](docs/pin40.zh-CN.md)） |
 | 显示 | 固件帧缓冲，一个分辨率 | 配合 [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52) 由 GPU 绘制桌面；否则是帧缓冲 | 系统自带 BasicDisplay，或 wddm-mali-g52 |
 | 触摸（DSI 屏） | 未试过 | 可用，10 点（ci 固件） | gt9271 |
 | 耳机孔和麦克风 | 底板上没有耳机孔 | 可用（ci 固件） | rk3xi2sbus、csaudiork3x、es8323 |
