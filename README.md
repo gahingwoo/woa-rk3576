@@ -56,8 +56,8 @@ edk2-rk3576 newer than 0.4.1 (its `ci` build until the next release).
 | WiFi | not working | not working | none |
 | NPU | not available | works with [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) | rknpu |
 | Video decoder (VDPU383) | not tried | hardware decoder works with vdpu383test (H.264 conformance streams match FFmpeg, 2026-11-24); players not yet ([video decode](docs/dev/video-decode.md)) | vdpu383 |
-| ADC keys, jack on the ADC | driver written, not tried | driver written, not tried | rk3xsaradc |
-| Power button (RK806) | driver written, firmware on its board branch; not tried | driver written, not tried (setup option, off by default) | [rk806pwrkey](drivers/input/rk806pwrkey) |
+| ADC keys, jack on the ADC | driver written, not tried | Recovery key = Windows power button (setup option "ADC keys for the OS", on by default); not tried | [rk3xsaradc](drivers/adc/rk3xsaradc) |
+| Power button (RK806) | driver written, firmware on its board branch; not tried | no key on PWRON, so none (the Recovery key is the power button) | [rk806pwrkey](drivers/input/rk806pwrkey) |
 | Board LEDs (heartbeat, disk activity) | driver written, firmware on its board branch; not tried | driver written, not tried (setup option, off by default) | [rkled](drivers/leds/rkled) |
 | Hardware watchdog | firmware WDAT for the inbox driver; not tried | the same | inbox; test with [wdthang](tools/wdthang) |
 | ROCK 4D EEPROM | | | [rkeeprom](drivers/misc/rkeeprom), [eeprom](tools/eeprom); ROCK 4D firmware branch, not tried |

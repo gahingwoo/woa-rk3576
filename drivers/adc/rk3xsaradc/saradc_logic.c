@@ -73,6 +73,29 @@ int SaradcDebounceStep(SARADC_DEBOUNCE *d, int sample)
     return 0;
 }
 
+void SaradcKeyArmInit(SARADC_KEYARM *a, unsigned int need)
+{
+    a->Armed = 0;
+    a->Released = 0;
+    a->Need = need == 0 ? 1 : need;
+}
+
+int SaradcKeyArmStep(SARADC_KEYARM *a, int classified)
+{
+    if (a->Armed) {
+        return classified;
+    }
+    if (classified == SARADC_NO_KEY) {
+        a->Released++;
+        if (a->Released >= a->Need) {
+            a->Armed = 1;
+        }
+    } else {
+        a->Released = 0;
+    }
+    return SARADC_NO_KEY;
+}
+
 void SaradcJackInit(SARADC_JACK *j, unsigned int pluggedBelowMicrovolts,
                     unsigned int unpluggedAboveMicrovolts, unsigned int debounceMs)
 {

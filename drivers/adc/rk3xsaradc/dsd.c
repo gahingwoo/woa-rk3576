@@ -349,6 +349,7 @@ RkAdcReadConfig(
             ctx->KeySamples = RKADC_DEFAULT_KEY_SAMPLES;
         }
         SaradcDebounceInit(&ctx->KeyDebounce, SARADC_NO_KEY, ctx->KeySamples);
+        SaradcKeyArmInit(&ctx->KeyArm, RKADC_KEY_ARM_SAMPLES);
     }
 
     /* jack: a channel and a plugged-below threshold */

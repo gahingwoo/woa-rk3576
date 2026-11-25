@@ -220,6 +220,7 @@ RkAdcDiagSave(
     DiagPut(key, L"DiagStopped", snap.Stopped);
     DiagPut(key, L"DiagNotifications", snap.Notifications);
     DiagPut(key, L"DiagHidReports", snap.HidReports);
+    DiagPut(key, L"DiagKeysArmed", snap.HaveKeys ? (ULONG)snap.KeyArm.Armed : 0);
     DiagPut(key, L"DiagResetAvailable", snap.HaveReset);
     DiagPut(key, L"DiagResets", snap.Resets);
     WdfRegistryClose(key);
@@ -250,6 +251,7 @@ RkAdcEvtTimer(
     ULONG raw = 0;
     ULONG keysUv = 0;
     BOOLEAN haveKeysSample = FALSE;
+    BOOLEAN armedNow = FALSE;
     NTSTATUS status;
 
     WdfWaitLockAcquire(ctx->Lock, NULL);
@@ -263,8 +265,17 @@ RkAdcEvtTimer(
         if (NT_SUCCESS(status)) {
             keysUv = SaradcRawToMicrovolts(raw, ctx->VrefMicrovolts, RKADC_BITS);
             haveKeysSample = TRUE;
-            if (SaradcDebounceStep(&ctx->KeyDebounce, SaradcKeysClassify(&ctx->Keymap, keysUv))) {
+            /* No key counts until the keys have been seen released: a
+             * key held through boot, or a converter reading 0 V, must not
+             * press the power button. */
+            if (SaradcDebounceStep(&ctx->KeyDebounce,
+                                   SaradcKeyArmStep(&ctx->KeyArm,
+                                                    SaradcKeysClassify(&ctx->Keymap, keysUv)))) {
                 RkAdcHidReport(ctx, ctx->KeyDebounce.Stable);
+            }
+            armedNow = (BOOLEAN)(ctx->KeyArm.Armed && !ctx->KeyArmSaved);
+            if (armedNow) {
+                ctx->KeyArmSaved = TRUE;
             }
         }
     }
@@ -304,7 +315,7 @@ RkAdcEvtTimer(
     if (jackChanged) {
         RkAdcJackNotify(ctx);
     }
-    if (jackChanged || stopped) {
+    if (jackChanged || stopped || armedNow) {
         RkAdcDiagSave(ctx);
     }
 }
@@ -417,6 +428,12 @@ RkAdcEvtD0Entry(
     WdfWaitLockAcquire(ctx->Lock, NULL);
     ctx->TimeoutsInRow = 0;
     ctx->Stopped = FALSE;
+    if (ctx->HaveKeys) {
+        /* After start and after every resume: released first. */
+        SaradcKeyArmInit(&ctx->KeyArm, RKADC_KEY_ARM_SAMPLES);
+        ctx->KeyArmSaved = FALSE;
+        SaradcDebounceInit(&ctx->KeyDebounce, SARADC_NO_KEY, ctx->KeySamples);
+    }
     ctx->Polling = (BOOLEAN)(ctx->HaveJack || (ctx->HaveKeys && ctx->VhfStarted));
     if (ctx->Polling) {
         WdfTimerStart(ctx->Timer, WDF_REL_TIMEOUT_IN_MS(10));

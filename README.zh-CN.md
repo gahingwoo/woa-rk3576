@@ -39,8 +39,8 @@ Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 �
 | WiFi | 不能用 | 不能用 | 无 |
 | NPU | 不支持 | 配合 [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) 可用 | rknpu |
 | 视频解码器（VDPU383） | 未试 | 用 vdpu383test 硬件解码可用（H.264 一致性码流与 FFmpeg 逐位一致，2026-11-24）；播放器尚不能用（[视频解码](docs/dev/video-decode.zh-CN.md)） | vdpu383 |
-| ADC 按键、ADC 读取的耳机插孔 | 驱动已写，未试过 | 驱动已写，未试过 | rk3xsaradc |
-| 电源键（RK806） | 驱动已写，固件在板子分支上；未试 | 驱动已写，未试（设置项，默认关闭） | [rk806pwrkey](drivers/input/rk806pwrkey) |
+| ADC 按键、ADC 读取的耳机插孔 | 驱动已写，未试过 | Recovery 键即 Windows 电源按钮（设置项 "ADC keys for the OS"，默认打开）；未试 | [rk3xsaradc](drivers/adc/rk3xsaradc) |
+| 电源键（RK806） | 驱动已写，固件在板子分支上；未试 | PWRON 上没有按键，所以没有（电源按钮由 Recovery 键担任） | [rk806pwrkey](drivers/input/rk806pwrkey) |
 | 板载指示灯（心跳、磁盘活动） | 驱动已写，固件在板子分支上；未试 | 驱动已写，未试（设置项，默认关闭） | [rkled](drivers/leds/rkled) |
 | 硬件看门狗 | 固件提供 WDAT，交给系统自带驱动；未试 | 同左 | 系统自带；用 [wdthang](tools/wdthang) 测试 |
 | ROCK 4D 的 EEPROM | | | [rkeeprom](drivers/misc/rkeeprom)、[eeprom](tools/eeprom)；固件在 ROCK 4D 分支上，未试 |

@@ -56,6 +56,17 @@ Keys follow Linux `adc-keys.c`: the button whose press voltage is closest to
 the sample wins, unless the key-up voltage is strictly closer. A key state must
 be seen in two samples in a row before it is reported.
 
+Keys are armed only after they have been seen released: three key-up samples
+in a row (300 ms at the default poll) after the driver starts and after every
+resume. Before that no press is reported, however long a key is held. A key
+held through boot, or a converter that reads 0 V (where these buttons sit when
+pressed), therefore never sends a press. This matters for a key the firmware
+maps to the power button: on the TaishanPi 3M the Recovery key carries
+`rockchip,adc-keys-hid-usage` = `0x00010081` (Generic Desktop, System Power
+Down, the same usage `rk806pwrkey` reports), and Windows applies the "When I
+press the power button" action from Power Options to it. `DiagKeysArmed` is 1
+once the keys are armed.
+
 ## Registry
 
 `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0ADC\0\Device Parameters`, read at
@@ -73,7 +84,8 @@ Written by the driver: `DiagDsdStatus`, `DiagVrefMicrovolts`, `DiagPollMs`,
 `DiagKeysChannel`, `DiagKeyCount`, `DiagHidStarted`, `DiagJackChannel`,
 `DiagJackConnected` (0xFFFFFFFF before the first decision),
 `DiagJackMicrovolts`, `DiagConversions`, `DiagTimeouts`, `DiagStopped`,
-`DiagNotifications`, `DiagHidReports`, `DiagResetAvailable`, `DiagResets`.
+`DiagNotifications`, `DiagHidReports`, `DiagKeysArmed`, `DiagResetAvailable`,
+`DiagResets`.
 
 ## The jack interface for es8323
 
