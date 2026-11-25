@@ -1,6 +1,7 @@
 /*
- * bwl.h - Broadcom FullMAC SDIO core for the BCM43456 (AP6256): the parts
- * of the driver that do not depend on Windows.
+ * bwl.h - Broadcom FullMAC SDIO core for the BCM43456 (AP6256, TaishanPi
+ * 3M) and the BCM43752 (BW3752-50B1, ArmSoM CM5): the parts of the driver
+ * that do not depend on Windows.
  *
  * Everything declared here is plain C with no Windows or libc dependency.
  * The same files build into bcmwlsdio.sys, where the bus operations below
@@ -72,6 +73,28 @@ typedef struct bwl_core {
 
 #define BWL_MAX_CORES   32
 
+/*
+ * What differs between the chips this driver knows, from Linux brcmfmac
+ * (chip.c, sdio.c, bcmsdh.c; ISC) where OpenBSD bwfm has no entry.
+ */
+enum bwl_sr_check {
+    BWL_SR_GENERIC = 0,     /* PMU caps ext SR bit, then the retention control */
+    BWL_SR_CHIPCTL3,        /* 4345: PMU chip control 3, bit 2 */
+    BWL_SR_RETENTION,       /* 4359, 43751, 43752: the retention control only */
+};
+
+typedef struct bwl_chip_info {
+    u16 Chip;
+    u8  RevMin, RevMax;     /* inclusive; the first matching entry wins */
+    const char *FwName;     /* brcmfmac<FwName>-sdio.bin/.txt/.clm_blob */
+    u32 RamBase;            /* the ARM CR4's TCM base */
+    u16 F2BlockSize;        /* 0: keep the caller's (512) */
+    u8  F2Watermark;        /* F1_WATERMARK after F2 is up */
+    u8  MesBusyCtrl;        /* 0: untouched; else F1_MESBUSYCTRL and DEVCTL_F2WM_ENAB */
+    u8  AosNoDecode;        /* save/restore: CARDCAP_CMD_NODEC instead of CMD14 */
+    u8  SrCheck;            /* enum bwl_sr_check */
+} bwl_chip_info;
+
 enum bwl_clk {
     BWL_CLK_NONE = 0,
     BWL_CLK_SDONLY,
@@ -124,6 +147,7 @@ typedef struct bwl_dev {
     u32  ChipIdReg;
     u16  Chip;
     u8   ChipRev;
+    const bwl_chip_info *Info;  /* NULL until the chip ID matched an entry */
     bwl_core Cores[BWL_MAX_CORES];
     unsigned NumCores;
     u32  RamBase;
@@ -193,7 +217,10 @@ int  BwlChipSetPassive(bwl_dev *Dev);
 int  BwlChipSetActive(bwl_dev *Dev, u32 ResetVector);
 int  BwlChipSrCapable(bwl_dev *Dev);
 
-/* "43456" for chip 0x4345 rev 9, NULL if this driver has no name for it. */
+/* The table entry for a chip, NULL if this driver does not know it. */
+const bwl_chip_info *BwlChipInfo(u16 Chip, u8 Rev);
+
+/* "43456" for chip 0x4345 rev 9, "43752" for 0xaae8, NULL if this driver has no name for it. */
 const char *BwlChipFwName(u16 Chip, u8 Rev);
 
 /* ------------------------------------------------------------ bwl_bringup.c */
@@ -225,7 +252,11 @@ u32  BwlConsoleRead(bwl_dev *Dev, char *Out, u32 Cap);
 int  BwlNvramConvert(const u8 *Src, u32 SrcLen, u8 *Dst, u32 DstCap);
 #define BWL_NVRAM_SLACK 8u
 
-/* The "Version: x.y.z" in a firmware image's trailer, as text. 0 if found. */
+/*
+ * The version in a firmware image's trailer, as text. 0 if found. Older
+ * images end with "... Version: 7.45.96.0 CRC: ..."; newer ones with a
+ * "<FW-TAG>... Version=18.35.387.23.7 (...)" line. The last one wins.
+ */
 int  BwlFwImageVersion(const u8 *Img, u32 Len, char *Out, u32 Cap);
 
 /* Basic checks on a firmware image before it goes to RAM. */

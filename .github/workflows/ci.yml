@@ -73,7 +73,7 @@ jobs:
     name: bcmwlsdio core against a simulated chip (Linux, gcc)
     # The Wi-Fi driver's SDIO, chip, firmware and protocol code is plain C
     # (drivers/net/bcmwlsdio/bwl*.c). Build it with tools/bwltest, which
-    # runs it against a simulated BCM43456: unit tests, then attach,
+    # runs it against a simulated BCM43456 and BCM43752: unit tests, then attach,
     # download, start and control commands with synthetic files; then the
     # same bring-up with the real firmware files install-firmware.ps1
     # fetches, at the same pinned commits and hashes. The files are only
@@ -113,11 +113,22 @@ jobs:
           cp armbian/brcmfmac43456-sdio.txt rpi/
           ./bwltest-asan files armbian --version 7.45.96.0 --clm-chunks 6
           ./bwltest-asan files rpi --version 7.45.96.252 --clm-chunks 6
+          # the CM5-IO's BCM43752 set, same Armbian commit, against the simulated 43752
+          fetch armbian/brcmfmac43752-sdio.bin $A/brcmfmac43752-sdio.bin \
+            46f62076768e50938d0e29b306b24d4663de20b07b474c4759d5801fcbf0bdde
+          fetch armbian/brcmfmac43752-sdio.txt $A/brcmfmac43752-sdio.txt \
+            2d2723101fe9c66c853ddb1e2d715851ba100a4390f8ac72fc84dd35736cc66f
+          fetch armbian/brcmfmac43752-sdio.clm_blob $A/brcmfmac43752-sdio.clm_blob \
+            5143146e1923f87f7aab8df043abcf89a657fa9fdc3b22a38806399730d9a97a
+          ./bwltest-asan files armbian --chip 43752 --version 18.35.387.23.7 --clm-chunks 21
           # the hashes in install-firmware.ps1 must be the ones checked here
           for h in 3167956a7b2cffc4cfcaf6a282b95728c529eebef18a5d9e6d9ff32de32cc67c \
                    66c71eb53b47c49d42386b66735134578640b0946f3f46e44f384fef5aacfd9e \
                    2dbd7d22fc9af0eb560ceab45b19646d211bc7b34a1dd00c6bfac5dd6ba25e8a \
-                   dc4429f13b59f8c271e940c28b2a197455a8e02270fcc7a2f9036aa1e4c739fb; do
+                   dc4429f13b59f8c271e940c28b2a197455a8e02270fcc7a2f9036aa1e4c739fb \
+                   46f62076768e50938d0e29b306b24d4663de20b07b474c4759d5801fcbf0bdde \
+                   2d2723101fe9c66c853ddb1e2d715851ba100a4390f8ac72fc84dd35736cc66f \
+                   5143146e1923f87f7aab8df043abcf89a657fa9fdc3b22a38806399730d9a97a; do
             grep -qi "$h" $B/install-firmware.ps1
           done
 

@@ -369,6 +369,26 @@ files (without storing them). A release could still ship the Raspberry Pi
 files in a separate archive with their licence text if that is wanted
 later; that is a decision for the maintainer, not a technical one.
 
+### CM5-IO (BCM43752)
+
+`install-firmware.ps1 -Chip 43752` fetches, from the same armbian/firmware
+commit `db8cc456`:
+
+| File | |
+|---|---|
+| `brcmfmac43752-sdio.bin` | 743 607 bytes, 18.35.387.23.7 (`<FW-TAG>4362a2-roml/config_sdio_ampak_release_he`, 2020-07-13), SHA-256 `46f62076...f0bdde` |
+| `brcmfmac43752-sdio.clm_blob` | 29 225 bytes, SHA-256 `5143146e...a9a97a` (21 `clmload` chunks) |
+| `brcmfmac43752-sdio.txt` (NVRAM) | 8 355 bytes, `AP6275S_NVRAM_V1.7_20210726`, SHA-256 `2d272310...6cc66f` |
+
+These are AMPAK's AP6275S files (the chip, BCM43752 rev 2, is the same;
+the module and its RF layout are not: the CM5 carries a BW3752-50B1).
+They are what brcmfmac ran on this board under Fedora, so they are known to
+load; the NVRAM is not tuned for the module. Same licence situation as the
+Armbian 43456 files: none stated, so fetched on the board, not shipped.
+The firmware's trailer is a `<FW-TAG> ... Version=` line, not the 43456's
+`Version: `; `BwlFwImageVersion` reads both. CI runs the driver's core
+over the three files against a simulated BCM43752.
+
 The NVRAM's `macaddr=00:90:4c:c5:12:38` is AMPAK's placeholder, the same on
 every AP6256. Before W5 the driver needs a stable per-board address (for
 example derived from the RK3576 OTP CPU ID), set with `cur_etheraddr`
@@ -436,7 +456,7 @@ on a board.
 | TaishanPi 3M | Broadcom BCM43456 (AMPAK AP6256) | SDIO | none; this page |
 | Radxa ROCK 4D | AICSEMI AIC8800D80 (module listed by CNX Software as FCU760K; Radxa's own pages say only "Wi-Fi 6, BT 5.4") | USB | Mario Bălănică's `aicwlan` (below) |
 | Radxa Dragon Q6A (QCS6490) | AICSEMI AIC8800D80 | USB | the same `aicwlan` |
-| ArmSoM CM5-IO (CM5 module) | Synaptics SYN43752 | SDIO | none |
+| ArmSoM CM5-IO (CM5 module) | Synaptics/Broadcom BCM43752 (BW3752-50B1 module) | SDIO, BT on UART4 | `bcmwlsdio` (branch `cm5io-wifi-bt`) and `bcm4345bt` |
 
 So the guess was right: the ROCK 4D and the Dragon Q6A carry the same
 chip, the AIC8800D80 on USB. Sources: the mainline patch that powers the
@@ -506,6 +526,20 @@ FullMAC family as the BCM43456 (bwfm and brcmfmac support it, chip 43752,
 RAM base 0x170000), so once `bcmwlsdio` works on the TaishanPi it is the
 shortest way there too: a second chip entry, its firmware, its NVRAM and
 the CM5-IO's SDIO controller node in ACPI, not a second driver.
+
+That is now done, on branch `cm5io-wifi-bt` (2026-11-25, not run on a
+board): the chip table in `bwl_chip.c` has the 43751/43752 (firmware name
+`43752`, RAM base 0x170000, save/restore from the retention control, F2
+blocks of 256 bytes, F2 watermark 0x40 with the watermark enable and
+message-busy control 0xC0, CMD_NODEC instead of CMD14), the INF matches
+`SD\VID_02D0&PID_AAE8` and `PID_AAE7`, and `tools/bwltest` has a simulated
+BCM43752 (chipcommon with a separate PMU core). The firmware side is
+edk2-rk3576 `cm5io-parity`: the "SDIO Wi-Fi" option and the `RKCPFE2D` SSDT,
+with the controller and GPIOs the TaishanPi 3M uses (the ArmSoM-CM5-1V1
+schematic, page 17: SDMMC1 M0, WL_REG_ON GPIO1_C6, host wake GPIO0_B0, LPO
+from the LK8563S). ArmSoM's vendor device tree still says `rtl8852bs`:
+that is the V1.0 module (BL-M8852BS2), replaced by the BW3752-50B1 in V1.1.
+Check which one a board has: Linux on the user's CM5-IO found a BCM43752.
 
 Sources: [ROCK 4D Wi-Fi patch](https://lists.infradead.org/pipermail/linux-rockchip/2025-June/059994.html),
 [Radxa: Windows on the Dragon Q6A](https://docs.radxa.com/en/dragon/q6a/other-system/windows),

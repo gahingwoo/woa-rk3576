@@ -1,5 +1,5 @@
 /*
- * fakechip.h - a simulated BCM43456 behind SDIO, enough for bcmwlsdio's
+ * fakechip.h - a simulated BCM43456 or BCM43752 behind SDIO, enough for bcmwlsdio's
  * portable core (drivers/net/bcmwlsdio/bwl*.c) to attach, download
  * firmware, start it and talk to it on the control channel.
  *
@@ -17,11 +17,32 @@
 
 #include "../../drivers/net/bcmwlsdio/bwl.h"
 
+/* BCM43456: what bwfm and brcmfmac say about the 4345 family. */
 #define FAKE_RAMBASE    0x198000u
 #define FAKE_RAMSIZE    0xC8000u
 #define FAKE_CHIPID     0x15294345u     /* 0x4345 rev 9, AI interconnect */
 
+/*
+ * BCM43752: RAM base and chip ID as brcmfmac has them (0x170000; 43752 =
+ * 0xaae8, rev 2 as in Armbian's "4362a2" firmware). The RAM size is the
+ * model's own (1 MB): brcmfmac reads it from the CR4's bank registers and
+ * no figure for the real chip was at hand. Chipcommon rev 35 or later with
+ * a separate PMU core, as on brcmfmac's newer chips, so that the driver's
+ * PMU-core path runs.
+ */
+#define FAKE43752_RAMBASE  0x170000u
+#define FAKE43752_RAMSIZE  0x100000u
+#define FAKE43752_CHIPID   0x1502AAE8u
+
+enum fake_model {
+    FAKE_4345 = 0,
+    FAKE_43752,
+};
+
 typedef struct fake_chip {
+    int Model;              /* enum fake_model */
+    unsigned ChipIdReg, RamBase, RamSize;
+
     /* What the firmware "is": checked against RAM when the CPU starts. */
     const unsigned char *ExpectFw;
     unsigned ExpectFwLen;
@@ -37,6 +58,8 @@ typedef struct fake_chip {
     unsigned char SleepCsr;
     unsigned char Watermark;
     unsigned char WakeupCtrl;
+    unsigned char DeviceCtl;
+    unsigned char MesBusyCtrl;
     unsigned char FrameCtrl;
     unsigned Window;
 
@@ -73,5 +96,6 @@ typedef struct fake_chip {
 
 extern const bwl_bus_ops FakeOps;
 
-void FakeInit(fake_chip *F);
+void FakeInit(fake_chip *F);                    /* a BCM43456 */
+void FakeInitModel(fake_chip *F, int Model);
 void FakeFree(fake_chip *F);

@@ -1,6 +1,9 @@
 /*
  * driver.c - bcmwlsdio: KMDF function driver for the BCM43456 (AP6256)
- * SDIO Wi-Fi on the TaishanPi 3M. W3: bring-up only, see docs/dev/wifi.md.
+ * SDIO Wi-Fi on the TaishanPi 3M and the BCM43752 (BW3752-50B1) on the
+ * ArmSoM CM5. W3: bring-up only, see docs/dev/wifi.md. The firmware file
+ * names come from the chip ID (BwlChipFwName): brcmfmac43456-sdio.* or
+ * brcmfmac43752-sdio.*.
  *
  * PnP: PrepareHardware opens the SDBUS interface, SelfManagedIoInit
  * queues the bring-up on a work item (it takes seconds and must not hold

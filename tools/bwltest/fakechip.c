@@ -1,5 +1,5 @@
 /*
- * fakechip.c - simulated BCM43456 for tools/bwltest; see fakechip.h.
+ * fakechip.c - simulated BCM43456 and BCM43752 for tools/bwltest; see fakechip.h.
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
  * SPDX-License-Identifier: GPL-2.0-only
@@ -18,6 +18,7 @@
 #define SDIO_BASE   0x18002000u
 #define CR4_BASE    0x18003000u
 #define GCI_BASE    0x18004000u
+#define PMU_BASE    0x18005000u /* 43752 model only: PMU as a core of its own */
 #define WRAP(i)     (0x18100000u + (unsigned)(i) * 0x1000u)
 #define EROM_ADDR   0x1810F000u
 #define NCORES      4           /* cores with a wrapper: CC, D11, SDIO, CR4 */
@@ -59,15 +60,27 @@ addr_desc(unsigned base, unsigned stype, unsigned sz)
 }
 
 static void
-build_erom(void)
+build_erom(int model)
 {
     unsigned n = 0;
 
-    /* chipcommon rev 31: below 35, so the PMU registers are in chipcommon */
     erom[n++] = comp_a(CORE_CHIPCOMMON);
-    erom[n++] = comp_b(31, 1, 0);
-    erom[n++] = addr_desc(CC_BASE, DMP_SLAVE_TYPE_SLAVE, DMP_SLAVE_SIZE_4K);
-    erom[n++] = addr_desc(WRAP(IDX_CC), DMP_SLAVE_TYPE_SWRAP, DMP_SLAVE_SIZE_4K);
+    if (model == FAKE_43752) {
+        /* chipcommon rev 49 with the AOB capability: the PMU is a core of its own */
+        erom[n++] = comp_b(49, 1, 0);
+        erom[n++] = addr_desc(CC_BASE, DMP_SLAVE_TYPE_SLAVE, DMP_SLAVE_SIZE_4K);
+        erom[n++] = addr_desc(WRAP(IDX_CC), DMP_SLAVE_TYPE_SWRAP, DMP_SLAVE_SIZE_4K);
+        /* PMU with no wrappers: kept (bwfm and brcmfmac make an exception for
+         * it), because the next component ends its descriptor list */
+        erom[n++] = comp_a(CORE_PMU);
+        erom[n++] = comp_b(28, 0, 0);
+        erom[n++] = addr_desc(PMU_BASE, DMP_SLAVE_TYPE_SLAVE, DMP_SLAVE_SIZE_4K);
+    } else {
+        /* chipcommon rev 31: below 35, so the PMU registers are in chipcommon */
+        erom[n++] = comp_b(31, 1, 0);
+        erom[n++] = addr_desc(CC_BASE, DMP_SLAVE_TYPE_SLAVE, DMP_SLAVE_SIZE_4K);
+        erom[n++] = addr_desc(WRAP(IDX_CC), DMP_SLAVE_TYPE_SWRAP, DMP_SLAVE_SIZE_4K);
+    }
 
     /* 802.11 core: a 64-bit, size-described region first, which must be skipped */
     erom[n++] = comp_a(CORE_80211);
@@ -106,11 +119,21 @@ build_erom(void)
 }
 
 void
-FakeInit(fake_chip *F)
+FakeInitModel(fake_chip *F, int Model)
 {
     memset(F, 0, sizeof(*F));
-    build_erom();
-    F->Ram = calloc(1, FAKE_RAMSIZE);
+    F->Model = Model;
+    if (Model == FAKE_43752) {
+        F->ChipIdReg = FAKE43752_CHIPID;
+        F->RamBase = FAKE43752_RAMBASE;
+        F->RamSize = FAKE43752_RAMSIZE;
+    } else {
+        F->ChipIdReg = FAKE_CHIPID;
+        F->RamBase = FAKE_RAMBASE;
+        F->RamSize = FAKE_RAMSIZE;
+    }
+    build_erom(Model);
+    F->Ram = calloc(1, F->RamSize);
     F->Tx = calloc(1, TX_MAX);
     F->Rx = calloc(1, RX_MAX);
     F->Clm = calloc(1, 64 * 1024);
@@ -125,6 +148,12 @@ FakeInit(fake_chip *F)
     for (unsigned i = 0; i < NCORES; i++) {
         F->ResetCtl[i] = RESET_CTL_RESET;
     }
+}
+
+void
+FakeInit(fake_chip *F)
+{
+    FakeInitModel(F, FAKE_4345);
 }
 
 void
@@ -207,8 +236,11 @@ queue_event(fake_chip *F, unsigned type, unsigned status)
 static void
 boot(fake_chip *F)
 {
-    unsigned top = FAKE_RAMSIZE, shared, cons, logbuf;
-    static const char log[] = "\nfake RTE (bwltest) 7.45.96.0 on BCM4345 r9\nwl0: up\n";
+    unsigned top = F->RamSize, shared, cons, logbuf;
+    static const char log4345[] = "\nfake RTE (bwltest) 7.45.96.0 on BCM4345 r9\nwl0: up\n";
+    static const char log43752[] = "\nfake RTE (bwltest) 18.35.387.23.7 on BCM43752 r2\nwl0: up\n";
+    const char *log = F->Model == FAKE_43752 ? log43752 : log4345;
+    unsigned loglen = (unsigned)strlen(log);
 
     if (F->ExpectFw && (F->ResetVector != get_le32(F->ExpectFw))) {
         F->BootError = 1;
@@ -235,12 +267,12 @@ boot(fake_chip *F)
     logbuf = cons + 0x100;
     memset(F->Ram + shared, 0, 0x400);
     put_le32(F->Ram + shared + SHARED_FLAGS, 3);
-    put_le32(F->Ram + shared + SHARED_CONSOLE_ADDR, FAKE_RAMBASE + cons);
-    put_le32(F->Ram + cons + CONSOLE_LOG_BUF, FAKE_RAMBASE + logbuf);
+    put_le32(F->Ram + shared + SHARED_CONSOLE_ADDR, F->RamBase + cons);
+    put_le32(F->Ram + cons + CONSOLE_LOG_BUF, F->RamBase + logbuf);
     put_le32(F->Ram + cons + CONSOLE_LOG_BUFSZ, 0x100);
-    memcpy(F->Ram + logbuf, log, sizeof(log) - 1);
-    put_le32(F->Ram + cons + CONSOLE_LOG_IDX, sizeof(log) - 1);
-    put_le32(F->Ram + top - 4, FAKE_RAMBASE + shared);
+    memcpy(F->Ram + logbuf, log, loglen);
+    put_le32(F->Ram + cons + CONSOLE_LOG_IDX, loglen);
+    put_le32(F->Ram + top - 4, F->RamBase + shared);
     F->Running = 1;
     F->ToHostMbData = TOHOST_FWREADY;
     F->IntStatus |= INTSTATUS_HMB_HOST_INT;
@@ -253,13 +285,31 @@ cr4_running(const fake_chip *F)
     return F->ResetCtl[IDX_CR4] == 0 && !(F->Ioctl[IDX_CR4] & IOCTL_ARMCR4_CPUHALT);
 }
 
+/* The PMU registers: in chipcommon on the 4345, a core of its own on the 43752. */
+static unsigned
+pmu_base(const fake_chip *F)
+{
+    return F->Model == FAKE_43752 ? PMU_BASE : CC_BASE;
+}
+
 static unsigned
 bp_read32(fake_chip *F, unsigned a)
 {
     int w = wrap_index(a);
+    unsigned pmu = pmu_base(F);
 
-    if (a >= FAKE_RAMBASE && a + 4 <= FAKE_RAMBASE + FAKE_RAMSIZE) {
-        return get_le32(F->Ram + (a - FAKE_RAMBASE));
+    if (a >= F->RamBase && a + 4 <= F->RamBase + F->RamSize) {
+        return get_le32(F->Ram + (a - F->RamBase));
+    }
+    if (a == pmu + CC_PMUCONTROL) return F->PmuControl;
+    if (a == pmu + CC_PMUCAPS) return 0x1C;     /* PMU rev 28 */
+    if (F->Model == FAKE_4345) {
+        /* brcmfmac's 4345 save/restore check: chip control 3, bit 2 */
+        if (a == pmu + CC_CHIPCTL_ADDR) return F->ChipCtlAddr;
+        if (a == pmu + CC_CHIPCTL_DATA) return F->ChipCtlAddr == 3 ? (1u << 2) : 0;
+    } else {
+        /* brcmfmac's 43752 check: the retention control only; logic and MAC/PHY kept */
+        if (a == pmu + CC_RETENTION_CTL) return 0;
     }
     if (w >= 0) {
         if ((a & 0xFFF) == AGENT_IOCTL) return F->Ioctl[w];
@@ -271,17 +321,14 @@ bp_read32(fake_chip *F, unsigned a)
         return i < erom_len ? erom[i] : 0;
     }
     switch (a) {
-    case CC_BASE + CC_CHIPID:       return FAKE_CHIPID;
+    case CC_BASE + CC_CHIPID:       return F->ChipIdReg;
     case CC_BASE + CC_CAPS:         return CC_CAPS_PMU | 0x1u;
-    case CC_BASE + CC_CAPS_EXT:     return 0;
+    case CC_BASE + CC_CAPS_EXT:     return F->Model == FAKE_43752 ? CC_CAPS_EXT_AOB : 0;
     case CC_BASE + CC_EROMPTR:      return EROM_ADDR;
-    case CC_BASE + CC_PMUCONTROL:   return F->PmuControl;
-    case CC_BASE + CC_PMUCAPS:      return 0x1C;    /* PMU rev 28 */
-    case CC_BASE + CC_CHIPCTL_ADDR: return F->ChipCtlAddr;
-    case CC_BASE + CC_CHIPCTL_DATA: return F->ChipCtlAddr == 3 ? (1u << 2) : 0;
     case CR4_BASE + ARMCR4_CAP:     return 0x02;    /* 2 A banks, 0 B banks */
     case CR4_BASE + ARMCR4_BANKIDX: return F->BankIdx;
-    case CR4_BASE + ARMCR4_BANKINFO:return F->BankIdx < 2 ? 49u : 0u;   /* 50 x 8 KB */
+    case CR4_BASE + ARMCR4_BANKINFO:                /* 50 or 64 x 8 KB */
+        return F->BankIdx < 2 ? (F->Model == FAKE_43752 ? 63u : 49u) : 0u;
     case SDIO_BASE + SDCORE_INTSTATUS:      return F->IntStatus;
     case SDIO_BASE + SDCORE_HOSTINTMASK:    return F->HostIntMask;
     case SDIO_BASE + SDCORE_TOSBMAILBOXDATA:return F->ToSbMbData;
@@ -296,17 +343,20 @@ static void
 bp_write32(fake_chip *F, unsigned a, unsigned v)
 {
     int w = wrap_index(a);
+    unsigned pmu = pmu_base(F);
 
-    if (a >= FAKE_RAMBASE && a + 4 <= FAKE_RAMBASE + FAKE_RAMSIZE) {
-        if (cr4_running(F) && a < FAKE_RAMBASE + F->ExpectFwLen) {
+    if (a >= F->RamBase && a + 4 <= F->RamBase + F->RamSize) {
+        if (cr4_running(F) && a < F->RamBase + F->ExpectFwLen) {
             violation(F, "firmware image overwritten while running", a, v);
         }
-        put_le32(F->Ram + (a - FAKE_RAMBASE), v);
-        if (F->FlipRamAt != ~0u && a - FAKE_RAMBASE <= F->FlipRamAt && F->FlipRamAt < a - FAKE_RAMBASE + 4) {
+        put_le32(F->Ram + (a - F->RamBase), v);
+        if (F->FlipRamAt != ~0u && a - F->RamBase <= F->FlipRamAt && F->FlipRamAt < a - F->RamBase + 4) {
             F->Ram[F->FlipRamAt] ^= 0x5A;
         }
         return;
     }
+    if (a == pmu + CC_PMUCONTROL) { F->PmuControl = v; return; }
+    if (F->Model == FAKE_4345 && a == pmu + CC_CHIPCTL_ADDR) { F->ChipCtlAddr = v; return; }
     if (w >= 0) {
         int was = cr4_running(F);
         if ((a & 0xFFF) == AGENT_IOCTL) F->Ioctl[w] = v;
@@ -318,8 +368,6 @@ bp_write32(fake_chip *F, unsigned a, unsigned v)
         return;
     }
     switch (a) {
-    case CC_BASE + CC_PMUCONTROL:   F->PmuControl = v; return;
-    case CC_BASE + CC_CHIPCTL_ADDR: F->ChipCtlAddr = v; return;
     case CR4_BASE + ARMCR4_BANKIDX: F->BankIdx = v; return;
     case SDIO_BASE + SDCORE_INTSTATUS:      F->IntStatus &= ~v; return;
     case SDIO_BASE + SDCORE_HOSTINTMASK:    F->HostIntMask = v; return;
@@ -406,6 +454,8 @@ fake_cmd52(void *Ctx, unsigned Fn, unsigned Addr, int Write, unsigned char *Val)
     case F1_CHIPCLKCSR: if (Write) F->ClkCsr = *Val; else *Val = clkcsr_read(F); return 0;
     case F1_SLEEPCSR:   if (Write) F->SleepCsr = *Val; else *Val = F->SleepCsr | SLEEPCSR_DEVON; return 0;
     case F1_WATERMARK:  if (Write) F->Watermark = *Val; else *Val = F->Watermark; return 0;
+    case F1_DEVICE_CTL: if (Write) F->DeviceCtl = *Val; else *Val = F->DeviceCtl; return 0;
+    case F1_MESBUSYCTRL: if (Write) F->MesBusyCtrl = *Val; else *Val = F->MesBusyCtrl; return 0;
     case F1_WAKEUPCTRL: if (Write) F->WakeupCtrl = *Val; else *Val = F->WakeupCtrl; return 0;
     case F1_FRAMECTRL:  if (Write) { F->FrameCtrl = *Val; if (*Val & FRAMECTRL_RF_TERM) F->RxPos = F->RxLen; } else *Val = 0; return 0;
     case F1_RFRAMEBCLO: case F1_RFRAMEBCHI: if (!Write) *Val = 0; return 0;
@@ -460,9 +510,12 @@ handle_tx_frame(fake_chip *F, const unsigned char *p, unsigned len)
     } else if (cmd == C_GET_VAR && !(flags & BCDC_DCMD_SET)) {
         const char *name = (const char *)d;
         if (strcmp(name, "ver") == 0) {
-            static const char v[] = "wl0: Nov 24 2026 12:00:00 version 7.45.96.0 (bwltest) FWID 01-12345678\n";
+            static const char v4345[] = "wl0: Nov 24 2026 12:00:00 version 7.45.96.0 (bwltest) FWID 01-12345678\n";
+            static const char v43752[] = "wl0: Nov 24 2026 12:00:00 version 18.35.387.23.7 (bwltest) FWID 01-12345678\n";
+            const char *v = F->Model == FAKE_43752 ? v43752 : v4345;
+            unsigned vl = (unsigned)strlen(v) + 1;
             memset(reply + 16, 0, dlen);
-            memcpy(reply + 16, v, sizeof(v) < dlen ? sizeof(v) : dlen);
+            memcpy(reply + 16, v, vl < dlen ? vl : dlen);
         } else if (strcmp(name, "cur_etheraddr") == 0) {
             static const unsigned char mac[6] = { 0x00, 0x90, 0x4c, 0xc5, 0x12, 0x38 };
             memcpy(reply + 16, mac, 6);
@@ -538,7 +591,8 @@ fake_cmd53(void *Ctx, unsigned Fn, unsigned Addr, int Incr, int Write, int Block
             if (F->TxLen >= 4) {
                 unsigned flen = get_le16(F->Tx);
                 unsigned need = flen;
-                if (flen > 512 && flen % 512) need = (flen + 511) / 512 * 512; else need = (flen + 3) & ~3u;
+                unsigned fbs = F->BlkSize[2];
+                if (fbs && flen > fbs && flen % fbs) need = (flen + fbs - 1) / fbs * fbs; else need = (flen + 3) & ~3u;
                 if (F->TxLen >= need) {
                     handle_tx_frame(F, F->Tx, F->TxLen);
                     F->TxLen = 0;

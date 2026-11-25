@@ -16,7 +16,11 @@ is in `bwl_regs.h`, and each of the other files names it.
 
 Linux's brcmfmac (`drivers/net/wireless/broadcom/brcm80211/brcmfmac`) is
 also under the ISC licence (Broadcom). It was used to check `bwfm`'s values
-and for the receive-abort sequence. No GPL-only Linux code is used.
+and for the receive-abort sequence. The BCM43751/BCM43752 entry in the chip
+table (`bwl_chip.c`) takes its RAM base and save/restore check from both
+(they agree) and its SDIO settings (F2 block size, watermark and
+message-busy control, "AOS no decode") from brcmfmac, which has them and
+`bwfm` does not. No GPL-only Linux code is used.
 
 Nothing from Microsoft's driver samples is used. The driver links against
 the WDK's `sdbus.lib` and `ntstrsafe.lib`, as the other drivers here link

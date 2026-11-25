@@ -1,6 +1,7 @@
 /*
  * bcmwlsdio.h - KMDF function driver for the Broadcom BCM43456 Wi-Fi
- * (AMPAK AP6256) on the RK3576 SDIO controller, TaishanPi 3M.
+ * (AMPAK AP6256, TaishanPi 3M) and BCM43752 Wi-Fi (BW3752-50B1, ArmSoM
+ * CM5) on the RK3576 SDIO controller.
  *
  * W3 of docs/dev/wifi.md: open the SD bus driver's SDBUS interface, talk
  * CMD52/CMD53 to the card, identify the chip, download the firmware, NVRAM

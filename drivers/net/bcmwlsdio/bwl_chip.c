@@ -7,7 +7,15 @@
  * bwfm_chip_dmp_get_regaddr, bwfm_chip_ai_*, bwfm_chip_cr4_set_*,
  * bwfm_chip_tcm_ramsize/rambase, bwfm_chip_sr_capable; if_bwfm_sdio.c:
  * bwfm_sdio_buscore_prepare and _activate), reduced to the ARM CR4 chips
- * with TCM, which is what the BCM4345 family is.
+ * with TCM, which is what the BCM4345 family and the BCM43752 are.
+ *
+ * The chip table: the 4345 values are bwfm's. For the 43752, the RAM base
+ * (0x170000) and the save/restore check (retention control only) are in
+ * both bwfm (bwfm_chip_tcm_rambase, bwfm_chip_sr_capable, CY_CC_43752) and
+ * Linux brcmfmac (chip.c); the SDIO-side differences are brcmfmac's only
+ * (sdio.c brcmf_sdio_aos_no_decode and the F2 watermark in
+ * brcmf_sdio_bus_preinit, bcmsdh.c SDIO_4373_FUNC2_BLOCKSIZE; ISC,
+ * Broadcom). bwfm's SDIO attach writes watermark 8 for every chip.
  *
  * Copyright (c) 2010-2016 Broadcom Corporation
  * Copyright (c) 2016,2017 Patrick Wildt <patrick@blueri.se>
@@ -19,6 +27,28 @@
 
 #include "bwl.h"
 #include "bwl_regs.h"
+
+static const bwl_chip_info ChipTable[] = {
+    /* Chip        revs    name     RAM base  F2 blk  WM    MESBUSY  NODEC  SR */
+    { CHIP_4345,   9, 9,   "43456", 0x198000, 0,      8,    0,       0,     BWL_SR_CHIPCTL3 },
+    { CHIP_4345,   0, 255, "43455", 0x198000, 0,      8,    0,       0,     BWL_SR_CHIPCTL3 },
+    /* brcmfmac: CY_4373_F2_WATERMARK 0x40, MESBUSYCTRL 0x40 | ENAB, F2 blocks of 256 */
+    { CHIP_43751,  0, 255, "43752", 0x170000, 256,    0x40, 0x40 | MESBUSYCTRL_ENAB, 1, BWL_SR_RETENTION },
+    { CHIP_43752,  0, 255, "43752", 0x170000, 256,    0x40, 0x40 | MESBUSYCTRL_ENAB, 1, BWL_SR_RETENTION },
+};
+
+const bwl_chip_info *
+BwlChipInfo(u16 Chip, u8 Rev)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(ChipTable) / sizeof(ChipTable[0]); i++) {
+        if (ChipTable[i].Chip == Chip && Rev >= ChipTable[i].RevMin && Rev <= ChipTable[i].RevMax) {
+            return &ChipTable[i];
+        }
+    }
+    return NULL;
+}
 
 static u32
 Rd(bwl_dev *Dev, u32 Addr, int *Err)
@@ -334,16 +364,14 @@ TcmRamSize(bwl_dev *Dev, const bwl_core *Cr4)
 static int
 TcmRamBase(bwl_dev *Dev)
 {
-    switch (Dev->Chip) {
-    case CHIP_4345:
-        Dev->RamBase = 0x198000;
-        return BWL_OK;
-    default:
+    if (Dev->Info == NULL) {
         return BWL_E_NOCHIP;
     }
+    Dev->RamBase = Dev->Info->RamBase;
+    return BWL_OK;
 }
 
-/* bwfm_chip_sr_capable, the 4345 case and the generic one. */
+/* bwfm_chip_sr_capable / brcmf_chip_sr_capable, by the table's method. */
 int
 BwlChipSrCapable(bwl_dev *Dev)
 {
@@ -354,14 +382,19 @@ BwlChipSrCapable(bwl_dev *Dev)
     if (Dev->PmuRev < 17 || pmu == NULL) {
         return 0;
     }
-    if (Dev->Chip == CHIP_4345) {
+    switch (Dev->Info ? Dev->Info->SrCheck : BWL_SR_GENERIC) {
+    case BWL_SR_CHIPCTL3:
         Wr(Dev, pmu->Base + CC_CHIPCTL_ADDR, 3, &err);
         reg = Rd(Dev, pmu->Base + CC_CHIPCTL_DATA, &err);
         return err == 0 && (reg & (1u << 2)) != 0;
-    }
-    reg = Rd(Dev, pmu->Base + CC_PMUCAPS_EXT, &err);
-    if (err || (reg & PMUCAPS_EXT_SR_SUPP) == 0) {
-        return 0;
+    case BWL_SR_RETENTION:
+        break;
+    default:
+        reg = Rd(Dev, pmu->Base + CC_PMUCAPS_EXT, &err);
+        if (err || (reg & PMUCAPS_EXT_SR_SUPP) == 0) {
+            return 0;
+        }
+        break;
     }
     reg = Rd(Dev, pmu->Base + CC_RETENTION_CTL, &err);
     return err == 0 && (reg & (RETENTION_MACPHY_DIS | RETENTION_LOGIC_DIS)) == 0;
@@ -388,6 +421,7 @@ BwlChipAttach(bwl_dev *Dev)
     }
     Dev->Chip = (u16)CHIPID_ID(Dev->ChipIdReg);
     Dev->ChipRev = (u8)CHIPID_REV(Dev->ChipIdReg);
+    Dev->Info = BwlChipInfo(Dev->Chip, Dev->ChipRev);
     if (CHIPID_TYPE(Dev->ChipIdReg) != CHIPID_TYPE_SOCI_AI) {
         Dev->Detail = Dev->ChipIdReg;
         return BWL_E_NOCHIP;
@@ -405,7 +439,7 @@ BwlChipAttach(bwl_dev *Dev)
     }
     if (!cpu || BwlChipCore(Dev, CORE_CHIPCOMMON, 0) == NULL ||
         BwlChipCore(Dev, CORE_SDIO_DEV, 0) == NULL) {
-        /* Only ARM CR4 chips with TCM are handled here (the 4345 family). */
+        /* Only ARM CR4 chips with TCM are handled here (the 4345 family, the 43752). */
         Dev->Detail = Dev->NumCores;
         return BWL_E_NOCHIP;
     }
@@ -442,10 +476,7 @@ BwlChipAttach(bwl_dev *Dev)
 const char *
 BwlChipFwName(u16 Chip, u8 Rev)
 {
-    switch (Chip) {
-    case CHIP_4345:
-        return Rev == 9 ? "43456" : "43455";
-    default:
-        return NULL;
-    }
+    const bwl_chip_info *info = BwlChipInfo(Chip, Rev);
+
+    return info ? info->FwName : NULL;
 }

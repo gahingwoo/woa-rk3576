@@ -1,7 +1,9 @@
-# bcmwlsdio: BCM43456 Wi-Fi bring-up (TaishanPi 3M)
+# bcmwlsdio: BCM43456 and BCM43752 Wi-Fi bring-up (TaishanPi 3M, CM5-IO)
 
-KMDF function driver for the Broadcom BCM43456 in the AMPAK AP6256 module,
-on the RK3576 SDIO controller. This is stage W3 of
+KMDF function driver for the Broadcom BCM43456 in the AMPAK AP6256 module
+(TaishanPi 3M) and the BCM43752 in the BW3752-50B1 module (ArmSoM CM5 on
+the CM5-IO), on the RK3576 SDIO controller. Both boards wire the module to
+the same controller and the same GPIOs. This is stage W3 of
 [docs/dev/wifi.md](../../../docs/dev/wifi.md): it talks to the chip over
 SDIO, identifies it, downloads and starts the firmware, and reads the
 firmware's version. **It has no network interface yet**, and it has not
@@ -14,9 +16,11 @@ been run on a board.
 - `dwcmshc` from this branch (W2), which drives that controller
   (`ACPI\RKCPFE2D`). Windows' own sdbus then enumerates the card.
 - The firmware files, which this package does not contain. Run
-  `install-firmware.ps1` as administrator; it downloads
-  `brcmfmac43456-sdio.bin`, `.txt` and `.clm_blob` from pinned commits,
+  `install-firmware.ps1` as administrator (on the CM5-IO with
+  `-Chip 43752`); it downloads `brcmfmac43456-sdio.bin`, `.txt` and
+  `.clm_blob` (or the `brcmfmac43752-sdio` ones) from pinned commits,
   checks their SHA-256 and puts them in `%SystemRoot%\System32\drivers\brcm`.
+  The driver picks the names from the chip ID it reads.
 
 ## Stages
 

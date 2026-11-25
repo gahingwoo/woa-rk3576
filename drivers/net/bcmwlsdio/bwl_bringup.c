@@ -57,6 +57,15 @@ BwlAttach(bwl_dev *Dev)
         return r;
     }
 
+    /* brcmf_sdiod_probe: the 43752 takes F2 blocks of 256, not 512. F2 is still off. */
+    if (Dev->Info->F2BlockSize != 0 && Dev->Info->F2BlockSize < Dev->F2BlockSize) {
+        Dev->Step = "F2 block size";
+        r = BwlSetBlockSize(Dev, 2, Dev->Info->F2BlockSize);
+        if (r) {
+            return r;
+        }
+    }
+
     /* SDIO core rev 12 and later: keep the SDIO interface on (KSO). */
     Dev->Step = "KSO";
     core = BwlChipCore(Dev, CORE_SDIO_DEV, 0);
@@ -211,15 +220,29 @@ BwlStart(bwl_dev *Dev, u32 F2TimeoutMs)
 
     Dev->Step = "interrupt mask";
     if (BwlSdioCoreWrite(Dev, SDCORE_HOSTINTMASK, INTSTATUS_HMB_SW_MASK | INTSTATUS_CHIPACTIVE) ||
-        BwlWrite8(Dev, F1_WATERMARK, F2_WATERMARK_DEFAULT)) {
+        BwlWrite8(Dev, F1_WATERMARK, Dev->Info ? Dev->Info->F2Watermark : F2_WATERMARK_DEFAULT)) {
         return BWL_E_IO;
+    }
+    /* brcmf_sdio_bus_preinit, 43751/43752/4373: watermark enable and the
+     * F1 message-busy control. */
+    if (Dev->Info && Dev->Info->MesBusyCtrl) {
+        Dev->Step = "F2 watermark enable";
+        if (BwlRead8(Dev, F1_DEVICE_CTL, &b) ||
+            BwlWrite8(Dev, F1_DEVICE_CTL, (u8)(b | DEVCTL_F2WM_ENAB)) ||
+            BwlWrite8(Dev, F1_MESBUSYCTRL, Dev->Info->MesBusyCtrl)) {
+            return BWL_E_IO;
+        }
     }
 
     Dev->Step = "save/restore";
     if (Dev->SrCapable) {
+        /* brcmf_sdio_sr_init: chips with "AOS no decode" announce CMD_NODEC, not CMD14. */
+        u8 cardcap = (Dev->Info && Dev->Info->AosNoDecode) ? CARDCAP_CMD_NODEC
+                                                           : (CARDCAP_CMD14_SUPPORT | CARDCAP_CMD14_EXT);
+
         if (BwlRead8(Dev, F1_WAKEUPCTRL, &b) ||
             BwlWrite8(Dev, F1_WAKEUPCTRL, (u8)(b | WAKEUPCTRL_HTWAIT)) ||
-            BwlWrite8(Dev, CCCR_BRCM_CARDCAP, CARDCAP_CMD14_SUPPORT | CARDCAP_CMD14_EXT) ||
+            BwlWrite8(Dev, CCCR_BRCM_CARDCAP, cardcap) ||
             BwlWrite8(Dev, F1_CHIPCLKCSR, CLKCSR_FORCE_HT)) {
             return BWL_E_IO;
         }

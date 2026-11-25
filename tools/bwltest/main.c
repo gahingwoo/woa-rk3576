@@ -4,11 +4,13 @@
  *
  *   bwltest                     unit tests, then a full bring-up against
  *                               the simulated chip with synthetic files
- *   bwltest files DIR [--version V] [--clm-chunks N]
+ *   bwltest files DIR [--chip 43456|43752] [--version V] [--clm-chunks N]
  *                               the same bring-up with the real
- *                               brcmfmac43456-sdio.bin/.txt/.clm_blob
- *                               from DIR; checks the image's trailer
- *                               version and the CLM chunk count
+ *                               brcmfmac<chip>-sdio.bin/.txt/.clm_blob
+ *                               from DIR, against the simulated chip of
+ *                               that kind (default 43456); checks the
+ *                               image's trailer version and the CLM
+ *                               chunk count
  *
  * Exit status 0 when every check passed.
  *
@@ -84,6 +86,24 @@ test_versions(void)
     CHECK_EQ(BwlFwImageVersion(img, sizeof(img), out, 4), 0);
     CHECK(strcmp(out, "7.4") == 0);
 
+    /* the 43752's <FW-TAG> line, after an earlier "Version: " string */
+    {
+        static const char early[] = "built with Version: 1.2.3";
+        static const char fwtag[] =
+            "<FW-TAG>4362a2-roml/config_sdio_ampak_release_he Version=18.35.387.23.7 (b328500@shgit) FWID=01-f50fdff0";
+        memset(img, 0xA5, sizeof(img));
+        memcpy(img + 100, early, sizeof(early) - 1);
+        memcpy(img + sizeof(img) - sizeof(fwtag), fwtag, sizeof(fwtag));
+        CHECK_EQ(BwlFwImageVersion(img, sizeof(img), out, sizeof(out)), 0);
+        CHECK(strcmp(out, "18.35.387.23.7") == 0);
+        memcpy(img + sizeof(img) - 20, "Version=x", 9);    /* no digit after the tag: skipped */
+        CHECK_EQ(BwlFwImageVersion(img, sizeof(img), out, sizeof(out)), 0);
+        CHECK(strcmp(out, "18.35.387.23.7") == 0);
+        CHECK_EQ(BwlFwImageVersion((const u8 *)"Version=", 8, out, sizeof(out)), BWL_E_FORMAT);
+        CHECK_EQ(BwlFwImageVersion((const u8 *)"Version=9", 9, out, sizeof(out)), 0);
+        CHECK(strcmp(out, "9") == 0);
+    }
+
     CHECK_EQ(BwlVerString(ver, sizeof(ver), out, sizeof(out)), 0);
     CHECK(strcmp(out, "7.45.96") == 0);
     CHECK_EQ(BwlVerString("no version here", 15, out, sizeof(out)), BWL_E_FORMAT);
@@ -94,6 +114,24 @@ test_versions(void)
     CHECK_EQ(BwlFwImageCheck(img, sizeof(img), FAKE_RAMSIZE), 0);
     CHECK_EQ(BwlFwImageCheck(img, sizeof(img), 4096), BWL_E_SPACE);
     CHECK_EQ(BwlFwImageCheck(img, 100, 0), BWL_E_FORMAT);
+}
+
+static void
+test_chip_table(void)
+{
+    const bwl_chip_info *i;
+
+    CHECK(strcmp(BwlChipFwName(0x4345, 9), "43456") == 0);
+    CHECK(strcmp(BwlChipFwName(0x4345, 6), "43455") == 0);
+    CHECK(strcmp(BwlChipFwName(0xAAE8, 2), "43752") == 0);
+    CHECK(strcmp(BwlChipFwName(0xAAE7, 0), "43752") == 0);      /* 43751: brcmfmac loads 43752 files */
+    CHECK(BwlChipFwName(0x4339, 1) == NULL);
+    i = BwlChipInfo(0x4345, 9);
+    CHECK(i != NULL && i->RamBase == 0x198000 && i->F2BlockSize == 0 && i->F2Watermark == 8 &&
+          i->MesBusyCtrl == 0 && !i->AosNoDecode && i->SrCheck == BWL_SR_CHIPCTL3);
+    i = BwlChipInfo(0xAAE8, 2);
+    CHECK(i != NULL && i->RamBase == 0x170000 && i->F2BlockSize == 256 && i->F2Watermark == 0x40 &&
+          i->MesBusyCtrl == (0x40 | MESBUSYCTRL_ENAB) && i->AosNoDecode && i->SrCheck == BWL_SR_RETENTION);
 }
 
 static void
@@ -267,9 +305,10 @@ test_xfer_split(void)
 }
 
 static int
-bringup(const unsigned char *fw, unsigned fwlen, const unsigned char *nvtxt, unsigned nvtxtlen,
+bringup(int model, const unsigned char *fw, unsigned fwlen, const unsigned char *nvtxt, unsigned nvtxtlen,
         const unsigned char *clm, unsigned clmlen, const char *expect_ver, unsigned expect_chunks)
 {
+    const int is43752 = model == FAKE_43752;
     fake_chip f;
     bwl_dev d;
     unsigned char *nv = malloc(nvtxtlen + BWL_NVRAM_SLACK);
@@ -278,7 +317,7 @@ bringup(const unsigned char *fw, unsigned fwlen, const unsigned char *nvtxt, uns
     unsigned chunks = 0, clmstatus = 0, outlen = 0, v = 0;
     int nvlen, fws = 0, r, before = failures;
 
-    FakeInit(&f);
+    FakeInitModel(&f, model);
     dev_init(&d, &f);
 
     nvlen = BwlNvramConvert(nvtxt, nvtxtlen, nv, nvtxtlen + BWL_NVRAM_SLACK);
@@ -296,23 +335,32 @@ bringup(const unsigned char *fw, unsigned fwlen, const unsigned char *nvtxt, uns
         printf("  attach stopped at \"%s\" (detail 0x%x): %s\n", d.Step, d.Detail, f.LastViolation);
         goto out;
     }
-    CHECK_EQ(d.Chip, 0x4345);
-    CHECK_EQ(d.ChipRev, 9);
-    CHECK(strcmp(BwlChipFwName(d.Chip, d.ChipRev), "43456") == 0);
-    CHECK_EQ(d.NumCores, 4);                            /* CC, 802.11, SDIO, CR4 */
+    CHECK_EQ(d.Chip, is43752 ? 0xAAE8 : 0x4345);
+    CHECK_EQ(d.ChipRev, is43752 ? 2 : 9);
+    CHECK(strcmp(BwlChipFwName(d.Chip, d.ChipRev), is43752 ? "43752" : "43456") == 0);
+    CHECK(d.Info == BwlChipInfo(d.Chip, d.ChipRev));
+    CHECK_EQ(d.NumCores, is43752 ? 5 : 4);              /* CC, (PMU,) 802.11, SDIO, CR4 */
+    if (is43752) {
+        /* the PMU core, which has no wrapper, is the one BwlChipPmu picks */
+        CHECK(BwlChipCore(&d, CORE_PMU, 0) != NULL && BwlChipCore(&d, CORE_PMU, 0)->Base == 0x18005000u);
+        CHECK(BwlChipPmu(&d) == BwlChipCore(&d, CORE_PMU, 0));
+    } else {
+        CHECK(BwlChipPmu(&d) == BwlChipCore(&d, CORE_CHIPCOMMON, 0));
+    }
     CHECK(BwlChipCore(&d, CORE_ARM_CR4, 0) != NULL && BwlChipCore(&d, CORE_ARM_CR4, 0)->Wrap == 0x18103000u);
     CHECK(BwlChipCore(&d, CORE_80211, 0) != NULL && BwlChipCore(&d, CORE_80211, 0)->Base == 0x18001000u);
     CHECK(BwlChipCore(&d, CORE_GCI, 0) == NULL);        /* no wrapper: dropped, as in bwfm */
     CHECK(BwlChipCore(&d, 0x8FF, 0) == NULL);
-    CHECK_EQ(d.RamBase, FAKE_RAMBASE);
-    CHECK_EQ(d.RamSize, FAKE_RAMSIZE);
+    CHECK_EQ(d.RamBase, f.RamBase);
+    CHECK_EQ(d.RamSize, f.RamSize);
     CHECK_EQ(d.PmuRev, 28);
     CHECK_EQ(d.SrCapable, 1);
     CHECK_EQ(f.Cccr[CCCR_IOEX], 0x02);                  /* F1 on, F2 off */
     CHECK(f.SleepCsr & SLEEPCSR_KSO);
     CHECK(f.Cccr[CCCR_BRCM_CARDCTRL] & CARDCTRL_WLANRESET);
     CHECK_EQ(f.BlkSize[1], 64);
-    CHECK_EQ(f.BlkSize[2], 512);
+    CHECK_EQ(f.BlkSize[2], is43752 ? 256 : 512);
+    CHECK_EQ(d.F2BlockSize, is43752 ? 256 : 512);
 
     r = BwlDownload(&d, fw, fwlen, nv, (unsigned)nvlen, 1);
     CHECK_EQ(r, 0);
@@ -327,7 +375,10 @@ bringup(const unsigned char *fw, unsigned fwlen, const unsigned char *nvtxt, uns
     r = BwlStart(&d, 100);
     CHECK_EQ(r, 0);
     CHECK_EQ(d.SrEnabled, 1);
-    CHECK_EQ(f.Watermark, F2_WATERMARK_DEFAULT);
+    CHECK_EQ(f.Watermark, is43752 ? 0x40 : F2_WATERMARK_DEFAULT);
+    CHECK_EQ(f.DeviceCtl, is43752 ? DEVCTL_F2WM_ENAB : 0);
+    CHECK_EQ(f.MesBusyCtrl, is43752 ? (0x40 | MESBUSYCTRL_ENAB) : 0);
+    CHECK_EQ(f.Cccr[CCCR_BRCM_CARDCAP], is43752 ? CARDCAP_CMD_NODEC : (CARDCAP_CMD14_SUPPORT | CARDCAP_CMD14_EXT));
     CHECK_EQ(f.HostIntMask, INTSTATUS_HMB_SW_MASK | INTSTATUS_CHIPACTIVE);
     if (r) {
         printf("  start stopped at \"%s\"\n", d.Step);
@@ -357,7 +408,7 @@ bringup(const unsigned char *fw, unsigned fwlen, const unsigned char *nvtxt, uns
     memset(out, 0, sizeof(out));
     CHECK_EQ(BwlGetVar(&d, "ver", out, sizeof(out), &outlen, &fws), 0);
     CHECK_EQ(BwlVerString((const char *)out, outlen, ver, sizeof(ver)), 0);
-    CHECK(strcmp(ver, "7.45.96.0") == 0);
+    CHECK(strcmp(ver, is43752 ? "18.35.387.23.7" : "7.45.96.0") == 0);
     if (expect_ver) {
         char filever[64];
         CHECK_EQ(BwlFwImageVersion(fw, fwlen, filever, sizeof(filever)), 0);
@@ -388,10 +439,9 @@ out:
 
 /* Firmware, NVRAM and CLM made up for the self-test. */
 static void
-synthetic_files(unsigned char **fw, unsigned *fwlen, unsigned char **nv, unsigned *nvlen,
-                unsigned char **clm, unsigned *clmlen)
+synthetic_files_trailer(const char *trailer, unsigned char **fw, unsigned *fwlen, unsigned char **nv,
+                        unsigned *nvlen, unsigned char **clm, unsigned *clmlen)
 {
-    static const char trailer[] = "43455c5-roml/bwltest Version: 7.45.96.0 CRC: 0 Date: 2026";
     static const char nvram[] = "#test\nsromrev=11\nboardtype=0x6e4\nxtalfreq=37400\nmacaddr=00:90:4c:c5:12:38\n";
     unsigned i, x = 12345;
 
@@ -402,7 +452,7 @@ synthetic_files(unsigned char **fw, unsigned *fwlen, unsigned char **nv, unsigne
         (*fw)[i] = (unsigned char)(x >> 16);
     }
     (*fw)[0] = 0x3E; (*fw)[1] = 0xB8; (*fw)[2] = 0x98; (*fw)[3] = 0xF1;
-    memcpy(*fw + *fwlen - sizeof(trailer), trailer, sizeof(trailer));
+    memcpy(*fw + *fwlen - strlen(trailer) - 1, trailer, strlen(trailer) + 1);
     *nvlen = sizeof(nvram) - 1;
     *nv = malloc(*nvlen);
     memcpy(*nv, nvram, *nvlen);
@@ -412,6 +462,14 @@ synthetic_files(unsigned char **fw, unsigned *fwlen, unsigned char **nv, unsigne
         (*clm)[i] = (unsigned char)(i * 7);
     }
     memcpy(*clm, "BLOB", 4);
+}
+
+static void
+synthetic_files(unsigned char **fw, unsigned *fwlen, unsigned char **nv, unsigned *nvlen,
+                unsigned char **clm, unsigned *clmlen)
+{
+    synthetic_files_trailer("43455c5-roml/bwltest Version: 7.45.96.0 CRC: 0 Date: 2026",
+                            fw, fwlen, nv, nvlen, clm, clmlen);
 }
 
 static void
@@ -499,33 +557,49 @@ main(int argc, char **argv)
     unsigned fwlen, nvlen, clmlen;
 
     if (argc >= 3 && strcmp(argv[1], "files") == 0) {
-        const char *ver = NULL;
-        unsigned chunks = 0;
+        const char *ver = NULL, *chip = "43456";
+        unsigned chunks = 0, ramsize;
         unsigned char *conv;
-        int i, n;
+        char name[64];
+        int i, n, model;
 
         for (i = 3; i + 1 < argc; i += 2) {
             if (strcmp(argv[i], "--version") == 0) ver = argv[i + 1];
             else if (strcmp(argv[i], "--clm-chunks") == 0) chunks = (unsigned)atoi(argv[i + 1]);
+            else if (strcmp(argv[i], "--chip") == 0) chip = argv[i + 1];
         }
-        fw = slurp(argv[2], "brcmfmac43456-sdio.bin", &fwlen);
-        nv = slurp(argv[2], "brcmfmac43456-sdio.txt", &nvlen);
-        clm = slurp(argv[2], "brcmfmac43456-sdio.clm_blob", &clmlen);
+        if (strcmp(chip, "43456") == 0) {
+            model = FAKE_4345;
+            ramsize = FAKE_RAMSIZE;
+        } else if (strcmp(chip, "43752") == 0) {
+            model = FAKE_43752;
+            ramsize = FAKE43752_RAMSIZE;
+        } else {
+            printf("unknown --chip %s\n", chip);
+            return 2;
+        }
+        snprintf(name, sizeof(name), "brcmfmac%s-sdio.bin", chip);
+        fw = slurp(argv[2], name, &fwlen);
+        snprintf(name, sizeof(name), "brcmfmac%s-sdio.txt", chip);
+        nv = slurp(argv[2], name, &nvlen);
+        snprintf(name, sizeof(name), "brcmfmac%s-sdio.clm_blob", chip);
+        clm = slurp(argv[2], name, &clmlen);
         conv = malloc(nvlen + BWL_NVRAM_SLACK);
         n = BwlNvramConvert(nv, nvlen, conv, nvlen + BWL_NVRAM_SLACK);
         printf("firmware %u bytes, NVRAM %u bytes of text -> %d, CLM %u bytes\n", fwlen, nvlen, n, clmlen);
         CHECK(n > 0);
-        CHECK_EQ(BwlFwImageCheck(fw, fwlen, FAKE_RAMSIZE), 0);
-        CHECK(fwlen + (unsigned)n + 0x4000 < FAKE_RAMSIZE);
+        CHECK_EQ(BwlFwImageCheck(fw, fwlen, ramsize), 0);
+        CHECK(fwlen + (unsigned)n + 0x4000 < ramsize);
         CHECK_EQ(BwlClmCheck(clm, clmlen), 0);
         free(conv);
-        bringup(fw, fwlen, nv, nvlen, clm, clmlen, ver, chunks);
+        bringup(model, fw, fwlen, nv, nvlen, clm, clmlen, ver, chunks);
         free(fw);
         free(nv);
         free(clm);
     } else {
         test_nvram();
         test_versions();
+        test_chip_table();
         test_clm_chunks();
         test_sdpcm();
         test_bcdc_event();
@@ -533,7 +607,14 @@ main(int argc, char **argv)
         test_faults();
         synthetic_files(&fw, &fwlen, &nv, &nvlen, &clm, &clmlen);
         printf("bring-up with synthetic files\n");
-        bringup(fw, fwlen, nv, nvlen, clm, clmlen, "7.45.96.0", 6);
+        bringup(FAKE_4345, fw, fwlen, nv, nvlen, clm, clmlen, "7.45.96.0", 6);
+        free(fw);
+        free(nv);
+        free(clm);
+        synthetic_files_trailer("<FW-TAG>4362a2-roml/bwltest Version=18.35.387.23.7 (bwltest) FWID=01-0",
+                                &fw, &fwlen, &nv, &nvlen, &clm, &clmlen);
+        printf("bring-up with synthetic files, simulated BCM43752\n");
+        bringup(FAKE_43752, fw, fwlen, nv, nvlen, clm, clmlen, "18.35.387.23.7", 6);
         free(fw);
         free(nv);
         free(clm);

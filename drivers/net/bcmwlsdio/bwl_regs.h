@@ -63,6 +63,7 @@
 #define F1_WATERMARK            0x10008
 #define F1_DEVICE_CTL           0x10009
 #define  DEVCTL_CA_INT_ONLY             0x04
+#define  DEVCTL_F2WM_ENAB               0x10    /* brcmfmac SBSDIO_DEVCTL_F2WM_ENAB */
 #define F1_SBADDRLOW            0x1000A
 #define F1_SBADDRMID            0x1000B
 #define F1_SBADDRHIGH           0x1000C
@@ -81,6 +82,8 @@
 #define F1_SDIOPULLUP           0x1000F
 #define F1_RFRAMEBCLO           0x10019
 #define F1_RFRAMEBCHI           0x1001A
+#define F1_MESBUSYCTRL          0x1001D    /* brcmfmac SBSDIO_FUNC1_MESBUSYCTRL */
+#define  MESBUSYCTRL_ENAB               0x80
 #define F1_WAKEUPCTRL           0x1001E
 #define  WAKEUPCTRL_HTWAIT              0x02
 #define F1_SLEEPCSR             0x1001F
@@ -122,8 +125,10 @@
 #define  RETENTION_MACPHY_DIS           (1u << 26)
 #define  RETENTION_LOGIC_DIS            (1u << 27)
 
-/* Chip IDs this driver names firmware for */
+/* Chip IDs this driver names firmware for (brcm_hw_ids.h) */
 #define CHIP_4345               0x4345
+#define CHIP_43751              0xAAE7  /* 43751, same firmware as the 43752 */
+#define CHIP_43752              0xAAE8  /* 43752; also its SDIO device ID */
 
 /* Core IDs (EROM part numbers) */
 #define CORE_CHIPCOMMON         0x800

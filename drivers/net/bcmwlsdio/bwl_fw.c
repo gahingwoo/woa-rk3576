@@ -84,27 +84,39 @@ IsVerChar(u8 c)
 int
 BwlFwImageVersion(const u8 *Img, u32 Len, char *Out, u32 Cap)
 {
+    /* "Version: " (4345 family trailer) or "Version=" (<FW-TAG> line, 43752) */
     static const char tag[] = "Version: ";
-    const u32 tlen = (u32)sizeof(tag) - 1;
-    u32 i, n;
+    static const char tag2[] = "Version=";
+    const u32 tlen = (u32)sizeof(tag) - 1, tlen2 = (u32)sizeof(tag2) - 1;
+    u32 i, n, t;
 
     if (Cap == 0) {
         return BWL_E_SPACE;
     }
     Out[0] = 0;
-    if (Len < tlen) {
+    if (Len < tlen2) {
         return BWL_E_FORMAT;
     }
     /* The trailer is a text line at the very end; scan backwards. */
-    for (i = Len - tlen + 1; i-- > 0;) {
-        if (Img[i] == 'V' && BwlMemCmp(Img + i, tag, tlen) == 0 && i + tlen < Len &&
-            IsVerChar(Img[i + tlen])) {
-            for (n = 0; i + tlen + n < Len && IsVerChar(Img[i + tlen + n]) && n + 1 < Cap; n++) {
-                Out[n] = (char)Img[i + tlen + n];
-            }
-            Out[n] = 0;
-            return BWL_OK;
+    for (i = Len - tlen2 + 1; i-- > 0;) {
+        if (Img[i] != 'V') {
+            continue;
         }
+        if (i + tlen <= Len && BwlMemCmp(Img + i, tag, tlen) == 0) {
+            t = tlen;
+        } else if (BwlMemCmp(Img + i, tag2, tlen2) == 0) {
+            t = tlen2;
+        } else {
+            continue;
+        }
+        if (i + t >= Len || !IsVerChar(Img[i + t])) {
+            continue;
+        }
+        for (n = 0; i + t + n < Len && IsVerChar(Img[i + t + n]) && n + 1 < Cap; n++) {
+            Out[n] = (char)Img[i + t + n];
+        }
+        Out[n] = 0;
+        return BWL_OK;
     }
     return BWL_E_FORMAT;
 }

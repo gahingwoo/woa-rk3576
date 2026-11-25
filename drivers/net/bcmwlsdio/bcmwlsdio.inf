@@ -1,6 +1,7 @@
 ;
-; bcmwlsdio.inf - Broadcom BCM43456 Wi-Fi (AMPAK AP6256) on the RK3576 SDIO
-; controller, LCKFB TaishanPi 3M. Bring-up driver (W3 of docs/dev/wifi.md):
+; bcmwlsdio.inf - Broadcom BCM43456 Wi-Fi (AMPAK AP6256, LCKFB TaishanPi 3M)
+; and BCM43752 Wi-Fi (BW3752-50B1, ArmSoM CM5 on the CM5-IO) on the RK3576
+; SDIO controller. Bring-up driver (W3 of docs/dev/wifi.md):
 ; it identifies the chip and starts its firmware, and has no network
 ; interface yet.
 ;
@@ -11,9 +12,10 @@
 ;
 ; HARDWARE IDS ARE NOT CONFIRMED ON THE BOARD. The CIS vendor is 0x02D0
 ; (Broadcom). The device ID 0xA9BF is what the BCM4345 family reports on
-; other boards; 0x4345 is the ID Linux also matches for this chip. The W2
-; board test records the real list (pnputil /enum-devices /connected); if
-; it differs, add it below. If sdbus makes one device per function, both
+; other boards; 0x4345 is the ID Linux also matches for this chip. The
+; BCM43752 reports 0xAAE8 (Linux SDIO_DEVICE_ID_BROADCOM_43752; 0xAAE7 is
+; the 43751, which takes the same firmware). The W2 board test records the
+; real list (pnputil /enum-devices /connected); if it differs, add it below. If sdbus makes one device per function, both
 ; bind here and the instance on function 2 stays idle.
 ;
 ; The firmware files are not part of this package; see README.md and
@@ -48,6 +50,8 @@ bcmwlsdio.sys = 1
 [Standard.NTARM64.10.0...16299]
 %BCMWLSDIO.DeviceDesc% = BCMWLSDIO_Inst,SD\VID_02D0&PID_A9BF
 %BCMWLSDIO.DeviceDesc% = BCMWLSDIO_Inst,SD\VID_02D0&PID_4345
+%BCMWLSDIO.43752Desc% = BCMWLSDIO_Inst,SD\VID_02D0&PID_AAE8
+%BCMWLSDIO.43752Desc% = BCMWLSDIO_Inst,SD\VID_02D0&PID_AAE7
 
 [BCMWLSDIO_Inst.NT]
 CopyFiles = BCMWLSDIO_CopyFiles
@@ -90,6 +94,7 @@ KmdfLibraryVersion = 1.33
 
 [Strings]
 ProviderName          = "woa-rk3576"
-DiskName              = "BCM43456 Wi-Fi Installation Disk"
+DiskName              = "Broadcom SDIO Wi-Fi Installation Disk"
 BCMWLSDIO.DeviceDesc  = "Broadcom BCM43456 Wi-Fi (SDIO, bring-up)"
-BCMWLSDIO.SvcDesc     = "Broadcom BCM43456 SDIO Wi-Fi bring-up driver"
+BCMWLSDIO.43752Desc   = "Broadcom BCM43752 Wi-Fi (SDIO, bring-up)"
+BCMWLSDIO.SvcDesc     = "Broadcom SDIO Wi-Fi bring-up driver"
