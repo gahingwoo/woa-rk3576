@@ -10,13 +10,16 @@ them. Status on 2026-11-24:
 | Headphone jack and jack microphone (ES8388) | TaishanPi 3M | `PcdAnalogAudioPreset` (TRUE on this board) | rk3xi2sbus, csaudiork3x 1.0.0.135 or later, es8323, pl330dma | works since 2026-11-22 |
 | HDMI output, 48 kHz stereo | TaishanPi 3M | `PcdHdmiAudioPreset` (TRUE) | the same, and wddm-mali-g52 driving HDMI | works since 2026-11-23 |
 | HDMI output | CM5-IO | `PcdHdmiAudioPreset` (TRUE) | the same | not tried |
+| ES8388: CN3 header (OUT2 on test pads), LIN2/RIN2 differential microphone pads | CM5-IO | edk2-rk3576 branch `cm5io-parity` | the same, es8323 with optional interrupt (`es83-optional-irq`) | not tried |
+| ES8388: headphone jack, LIN1 headset microphone | ROCK 4D | edk2-rk3576 branch `rock4d-parity` | the same | not tried |
 
 These need edk2-rk3576 firmware newer than 0.4.1 (the `ci` build until the
 next release). A USB audio device works with Windows' inbox USB Audio Class
 driver.
 
-The CM5-IO's ES8388 goes only to a 3-pin header (CN3) with no jack, and its
-wiring is not in any device tree this project has; it is not described.
+The CM5-IO and the ROCK 4D have no jack-detect line, and their ES8388 is
+wired differently from the TaishanPi 3M's; see
+[Other boards](#other-boards-no-jack-detect-and-the-routing-properties).
 
 The plan this page grew from, written before audio worked, is in
 [history](../history/2026-11-21-audio-plan.md).
@@ -124,6 +127,39 @@ driver start). The driver writes `JackSetupStatus`, `JackOpenStatus`,
 and `JackNotifies` there; csaudiork3x writes `JackConnected`, `JackReports`,
 `JackEvents` and `JackTopologyRegistered` under the SAI1 adapter's key.
 
+## Other boards: no jack detect, and the routing properties
+
+On a board with no detect line the firmware defines `BOARD_CODEC_NO_HPDET`
+(edk2-rk3576 `Es8388.asl`): no detect GpioIo, no GpioInt and no
+`rockchip,hp-det-*` properties. es8323 then creates no interrupt object (it
+creates it in `OnPrepareHardware`, from the GpioInt in `_CRS`, instead of in
+`EvtDriverDeviceAdd`, where an interrupt object with no resource would cost
+the device its start), sets up no jack detection, and the headphone endpoint
+stays plugged. The SAI headphone topology still claims
+`JACKDESC2_PRESENCE_DETECT_CAPABILITY`; `IsConnected` is always TRUE, which
+is what Windows asks of an endpoint without detection.
+
+Which ES8388 outputs and input the board wires comes from the same `_DSD`
+UUID (`daffd814-6eba-4d8c-8a91-bc9bbf4aa301`), set by the firmware's
+`BOARD_CODEC_OUTPUT_ROUTE` and `BOARD_CODEC_INPUT_SELECT`:
+
+| Property | Value | Registers (datasheet section 6, mainline `es8328.c`) |
+|---|---|---|
+| `rockchip,output-route` | bit 0 LOUT1/ROUT1, bit 1 LOUT2/ROUT2; default 1 | reg 0x04 DAC Power: bit 5 LOUT1, 4 ROUT1, 3 LOUT2, 2 ROUT2 (0x30, 0x0C, 0x3C); with OUT2, reg 0x30/0x31 (LOUT2/ROUT2 volume) = 0x1E, 0 dB (reset value 0x00, -45 dB) |
+| `rockchip,input-select` | 1 LIN1/RIN1 (default), 2 LIN2/RIN2, 3 LIN1-RIN1 differential, 4 LIN2-RIN2 differential | reg 0x0A ADC Control 2: LINSEL 7:6, RINSEL 5:4 (00 input 1, 01 input 2, 11 differential): 0x00, 0x50, 0xF0, 0xF0; for 3 and 4 also reg 0x0B ADC Control 3 bit 7 DS (pair select): 0x02, 0x82 |
+
+Without either property the writes are exactly the TaishanPi 3M sequence.
+REG_DWORD `OutputRoute` and `InputSelect` in the codec's `Device Parameters`
+override the firmware (for trying a wiring without reflashing); the driver
+writes what it used as `ActiveOutputRoute`, `ActiveInputSelect`, and
+`JackInterrupt` (1 if `_CRS` had a GpioInt).
+
+| Board | Wiring (schematic) | `output-route` | `input-select` |
+|---|---|---|---|
+| TaishanPi 3M | LOUT1/ROUT1 to the amplifier and jack; LINPUT1 onboard microphone | (absent: 1) | (absent: 1) |
+| CM5-IO | LOUT1/ROUT1 to the 3-pin header CN3 (HPR, HPL, HP_GND); LOUT2/ROUT2 (AUD_LINEOUT_L/R) only to test pads T36/T37, not to the 40-pin header; microphone pads T34/T35 (MIC2P/MIC2N, biased through R56/R57/R58) on LIN2/RIN2, marked "Differential routing". HP_DET_L is tied low by R411, so no detect | 3 | 4 |
+| ROCK 4D | LOUT1/ROUT1 to the jack J18; LOUT2/ROUT2 only to the speaker amplifier, not fitted; headset microphone MIC_INP_PHONE on LIN1, RIN1 to HP_GND, LIN2/RIN2 open | 1 | 1 |
+
 ## What is not done
 
 - Jack detection is written (above) and not yet run on the board.
@@ -131,7 +167,8 @@ and `JackNotifies` there; csaudiork3x writes `JackConnected`, `JackReports`,
   0 dB.
 - The headset microphone (RINPUT), sample rates other than 48 kHz, and
   16-bit formats.
-- The CM5-IO's ES8388.
+- The CM5-IO's and the ROCK 4D's ES8388: described and configured, not run
+  on either board.
 
 ## Installing
 

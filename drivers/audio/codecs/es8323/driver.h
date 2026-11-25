@@ -38,6 +38,19 @@
 #define ES8388_MAX_GPIOIO   4
 #define ES8388_NO_INDEX     0xFFFFFFFF
 
+//
+// Analog routing of the ES8388 on an RK3576 SAI (es8388_sai.c), from the
+// _DSD properties rockchip,output-route and rockchip,input-select.
+//
+#define ES8388_ROUTE_OUT1   0x1         // LOUT1/ROUT1
+#define ES8388_ROUTE_OUT2   0x2         // LOUT2/ROUT2
+#define ES8388_ROUTE_ALL    (ES8388_ROUTE_OUT1 | ES8388_ROUTE_OUT2)
+
+#define ES8388_INPUT_LIN1   1           // LINPUT1/RINPUT1, single ended
+#define ES8388_INPUT_LIN2   2           // LINPUT2/RINPUT2, single ended
+#define ES8388_INPUT_DIFF1  3           // LINPUT1 - RINPUT1, differential
+#define ES8388_INPUT_DIFF2  4           // LINPUT2 - RINPUT2, differential
+
 typedef struct _ES8323_CONTEXT
 {
 
@@ -53,6 +66,10 @@ typedef struct _ES8323_CONTEXT
 
 	BOOLEAN ConnectInterrupt;
 
+	//
+	// The jack-detect GpioInt, created in OnPrepareHardware only when _CRS
+	// has an interrupt; NULL on a board with no detect line.
+	//
 	WDFINTERRUPT Interrupt;
 
 	//
@@ -60,6 +77,16 @@ typedef struct _ES8323_CONTEXT
 	// The SAI sends 32-bit slots, so the codec runs 24-bit I2S.
 	//
 	BOOLEAN Rk3576Sai;
+
+	//
+	// Analog routing (es8388_sai.c).  Dsd*: as _DSD gives them,
+	// ES8388_NO_INDEX when absent; OutputRoute/InputSelect: what the
+	// power-up sequence uses (TaishanPi 3M wiring unless told otherwise).
+	//
+	ULONG DsdOutputRoute;
+	ULONG DsdInputSelect;
+	ULONG OutputRoute;
+	ULONG InputSelect;
 
 	//
 	// Optional GpioIo: the enable of an amplifier after LOUT1/ROUT1, driven
@@ -125,6 +152,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(ES8323_CONTEXT, GetDeviceContext)
 BOOLEAN Es8388SaiIsBound(_In_ WDFDEVICE FxDevice);
 NTSTATUS Es8388SaiOpenAmpGpio(_In_ PES8323_CONTEXT pDevice);
 VOID Es8388SaiCloseAmpGpio(_In_ PES8323_CONTEXT pDevice);
+VOID Es8388SaiSelectRoute(_In_ PES8323_CONTEXT pDevice);
 NTSTATUS Es8388SaiPowerUp(_In_ PES8323_CONTEXT pDevice);
 VOID Es8388SaiPowerDown(_In_ PES8323_CONTEXT pDevice);
 NTSTATUS Es8388SaiSetAmp(_In_ PES8323_CONTEXT pDevice, BOOLEAN on);

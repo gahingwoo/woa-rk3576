@@ -27,8 +27,11 @@
  * With the jack unplugged the headphone amplifier is switched off (its enable
  * is the first GpioIo, es8388_sai.c), and back on when a plug goes in.
  *
- * Without the _DSD (older firmware) nothing here runs and the endpoint stays
- * plugged, as before.
+ * Without the _DSD (older firmware), or with a _DSD that has no
+ * rockchip,hp-det-gpio-io (a board with no detect line: ROCK 4D, CM5-IO),
+ * nothing here runs and the endpoint stays plugged, as before.  Such a board
+ * has no GpioInt in _CRS either, and the driver then creates no interrupt
+ * object (es8323.c, OnPrepareHardware).
  *
  * Overrides, REG_DWORD in the device's "Device Parameters" key
  * (HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP8388\0\Device Parameters),
@@ -153,7 +156,10 @@ static BOOLEAN DsdInteger(_In_ PACPI_METHOD_ARGUMENT value, _Out_ ULONG* out) {
 
 //
 // The jack-detect properties of _DSD.  STATUS_NOT_FOUND when the firmware
-// has none of them.
+// has none of them.  The same pass picks up the routing properties
+// (rockchip,output-route, rockchip,input-select) into DsdOutputRoute and
+// DsdInputSelect; a _DSD with only those still returns STATUS_NOT_FOUND,
+// as a board with no detect line has no jack to report.
 //
 static NTSTATUS Es8388JackReadDsd(_In_ PES8323_CONTEXT pDevice) {
 	ACPI_EVAL_INPUT_BUFFER_EX inputBuffer;
@@ -253,6 +259,13 @@ static NTSTATUS Es8388JackReadDsd(_In_ PES8323_CONTEXT pDevice) {
 			else if (DsdNameIs(name, "rockchip,hp-det-debounce-ms") && DsdInteger(value, &v)) {
 				pDevice->HpDetDebounceMs = min(v, ES8388_JACK_MAX_DEBOUNCE_MS);
 			}
+			// The analog routing, checked and applied by es8388_sai.c.
+			else if (DsdNameIs(name, "rockchip,output-route") && DsdInteger(value, &v)) {
+				pDevice->DsdOutputRoute = v;
+			}
+			else if (DsdNameIs(name, "rockchip,input-select") && DsdInteger(value, &v)) {
+				pDevice->DsdInputSelect = v;
+			}
 		}
 	}
 	status = haveIndex ? STATUS_SUCCESS : STATUS_NOT_FOUND;
@@ -268,6 +281,8 @@ VOID Es8388JackSelectGpios(_In_ PES8323_CONTEXT pDevice) {
 	ULONG ampIndex = ES8388_NO_INDEX;
 
 	pDevice->HpDetIoIndex = ES8388_NO_INDEX;
+	pDevice->DsdOutputRoute = ES8388_NO_INDEX;
+	pDevice->DsdInputSelect = ES8388_NO_INDEX;
 	pDevice->HpDetActiveHigh = TRUE;
 	pDevice->HpDetDebounceMs = ES8388_JACK_DEFAULT_DEBOUNCE_MS;
 	pDevice->JackSetupStatus = STATUS_NOT_FOUND;

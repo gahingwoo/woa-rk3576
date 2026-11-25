@@ -483,6 +483,8 @@ NTSTATUS BOOTCODEC(
 	return status;
 }
 
+EVT_WDF_INTERRUPT_ISR OnInterruptIsr;
+
 NTSTATUS
 OnPrepareHardware(
 _In_  WDFDEVICE     FxDevice,
@@ -513,10 +515,9 @@ Status
 	BOOLEAN fSpbResourceFound = FALSE;
 	NTSTATUS status = STATUS_INSUFFICIENT_RESOURCES;
 
-	UNREFERENCED_PARAMETER(FxResourcesRaw);
-
 	pDevice->GpioIoCount = 0;
 	pDevice->HasAmpGpio = FALSE;
+	pDevice->Interrupt = NULL;
 
 	//
 	// Parse the peripheral's resources.
@@ -568,6 +569,40 @@ Status
 				}
 			}
 			break;
+		case CmResourceTypeInterrupt:
+			//
+			// The jack-detect GpioInt.  Created here, from the resource,
+			// rather than in EvtDriverDeviceAdd: a board with no detect
+			// line (BOARD_CODEC_NO_HPDET in the firmware) has no interrupt
+			// in _CRS, and an interrupt object with no resource to match
+			// would cost the device its start.  The first one is used,
+			// as the framework did when the object came from DeviceAdd.
+			//
+			if (pDevice->Interrupt == NULL)
+			{
+				WDF_INTERRUPT_CONFIG interruptConfig;
+
+				WDF_INTERRUPT_CONFIG_INIT(
+					&interruptConfig,
+					OnInterruptIsr,
+					NULL);
+				interruptConfig.PassiveHandling = TRUE;
+				interruptConfig.InterruptRaw =
+					WdfCmResourceListGetDescriptor(FxResourcesRaw, i);
+				interruptConfig.InterruptTranslated = pDescriptor;
+
+				status = WdfInterruptCreate(
+					FxDevice,
+					&interruptConfig,
+					WDF_NO_OBJECT_ATTRIBUTES,
+					&pDevice->Interrupt);
+				if (!NT_SUCCESS(status))
+				{
+					pDevice->Interrupt = NULL;
+					return status;
+				}
+			}
+			break;
 		default:
 			//
 			// Ignoring all other resource types.
@@ -591,6 +626,13 @@ Status
 	// RKCP8388: the jack-detect GpioIo from _DSD; the amplifier enable is
 	// the first other GpioIo (without a _DSD, the first GpioIo, as before).
 	Es8388JackSelectGpios(pDevice);
+
+	// RKCP8388: which outputs and which input the board wires, from the
+	// same _DSD (the TaishanPi 3M's without it).
+	if (pDevice->Rk3576Sai)
+	{
+		Es8388SaiSelectRoute(pDevice);
+	}
 
 	status = SpbTargetInitialize(FxDevice, &pDevice->I2CContext);
 	if (!NT_SUCCESS(status))
@@ -640,6 +682,9 @@ Status
 	Es8388JackRelease(pDevice);
 	Es8388SaiCloseAmpGpio(pDevice);
 	SpbTargetDeinitialize(FxDevice, &pDevice->I2CContext);
+
+	// The framework deletes an interrupt created in EvtDevicePrepareHardware.
+	pDevice->Interrupt = NULL;
 
 	return status;
 }
@@ -765,7 +810,6 @@ IN PWDFDEVICE_INIT DeviceInit
 	WDF_IO_QUEUE_CONFIG           queueConfig;
 	WDF_OBJECT_ATTRIBUTES         attributes;
 	WDFDEVICE                     device;
-	WDF_INTERRUPT_CONFIG interruptConfig;
 	WDFQUEUE                      queue;
 	UCHAR                         minorFunction;
 	PES8323_CONTEXT               devContext;
@@ -876,28 +920,9 @@ IN PWDFDEVICE_INIT DeviceInit
 	}
 
 	//
-	// Create an interrupt object for hardware notifications
+	// The interrupt object, if _CRS has an interrupt, is created in
+	// OnPrepareHardware.
 	//
-	WDF_INTERRUPT_CONFIG_INIT(
-		&interruptConfig,
-		OnInterruptIsr,
-		NULL);
-	interruptConfig.PassiveHandling = TRUE;
-
-	status = WdfInterruptCreate(
-		device,
-		&interruptConfig,
-		WDF_NO_OBJECT_ATTRIBUTES,
-		&devContext->Interrupt);
-
-	if (!NT_SUCCESS(status))
-	{
-		Es8323Print(DEBUG_LEVEL_ERROR, DBG_PNP,
-			"Error creating WDF interrupt object - %!STATUS!",
-			status);
-
-		return status;
-	}
 
 	devContext->FxDevice = device;
 
