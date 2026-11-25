@@ -46,32 +46,60 @@ function Await($op, [Type]$type) {
     $t.Result
 }
 
+# rhproxy names its buses through a device interface property, the one
+# GetDeviceSelector(friendlyName) matches on
+# (System.DeviceInterface.Spb.ControllerFriendlyName), which is the
+# "bus-I2C-<name>" / "bus-SPI-<name>" key of \_SB.RHPX._DSD. An interface's
+# DeviceInformation.Name is not that name: rhproxy gives its interfaces no
+# display name of their own, and Windows shows the computer name instead.
+# The property's name is read back from the selector rather than spelled
+# out here, so it is the one Windows itself matches on.
+$probe = [Windows.Devices.I2c.I2cDevice]::GetDeviceSelector('PIN40PROBE')
+if ($probe -notmatch '([\w.]+):=\s*"PIN40PROBE"') {
+    throw "Cannot find the bus name property in the selector: $probe"
+}
+$nameKey = $Matches[1]
+$props = New-Object 'System.Collections.Generic.List[string]'
+$props.Add($nameKey)
+
 function Buses([string]$selector) {
-    Await ([Windows.Devices.Enumeration.DeviceInformation]::FindAllAsync($selector)) `
-          ([Windows.Devices.Enumeration.DeviceInformationCollection])
+    @(Await ([Windows.Devices.Enumeration.DeviceInformation]::FindAllAsync($selector, $props)) `
+            ([Windows.Devices.Enumeration.DeviceInformationCollection]))
 }
 
-$i2c = Buses ([Windows.Devices.I2c.I2cDevice]::GetDeviceSelector())
-$spi = Buses ([Windows.Devices.Spi.SpiDevice]::GetDeviceSelector())
-"I2C buses: $(@($i2c | ForEach-Object { $_.Name }) -join ', ')"
-"SPI buses: $(@($spi | ForEach-Object { $_.Name }) -join ', ')"
-if (@($i2c).Count -eq 0) {
+function BusName($info) {
+    $n = $info.Properties[$nameKey]
+    if ($n) { [string]$n } else { "(no name) $($info.Id)" }
+}
+
+$i2c = @(Buses ([Windows.Devices.I2c.I2cDevice]::GetDeviceSelector()))
+$spi = @(Buses ([Windows.Devices.Spi.SpiDevice]::GetDeviceSelector()))
+"I2C buses: $(@($i2c | ForEach-Object { BusName $_ }) -join ', ')"
+"SPI buses: $(@($spi | ForEach-Object { BusName $_ }) -join ', ')"
+if ($i2c.Count -eq 0) {
     throw 'No I2C bus for applications. See docs/pin40.md.'
 }
 
-$target = if ($Bus) { $i2c | Where-Object { $_.Name -eq $Bus } | Select-Object -First 1 } else { $i2c | Select-Object -First 1 }
-if ($null -eq $target) {
-    throw "No I2C bus named $Bus."
+# -Bus is looked up the way Microsoft's samples do it, by
+# GetDeviceSelector(name), not by comparing names in the list above.
+$target = if ($Bus) {
+    Buses ([Windows.Devices.I2c.I2cDevice]::GetDeviceSelector($Bus)) | Select-Object -First 1
+} else {
+    $i2c | Select-Object -First 1
 }
+if ($null -eq $target) {
+    throw "No I2C bus named $Bus. Buses: $(@($i2c | ForEach-Object { BusName $_ }) -join ', ')"
+}
+$targetName = BusName $target
 
-"scanning $($target.Name) at 100 kHz"
+"scanning $targetName at 100 kHz"
 $found = @()
 for ($addr = 0x08; $addr -le 0x77; $addr++) {
     $settings = New-Object Windows.Devices.I2c.I2cConnectionSettings($addr)
     $settings.BusSpeed = [Windows.Devices.I2c.I2cBusSpeed]::StandardMode
     $dev = Await ([Windows.Devices.I2c.I2cDevice]::FromIdAsync($target.Id, $settings)) ([Windows.Devices.I2c.I2cDevice])
     if ($null -eq $dev) {
-        throw "Could not open $($target.Name) (in use by another program?)"
+        throw "Could not open $targetName (in use by another program?)"
     }
     try {
         $buf = New-Object byte[] 1
