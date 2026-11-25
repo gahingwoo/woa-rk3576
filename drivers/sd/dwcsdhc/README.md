@@ -12,7 +12,7 @@ The controller itself is SDHCI-compliant, with some peculiarities and a few more
 ## Supported features
 - ADMA2 transfers
 - up to HS SDR52 speed mode (52 MB/s)
-- crash dump (`dump_dwcsdhc.sys` under dumpsdport), not yet tried on a board; see [docs/CRASHDUMP.md](../../../docs/CRASHDUMP.md)
+- crash dump (`dump_dwcsdhc.sys` under dumpsdport), off unless `Parameters\CrashDump` is 1, not yet tried on a board; see [docs/dev/crashdump.md](../../../docs/dev/crashdump.md)
 
 ## To-do
 * HS400 Enhanced Strobe (the other modes are not planned)

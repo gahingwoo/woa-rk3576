@@ -81,4 +81,4 @@ and strip to hex only after removing the value name: `BootConfig` and
 
 A bugcheck only leaves a dump if the eMMC driver's crash dump copy works.
 How it works on these boards, what to check, and the one-shot test:
-[CRASHDUMP.md](CRASHDUMP.md).
+[crashdump.md](crashdump.md).

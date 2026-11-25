@@ -45,7 +45,92 @@ static volatile ULONG *s_CruClkSel;
 //
 static DWCSDHC_CRASHDUMP_SHARE s_CrashdumpShare;
 
+//
+// Parameters\CrashDump of the service key, read once by the running driver.
+// Off unless set to 1: then the dump copy is refused before it touches the
+// controller, exactly as if the share had never been published.
+//
+static BOOLEAN s_CrashdumpEnabled;
+
 INIT_SEGMENT_BEGIN; //======================================================
+
+static
+BOOLEAN
+SdhcReadCrashdumpParameter(
+    _In_ PUNICODE_STRING RegistryPath
+    )
+
+/*++
+
+Routine Description:
+
+    Running driver only, at PASSIVE_LEVEL from DriverEntry. Read the DWORD
+    CrashDump under the service key's Parameters subkey. Anything other
+    than a REG_DWORD of 1, including a missing key, means off.
+
+--*/
+
+{
+    UCHAR Buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+    OBJECT_ATTRIBUTES Attributes;
+    BOOLEAN Enabled;
+    PKEY_VALUE_PARTIAL_INFORMATION Info;
+    HANDLE ParametersKey;
+    UNICODE_STRING ParametersName;
+    ULONG ResultLength;
+    HANDLE ServiceKey;
+    NTSTATUS Status;
+    UNICODE_STRING ValueName;
+
+    Enabled = FALSE;
+    if ((RegistryPath == NULL) || (RegistryPath->Buffer == NULL)) {
+        return FALSE;
+    }
+
+    InitializeObjectAttributes(&Attributes,
+                               RegistryPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&ServiceKey, KEY_READ, &Attributes);
+    if (!NT_SUCCESS(Status)) {
+        return FALSE;
+    }
+
+    RtlInitUnicodeString(&ParametersName, L"Parameters");
+    InitializeObjectAttributes(&Attributes,
+                               &ParametersName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               ServiceKey,
+                               NULL);
+
+    Status = ZwOpenKey(&ParametersKey, KEY_READ, &Attributes);
+    if (NT_SUCCESS(Status)) {
+        RtlInitUnicodeString(&ValueName, L"CrashDump");
+        RtlZeroMemory(Buffer, sizeof(Buffer));
+        Status = ZwQueryValueKey(ParametersKey,
+                                 &ValueName,
+                                 KeyValuePartialInformation,
+                                 Buffer,
+                                 sizeof(Buffer),
+                                 &ResultLength);
+
+        Info = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;
+        if (NT_SUCCESS(Status) &&
+            (Info->Type == REG_DWORD) &&
+            (Info->DataLength == sizeof(ULONG)) &&
+            (*(UNALIGNED ULONG *)Info->Data == 1)) {
+
+            Enabled = TRUE;
+        }
+
+        ZwClose(ParametersKey);
+    }
+
+    ZwClose(ServiceKey);
+    return Enabled;
+}
 
 //-----------------------------------------------------------------------------
 // SlotExtension routines.
@@ -89,6 +174,8 @@ Return Value:
 
     if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
         ExInitializeDriverRuntime(0);
+        s_CrashdumpEnabled =
+            SdhcReadCrashdumpParameter((PUNICODE_STRING)RegistryPath);
     }
 
     SDPORT_INITIALIZATION_DATA InitializationData;
@@ -241,15 +328,18 @@ Routine Description:
 
     Running driver only. Leave the CRU mapping where the dump copy will look
     for it, after checking that the path the dump copy takes to get here
-    really leads to this driver on this Windows build. If it does not, publish
-    nothing: the dump copy then leaves the clock alone, as it always did.
+    really leads to this driver on this Windows build. If it does not, or
+    Parameters\CrashDump is not 1, publish nothing: the dump copy then
+    refuses to initialise and the dump is abandoned before the controller
+    is touched.
 
 --*/
 
 {
     PDRIVER_OBJECT DriverObject;
 
-    if ((s_CruClkSel == NULL) ||
+    if (!s_CrashdumpEnabled ||
+        (s_CruClkSel == NULL) ||
         (s_CrashdumpShare.Magic == DWCSDHC_CRASHDUMP_SHARE_MAGIC)) {
 
         return;
@@ -624,6 +714,19 @@ Return value:
         SdhcExtension->CruClkSel = SdhcCrashdumpBorrowCru(PrivateExtension);
 
         //
+        // Nothing published: crash dumps are off (Parameters\CrashDump is
+        // not 1), or the running driver could not be found or is another
+        // build. Without the CRU the card clock cannot be set, so the
+        // identification would run at the operating rate. Give up before
+        // writing a single register; Windows then records a failed dump
+        // and the card is left as the crash found it.
+        //
+
+        if (SdhcExtension->CruClkSel == NULL) {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        //
         // Polled from here on: nothing may reach the GIC. dumpsdport also
         // disables the events and resets the host before it starts, so this
         // only covers the time in between.
@@ -722,6 +825,20 @@ Return value:
     Capabilities->Supported.HS200 = 0;
     Capabilities->Supported.HS400 = 0;
 
+    //
+    // The dump copy gets the one mode the running driver is known to run
+    // the eMMC in, high speed at 52 MHz. dumpsdport chooses its speed from
+    // these bits without the running stack's history (the SD driver next
+    // door, dwcmshc, saw it pick UHS-I modes with no voltage switch), and
+    // a dump is the wrong place to find out how DDR52 behaves here.
+    //
+
+    if (CrashdumpMode) {
+        Capabilities->Supported.SDR50 = 0;
+        Capabilities->Supported.DDR50 = 0;
+        Capabilities->Supported.SDR104 = 0;
+    }
+
     if (Capabilities2Reg.DriverTypeA) {
         Capabilities->Supported.DriverTypeA = 1;
     }
@@ -736,7 +853,7 @@ Return value:
 
     Capabilities->Supported.DriverTypeB = 1;
 
-    if (Capabilities2Reg.UseTuningForSDR50) {
+    if (Capabilities2Reg.UseTuningForSDR50 && !CrashdumpMode) {
         Capabilities->Supported.TuningForSDR50 = 1;
     }
 
@@ -803,6 +920,28 @@ Return value:
 
     if (CurrentLimitMax >= 200) {
         Capabilities->Supported.Limit200mA;
+    }
+
+    //
+    // The bugcheck may have caught the controller in the middle of a
+    // command or an ADMA transfer that will never be completed. Stop both
+    // state machines now, so nothing runs between here and dumpsdport's own
+    // ResetHost(All). CMD and DAT resets keep the vendor bits (ResetHost
+    // restores MISC_INTCLK_EN anyway) and leave the card alone; dumpsdport's
+    // CMD0 then returns the card to idle from whatever state it was left in.
+    //
+
+    if (CrashdumpMode) {
+        NTSTATUS Status;
+
+        Status = SdhcResetHost(SdhcExtension, SdResetTypeDat);
+        if (NT_SUCCESS(Status)) {
+            Status = SdhcResetHost(SdhcExtension, SdResetTypeCmd);
+        }
+
+        if (!NT_SUCCESS(Status)) {
+            return Status;
+        }
     }
 
     //
@@ -1647,9 +1786,9 @@ DwcSdhcRkSetClock(
     }
 
     //
-    // In crashdump mode this is the running driver's mapping, borrowed. If
-    // it could not be found, the clock stays at the rate the running system
-    // left it, which is too fast for identification.
+    // In crashdump mode this is the running driver's mapping, borrowed;
+    // SdhcSlotInitialize refuses the dump copy when it could not be found,
+    // so NULL here only happens in the running driver if mapping failed.
     //
 
     if (SdhcExtension->CruClkSel != NULL) {
