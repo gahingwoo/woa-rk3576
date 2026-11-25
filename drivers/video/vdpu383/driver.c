@@ -16,10 +16,12 @@
  *
  * Behaviour follows mainline Linux (drivers/media/platform/rockchip/rkvdec,
  * rkvdec.c and rkvdec-vdpu383-h264.c): how a decode is started, how the
- * interrupt is acknowledged. The warm-up decode at D0 entry is the vendor
- * kernel's (warmup.c), and runs only when the Device Parameters value
- * WarmupAtD0 is 1 (default 0: the first board test reads registers and
- * nothing more; `vdpu383test warmup` runs it on demand).
+ * interrupt is acknowledged. The warm-up decode is the vendor kernel's
+ * (warmup.c): at every D0 entry and after every IP reset, unless the
+ * Device Parameters value WarmupAtD0 is 0. Without it, H.264 decodes
+ * after a power-on came out wrong, differently on every boot, until one
+ * warm-up had run (board, 2026-11-25); `vdpu383test warmup` runs it on
+ * demand.
  *
  * The decoder's own IOMMU is run with paging on and this driver's page
  * tables (Device Parameters Iommu, default 1): a buffer is any pages of
@@ -513,6 +515,44 @@ V383CacheClear(
     V383Wr(Ctx, V383_CACHE_OFFSET + V383_CACHE_CLR_CACHE0, 1);
 }
 
+/* ---------------------------------------------------------- warm-up */
+
+/*
+ * rk3576_workaround_run(), which the vendor kernel runs at probe and at
+ * every resume: one canned H.264 picture through the link registers.
+ * Without it, every H.264 decode after a power-on came out wrong (chroma,
+ * and luma too with the IOMMU off), the same within one boot and
+ * different from boot to boot, and HEVC decodes did not cure it; after
+ * one warm-up, H.264 stayed right (board, 2026-11-25). Whatever it sets
+ * up is inside the decoder: the warm-up shares no buffer with a decode.
+ * PASSIVE_LEVEL; the decoder interrupt is masked while it polls, and the
+ * interrupt lock is held around it once interrupts are connected.
+ */
+static VOID
+V383WarmupNow(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _In_ PCWSTR Why
+    )
+{
+    if (Ctx->WarmupAtD0 != 1 || !Ctx->WarmVa)
+        return;
+    if (Ctx->IommuOn && !Ctx->WarmMappedIova) {
+        V383_LOG("warm-up (%ws): skipped, its buffer is not mapped in the IOMMU", Why);
+        return;
+    }
+    V383Crumb(Ctx, Why);
+    if (Ctx->InterruptsConnected)
+        WdfInterruptAcquireLock(Ctx->DecInterrupt);
+    V383WarmupRun(Ctx, &Ctx->Warm);
+    if (Ctx->InterruptsConnected)
+        WdfInterruptReleaseLock(Ctx->DecInterrupt);
+    Ctx->WarmRuns++;
+    V383Fact(Ctx, L"WarmupIrq", Ctx->Warm.irq);
+    V383Fact(Ctx, L"WarmupStatus", Ctx->Warm.status);
+    V383Fact(Ctx, L"WarmupTimedOut", Ctx->Warm.timed_out);
+    V383Fact(Ctx, L"WarmupRuns", Ctx->WarmRuns);
+}
+
 /* ------------------------------------------------------------ reset */
 
 /* vdpu383_stop() in mainline ("Stop the VDPU383 core on timeout") and
@@ -700,7 +740,7 @@ V383EvtPrepareHardware(
     UNREFERENCED_PARAMETER(ResourcesRaw);
 
     V383Crumb(ctx, L"PrepareHardware: start");
-    ctx->WarmupAtD0 = V383Setting(ctx, L"WarmupAtD0", 0);
+    ctx->WarmupAtD0 = V383Setting(ctx, L"WarmupAtD0", 1);
     ctx->IommuSetting = V383Setting(ctx, L"Iommu", 1);
 
     for (i = 0; i < WdfCmResourceListGetCount(ResourcesTranslated); i++) {
@@ -863,16 +903,9 @@ V383EvtD0Entry(
     V383Crumb(ctx, L"D0Entry: IOMMU and cache set");
 
     /* rk3576_workaround_run(): probe and resume; interrupts are not yet
-     * connected here. Off unless WarmupAtD0 = 1. */
-    if (ctx->WarmupAtD0 == 1) {
-        V383Crumb(ctx, L"D0Entry: warm-up decode");
-        V383WarmupRun(ctx, &ctx->Warm);
-        V383Fact(ctx, L"WarmupIrq", ctx->Warm.irq);
-        V383Fact(ctx, L"WarmupStatus", ctx->Warm.status);
-        V383Fact(ctx, L"WarmupTimedOut", ctx->Warm.timed_out);
-    } else {
-        RtlZeroMemory(&ctx->Warm, sizeof(ctx->Warm));
-    }
+     * connected here. On unless WarmupAtD0 = 0. */
+    RtlZeroMemory(&ctx->Warm, sizeof(ctx->Warm));
+    V383WarmupNow(ctx, L"D0Entry: warm-up decode");
     V383Crumb(ctx, L"D0Entry: done");
     return STATUS_SUCCESS;
 }
@@ -1207,7 +1240,7 @@ V383Run(
     WDFFILEOBJECT fo = WdfRequestGetFileObject(Request);
     LARGE_INTEGER timeout, t0, t1, freq;
     NTSTATUS status, wait;
-    BOOLEAN timedOut, faulted;
+    BOOLEAN timedOut, faulted, didReset = FALSE;
     ULONG r;
 
     *Info = 0;
@@ -1334,6 +1367,7 @@ V383Run(
         WdfInterruptAcquireLock(Ctx->DecInterrupt);
         out->reset_status = V383IpReset(Ctx);
         WdfInterruptReleaseLock(Ctx->DecInterrupt);
+        didReset = TRUE;
         /* the reset took the IOMMU with it; on a fault, also unmasks its
          * interrupt (rkvdec_iommu_restore() after every vdpu383 error) */
         V383MmuRestore(Ctx);
@@ -1348,6 +1382,9 @@ V383Run(
      */
     if (timedOut || faulted)
         KeFlushQueuedDpcs();
+    /* whether an IP reset undoes the warm-up is not known: run it again */
+    if (didReset)
+        V383WarmupNow(Ctx, L"Run: warm-up after the IP reset");
     if (faulted)
         V383Fact(Ctx, L"LastMmuFaultAddr", out->bad_reg);
     if (Ctx->Runs == 1) {
@@ -1498,6 +1535,7 @@ V383EvtIoDeviceControl(
         if (ctx->InterruptsConnected)
             WdfInterruptReleaseLock(ctx->DecInterrupt);
         V383MmuRestore(ctx);
+        V383WarmupNow(ctx, L"IOCTL reset: warm-up after the IP reset");
         info = sizeof(*o);
         break;
     }

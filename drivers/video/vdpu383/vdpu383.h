@@ -101,7 +101,8 @@ typedef struct _DEVICE_CONTEXT {
 
     /* breadcrumbs (Device Parameters), settings */
     volatile LONG   StepSeq;
-    ULONG           WarmupAtD0;     /* Device Parameters WarmupAtD0, default 0 */
+    ULONG           WarmupAtD0;     /* Device Parameters WarmupAtD0, default 1: at D0 entry and after an IP reset */
+    ULONG           WarmRuns;       /* warm-ups the driver ran by itself */
     ULONG           UserAccess;     /* Device Parameters UserAccess, default 0 (EvtDeviceAdd) */
 
     /* warm-up */
