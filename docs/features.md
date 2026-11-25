@@ -85,14 +85,35 @@ matched FFmpeg's output bit for bit. It needs edk2-rk3576 with *Video
 Decoder (VDPU383)* enabled in setup (off by default). Video players do not
 use it yet; the plan is in [video decode](dev/video-decode.md).
 
+## Buttons on the TaishanPi 3M (not run on a board)
+
+The TaishanPi 3M has two buttons, RECOVERY and RESET, and nothing on the
+PMIC's power-on line.
+
+| Button | Under Windows |
+|---|---|
+| RECOVERY | the power button: a short press does what Control Panel, Power Options, "Choose what the power buttons do" says (shut down, sleep, hibernate, turn off the display, do nothing) |
+| RESET | resets the board, as always |
+
+This needs edk2-rk3576 `main` (setup option "ADC keys for the OS", on by
+default on this board) and the rk3xsaradc driver installed. The key counts
+only once it has been seen released after boot or resume, and must be held
+for two polls (about 200 ms), so holding RECOVERY while the board starts does
+nothing. To check: `reg query
+"HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0ADC\0\Device Parameters"`
+shows `DiagKeysArmed 1` and, after a press, a higher `DiagHidReports`. If the
+ADC device ever gets in the way, turn the setup option off; the firmware then
+does not describe or touch the ADC.
+
 ## ADC keys and headphone jack on the SARADC (not run on a board)
 
 [rk3xsaradc](../drivers/adc/rk3xsaradc) reads the RK3576's SARADC when the
-firmware declares it (`ACPI\RKCP0ADC`, a board branch of edk2-rk3576 for
-now): the TaishanPi 3M's Recovery key and the CM5-IO's and ROCK 4D's Maskrom
-keys become HID buttons (vendor page 0xFF00, Windows does nothing with them
-by itself), and the ROCK 4D's headphone jack, which has no detect switch and
-is read on ADC channel 3, drives the Headphones endpoint through es8323.
+firmware declares it (`ACPI\RKCP0ADC`; on edk2-rk3576 `main` for the
+TaishanPi 3M, on board branches for the others): the TaishanPi 3M's Recovery
+key is the power button (above), the CM5-IO's and ROCK 4D's Maskrom keys
+become HID buttons (vendor page 0xFF00, Windows does nothing with them by
+itself), and the ROCK 4D's headphone jack, which has no detect switch and is
+read on ADC channel 3, drives the Headphones endpoint through es8323.
 `tools/adctest` reads any channel.
 
 ## NPU

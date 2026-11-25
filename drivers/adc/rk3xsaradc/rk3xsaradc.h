@@ -47,6 +47,7 @@
 #define RKADC_MIN_POLL_MS       20u
 #define RKADC_MAX_POLL_MS       2000u
 #define RKADC_DEFAULT_KEY_SAMPLES 2u
+#define RKADC_KEY_ARM_SAMPLES   3u           /* key-up polls in a row before any key counts */
 #define RKADC_DEFAULT_JACK_MS   150u         /* simple-audio-card's hp-det debounce */
 #define RKADC_MAX_JACK_MS       2000u
 /* At 1 MHz (the firmware's rate) a conversion takes about 60 us. */
@@ -81,6 +82,8 @@ typedef struct _RKADC_CONTEXT {
     ULONG KeyUsage[RK3X_SARADC_MAX_KEYS];
     ULONG KeySamples;
     SARADC_DEBOUNCE KeyDebounce;
+    SARADC_KEYARM KeyArm;           /* no key until seen released (start, resume) */
+    BOOLEAN KeyArmSaved;            /* DiagKeysArmed written since the last arm */
     SARADC_HID_STATE HidLast;
 
     BOOLEAN HaveJack;

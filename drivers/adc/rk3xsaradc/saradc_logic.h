@@ -56,6 +56,24 @@ void SaradcDebounceInit(SARADC_DEBOUNCE *d, int initial, unsigned int need);
 int SaradcDebounceStep(SARADC_DEBOUNCE *d, int sample);
 
 /*
+ * Keys are armed only once they have been seen released: Need key-up
+ * samples in a row (at least 1) after start or resume.  Until then every
+ * sample is taken as "no key", so a key held through boot, or a converter
+ * that reads 0 V (which is where most of these buttons sit when pressed),
+ * never reports a press.  That matters most for a key that is the power
+ * button.  Once armed it stays armed.
+ */
+typedef struct _SARADC_KEYARM {
+    int Armed;
+    unsigned int Released;
+    unsigned int Need;
+} SARADC_KEYARM;
+
+void SaradcKeyArmInit(SARADC_KEYARM *a, unsigned int need);
+/* The classification to debounce: key, or SARADC_NO_KEY while not armed. */
+int SaradcKeyArmStep(SARADC_KEYARM *a, int classified);
+
+/*
  * Headphone jack on an ADC input: plugged below one voltage, unplugged
  * above another, and in between (the hysteresis band) whatever it was.  A
  * new level must hold for DebounceMs before it is reported; the first

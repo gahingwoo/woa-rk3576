@@ -5,8 +5,11 @@ publishes only with the setup option **Power button (RK806)** on
 (`Silicon/Rockchip/RK3576/AcpiTables/PwrKey.asl`). Not run on hardware yet;
 see the test plan below.
 
-On the TaishanPi 3M, the CM5-IO and the ROCK 4D the power button goes to the
-PMIC's `PWRON` pin, not to the SoC. The PMIC (RK806, I2C1 address 0x23)
+On the CM5-IO (SW4) and the ROCK 4D (SW1) the power button goes to the
+PMIC's `PWRON` pin, not to the SoC. The TaishanPi 3M has no key on `PWRON`
+(its buttons are RECOVERY and RESET), so the firmware does not offer this
+device there; its Recovery key is the power button instead, through
+[rk3xsaradc](../../adc/rk3xsaradc). The PMIC (RK806, I2C1 address 0x23)
 reports a press and a release as `PWRON_FALL` and `PWRON_RISE` in `INT_STS0`
 (0x77, bits 0 and 1) and holds its `INT` line, GPIO0_A6, low until the status
 is written back (mainline Linux `rk808.h`, `rk8xx-core.c`,

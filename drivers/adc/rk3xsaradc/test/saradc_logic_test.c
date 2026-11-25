@@ -99,6 +99,103 @@ static void test_debounce(void)
     CHECK(SaradcDebounceStep(&d, 2) == 1);
 }
 
+/*
+ * The pipeline rk3xsaradc runs on every poll (driver.c RkAdcEvtTimer):
+ * classify, arm gate, debounce.  Returns the HID System report value after
+ * the sample (0 none, 1 Power Down), for the usage the key maps to.
+ */
+static unsigned int poll_step(const SARADC_KEYMAP *m, SARADC_KEYARM *a,
+                              SARADC_DEBOUNCE *d, unsigned int usage,
+                              unsigned int uv, int *reported)
+{
+    SARADC_HID_STATE s;
+
+    if (SaradcDebounceStep(d, SaradcKeyArmStep(a, SaradcKeysClassify(m, uv)))) {
+        (*reported)++;
+    }
+    SaradcHidStateFromUsage(d->Stable == SARADC_NO_KEY ? 0 : usage, &s);
+    return s.System;
+}
+
+static void test_keyarm(void)
+{
+    SARADC_KEYARM a;
+
+    SaradcKeyArmInit(&a, 3);
+    CHECK(SaradcKeyArmStep(&a, 0) == SARADC_NO_KEY);
+    CHECK(SaradcKeyArmStep(&a, SARADC_NO_KEY) == SARADC_NO_KEY);
+    CHECK(SaradcKeyArmStep(&a, SARADC_NO_KEY) == SARADC_NO_KEY);
+    /* a press before the third release sample restarts the count */
+    CHECK(SaradcKeyArmStep(&a, 0) == SARADC_NO_KEY);
+    CHECK(a.Armed == 0);
+    CHECK(SaradcKeyArmStep(&a, SARADC_NO_KEY) == SARADC_NO_KEY);
+    CHECK(SaradcKeyArmStep(&a, SARADC_NO_KEY) == SARADC_NO_KEY);
+    CHECK(SaradcKeyArmStep(&a, SARADC_NO_KEY) == SARADC_NO_KEY);
+    CHECK(a.Armed == 1);
+    CHECK(SaradcKeyArmStep(&a, 0) == 0);
+    CHECK(SaradcKeyArmStep(&a, SARADC_NO_KEY) == SARADC_NO_KEY);
+    CHECK(SaradcKeyArmStep(&a, 0) == 0);              /* stays armed */
+
+    SaradcKeyArmInit(&a, 0);                          /* 0 means 1 */
+    CHECK(a.Need == 1);
+    CHECK(SaradcKeyArmStep(&a, SARADC_NO_KEY) == SARADC_NO_KEY);
+    CHECK(SaradcKeyArmStep(&a, 0) == 0);
+}
+
+static void test_tspi_recovery_power(void)
+{
+    /*
+     * TaishanPi 3M with "Recovery key = power button": channel 1, key-up
+     * 1.8 V, pressed 18 mV, linux,code KEY_VENDOR but _DSD
+     * rockchip,adc-keys-hid-usage = 0x00010081 (Generic Desktop, System
+     * Power Down, what rk806pwrkey reports).  Driver defaults: 2 samples
+     * of debounce, 3 released samples to arm, 100 ms poll.
+     */
+    SARADC_KEYMAP m = { 1, 1800000, { 18000 } };
+    const unsigned int usage = 0x00010081u;
+    SARADC_KEYARM a;
+    SARADC_DEBOUNCE d;
+    int reported = 0;
+    int i;
+
+    CHECK(SaradcHidUsageSupported(usage));
+    CHECK(SaradcLinuxCodeToHidUsage(0x168) == 0);     /* the code alone: vendor page */
+
+    /* Held through boot: never a press, however long. */
+    SaradcKeyArmInit(&a, 3);
+    SaradcDebounceInit(&d, SARADC_NO_KEY, 2);
+    for (i = 0; i < 100; i++) {
+        CHECK(poll_step(&m, &a, &d, usage, 18000, &reported) == 0);
+    }
+    CHECK(reported == 0);
+    /* Released: two samples are not enough to arm, the third is. */
+    CHECK(poll_step(&m, &a, &d, usage, 1799560, &reported) == 0);
+    CHECK(poll_step(&m, &a, &d, usage, 1799560, &reported) == 0);
+    CHECK(a.Armed == 0);
+    CHECK(poll_step(&m, &a, &d, usage, 1799560, &reported) == 0);
+    CHECK(a.Armed == 1);
+    /* A one-sample glitch to 0 V is not a press. */
+    CHECK(poll_step(&m, &a, &d, usage, 0, &reported) == 0);
+    CHECK(poll_step(&m, &a, &d, usage, 1799560, &reported) == 0);
+    CHECK(reported == 0);
+    /* A short press (two polls, 200 ms): Power Down, then released. */
+    CHECK(poll_step(&m, &a, &d, usage, 18000, &reported) == 0);
+    CHECK(poll_step(&m, &a, &d, usage, 18000, &reported) == 1);
+    CHECK(reported == 1);
+    CHECK(poll_step(&m, &a, &d, usage, 1799560, &reported) == 1);
+    CHECK(poll_step(&m, &a, &d, usage, 1799560, &reported) == 0);
+    CHECK(reported == 2);
+
+    /* A converter stuck at 0 V from the start never powers anything off. */
+    SaradcKeyArmInit(&a, 3);
+    SaradcDebounceInit(&d, SARADC_NO_KEY, 2);
+    reported = 0;
+    for (i = 0; i < 1000; i++) {
+        CHECK(poll_step(&m, &a, &d, usage, 0, &reported) == 0);
+    }
+    CHECK(reported == 0);
+}
+
 static void test_jack_rock4d(void)
 {
     /*
@@ -198,6 +295,8 @@ int main(void)
     test_keys_ladder();
     test_keys_maskrom();
     test_debounce();
+    test_keyarm();
+    test_tspi_recovery_power();
     test_jack_rock4d();
     test_jack_band_first();
     test_hid();
