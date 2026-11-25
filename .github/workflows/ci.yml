@@ -348,6 +348,127 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  browser-gpu:
+    name: Browser GPU switch (tests on Windows PowerShell 5.1, the runner's own Edge and Chrome)
+    # tools/rk3576-tools/setup/rk3576-browser-gpu.ps1 (BROWSER-GPU.md). The
+    # unit tests work on a made-up machine under HKCU and on .lnk files in
+    # a temporary folder. Then the real thing on the runner: the runner has
+    # no RK3576, so the gate says no and an install changes nothing; with
+    # Mode 2 (always) the switch must land on the runner's Edge and Chrome
+    # open commands and Start menu shortcuts, and Uninstall must give back
+    # exactly what was there before.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          foreach ($f in 'tools\rk3576-tools\setup\rk3576-browser-gpu.ps1', 'tools\rk3576-tools\tests\browser-gpu.tests.ps1') {
+            $e = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$e)
+            if ($e) { $e | Out-Host; throw "parse errors in $f" }
+          }
+          $PSVersionTable.PSVersion
+      - name: Unit tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\rk3576-tools\tests\browser-gpu.tests.ps1
+          if ($LASTEXITCODE -ne 0) { throw "browser-gpu.tests.ps1 failed" }
+      - name: Unit tests (PowerShell 7)
+        shell: pwsh
+        run: |
+          & tools\rk3576-tools\tests\browser-gpu.tests.ps1
+          if ($LASTEXITCODE -ne 0) { throw "browser-gpu.tests.ps1 failed under pwsh" }
+      - name: Install, force, uninstall on the runner's Edge and Chrome
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $s = (Resolve-Path tools\rk3576-tools\setup\rk3576-browser-gpu.ps1).Path
+          $F = '--disable-direct-composition'
+          function Snap {
+            $o = [ordered]@{}
+            foreach ($n in 'MSEdgeHTM', 'MSEdgePDF', 'microsoft-edge', 'ChromeHTML', 'ChromePDF') {
+              $k = "HKLM:\SOFTWARE\Classes\$n\shell\open\command"
+              if (Test-Path $k) { $o[$k] = (Get-Item $k).GetValue('', $null, 'DoNotExpandEnvironmentNames') }
+            }
+            $sh = New-Object -ComObject WScript.Shell
+            foreach ($f in Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs", "$env:PUBLIC\Desktop" -Recurse -Filter *.lnk -ErrorAction SilentlyContinue) {
+              $l = $sh.CreateShortcut($f.FullName)
+              if ($l.TargetPath -match '(msedge|chrome)\.exe$') { $o[$f.FullName] = $l.Arguments }
+            }
+            $o['env'] = [Environment]::GetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', 'Machine')
+            foreach ($p in 'Microsoft\Edge|StartupBoostEnabled', 'Microsoft\Edge|BackgroundModeEnabled', 'Google\Chrome|BackgroundModeEnabled') {
+              $a = $p -split '\|'
+              $o[$p] = (Get-ItemProperty "HKLM:\SOFTWARE\Policies\$($a[0])" -ErrorAction SilentlyContinue).($a[1])
+            }
+            return $o
+          }
+          function Same($a, $b) { ($a | ConvertTo-Json) -eq ($b | ConvertTo-Json) }
+          $before = Snap
+          $before | Format-Table -AutoSize | Out-String -Width 300 | Write-Host
+          if (-not ($before.Keys | Where-Object { $_ -like '*MSEdgeHTM*' })) { throw 'the runner has no MSEdgeHTM: the test proves nothing' }
+
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Status
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Install
+          if ($LASTEXITCODE -ne 0) { throw "Install exited $LASTEXITCODE" }
+          $t = Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Browser GPU'
+          if ($t.Principal.UserId -notmatch 'SYSTEM|S-1-5-18') { throw "task principal $($t.Principal.UserId)" }
+          if ($t.Triggers.Count -ne 4) { throw "task triggers: $($t.Triggers.Count)" }
+          if (-not (Test-Path "$env:ProgramFiles\RK3576\browser-gpu\rk3576-browser-gpu.ps1")) { throw 'installed copy' }
+          if (-not (Same $before (Snap))) { throw 'the gate said no (no RK3576 here) but something changed' }
+          Get-Content "$env:ProgramData\RK3576\browser-gpu.log"
+
+          reg add HKLM\SOFTWARE\RK3576\BrowserGpu /v Mode /t REG_DWORD /d 2 /f | Out-Null
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Apply -DryRun
+          if (-not (Same $before (Snap))) { throw 'a dry run changed something' }
+          # what the task runs
+          Start-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Browser GPU'
+          $deadline = (Get-Date).AddMinutes(3)
+          do { Start-Sleep 2; $st = (Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Browser GPU').State } while ($st -eq 'Running' -and (Get-Date) -lt $deadline)
+          $info = Get-ScheduledTaskInfo -TaskPath '\RK3576\' -TaskName 'Browser GPU'
+          Write-Host "task result $($info.LastTaskResult)"
+          if ($info.LastTaskResult -ne 0) { throw "the task's run failed: $($info.LastTaskResult)" }
+          $after = Snap
+          $after | Format-Table -AutoSize | Out-String -Width 300 | Write-Host
+          foreach ($k in $before.Keys) {
+            if ($k -like 'HKLM:*') {
+              $c = $after[$k]
+              if ($c -match '(msedge|chrome)\.exe"' -and $c -notmatch ('\.exe" ' + $F + '( |$)')) { throw "no switch right after the program: $k = $c" }
+            } elseif ($k -like '*.lnk') {
+              if ($after[$k] -notmatch "^$F") { throw "shortcut without the switch: $k" }
+            }
+          }
+          if ($after['env'] -notmatch $F) { throw 'WebView2 variable' }
+          if ($after['Microsoft\Edge|StartupBoostEnabled'] -ne 0 -or $after['Google\Chrome|BackgroundModeEnabled'] -ne 0) { throw 'policies' }
+          Get-Content "$env:ProgramData\RK3576\browser-gpu.log"
+          # running it again changes nothing
+          $n = (Get-Content "$env:ProgramData\RK3576\browser-gpu.log").Count
+          & powershell -NoProfile -ExecutionPolicy Bypass -File "$env:ProgramFiles\RK3576\browser-gpu\rk3576-browser-gpu.ps1" -Action Apply -Quiet
+          if ((Get-Content "$env:ProgramData\RK3576\browser-gpu.log").Count -ne $n) { throw 'a second Apply logged changes' }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Status
+
+          # Disable keeps the task and takes everything out; Apply then does nothing
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Disable
+          if (-not (Same $before (Snap))) { throw 'Disable did not give everything back' }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Apply
+          if (-not (Same $before (Snap))) { throw 'Apply with Mode 0 changed something' }
+          reg add HKLM\SOFTWARE\RK3576\BrowserGpu /v Mode /t REG_DWORD /d 2 /f | Out-Null
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Apply -Quiet
+
+          & powershell -NoProfile -ExecutionPolicy Bypass -File "$env:ProgramFiles\RK3576\browser-gpu\rk3576-browser-gpu.ps1" -Action Uninstall
+          if ($LASTEXITCODE -ne 0) { throw "Uninstall exited $LASTEXITCODE" }
+          $end = Snap
+          if (-not (Same $before $end)) {
+            $before | ConvertTo-Json | Write-Host; $end | ConvertTo-Json | Write-Host
+            throw 'Uninstall did not give back what was there'
+          }
+          $left = @()
+          if (Get-ScheduledTask -TaskPath '\RK3576\' -ErrorAction SilentlyContinue) { $left += 'task' }
+          if (Test-Path "$env:ProgramFiles\RK3576\browser-gpu") { $left += 'files' }
+          if (Test-Path 'HKLM:\SOFTWARE\RK3576\BrowserGpu') { $left += 'settings' }
+          if ($left) { throw "left after uninstall: $($left -join ', ')" }
+          Write-Host 'install, force, disable and uninstall: everything as it was'
+
   rk3576-tools:
     name: RK3576 tools bundle (install, uninstall, offline install)
     # rk-monitor, rknputest and charsiu_run in the layout of
@@ -395,7 +516,7 @@ jobs:
             Copy-Item npu-built\charsiu_run.exe, npu-built\rknpu-perfcounters.ps1 "$p\npu"
             Copy-Item npu-built\licenses\* "$p\npu\licenses"
             Copy-Item tools\rk3576-tools\setup\* "$p\setup"
-            Copy-Item tools\rk3576-tools\README.md $p
+            Copy-Item tools\rk3576-tools\README.md, tools\rk3576-tools\BROWSER-GPU.md $p
             Copy-Item tools\rk3576-tools\README.md, tools\rk3576-tools\*.cmd $out
             Copy-Item LICENSE "$p\LICENSE.txt"
             $ver = "0.1.0+$($env:GITHUB_SHA.Substring(0,7))"
@@ -424,7 +545,8 @@ jobs:
           Get-Content "$env:ProgramData\RK3576\setup.log"
           foreach ($f in 'rk-monitor.exe', 'npu\rknputest.exe', 'npu\charsiu_run.exe', 'npu\rknpu-perfcounters.ps1',
                          'setup\rk3576-setup.ps1', 'setup\rk3576-counters.ps1', 'setup\uninstall.cmd',
-                         'setup\firstboot.cmd', 'VERSION.txt', 'LICENSE.txt') {
+                         'setup\firstboot.cmd', 'setup\rk3576-browser-gpu.ps1', 'browser-gpu\rk3576-browser-gpu.ps1',
+                         'VERSION.txt', 'LICENSE.txt') {
             if (-not (Test-Path (Join-Path $dir $f))) { throw "missing $f" }
           }
           # rk-monitor starts from a logon task for the Users group, not from a Run entry
@@ -445,6 +567,10 @@ jobs:
           New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'RK3576 Monitor' -Value 'x' -Force | Out-Null
           $t = Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Performance counters'
           if ($t.Principal.UserId -ne 'SYSTEM') { throw 'task principal' }
+          # Edge, Chrome and WebView2 on the GPU: the task is there; no RK3576 here, so nothing was changed
+          $bt = Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Browser GPU'
+          if ($bt.Principal.UserId -notmatch 'SYSTEM|S-1-5-18') { throw 'browser GPU task principal' }
+          Get-Content "$env:ProgramData\RK3576\browser-gpu.log"
           Get-Content "$env:ProgramData\RK3576\counters.log"
           # the installed program runs (no RK3576 counters on the runner)
           $p = Start-Process -FilePath (Join-Path $dir 'rk-monitor.exe') -ArgumentList '--once' -Wait -PassThru -NoNewWindow -RedirectStandardOutput once.txt

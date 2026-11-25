@@ -11,6 +11,7 @@ RK3576 板子在 Windows on Arm 下给用户用的程序，打成一个包，安
 | `npu\charsiu_run.exe` | 在 NPU 上运行语言模型（gguf） | woa-rk3576-npu（charsiu，为 Windows 构建） |
 | `npu\rknpu-perfcounters.ps1` | 手动注册 NPU 计数器（安装程序会自动做这一步） | woa-rk3576-npu |
 | `setup\` | 安装程序的脚本，保留下来用于首次启动、计数器任务和卸载 | woa-rk3576 |
+| `setup\rk3576-browser-gpu.ps1` | WDDM 2.x 下让 Edge、Chrome 和 WebView2 用 GPU（[BROWSER-GPU.zh-CN.md](BROWSER-GPU.zh-CN.md)）；安装到 `browser-gpu\` | woa-rk3576 |
 | `VERSION.txt` | 这个包的版本，以及构建它所用的 commit | CI |
 
 woa-rk3576 每次 push，CI 都会构建它，产物名为 `rk3576-tools-arm64`：
@@ -32,6 +33,9 @@ rk-monitor 来自本仓库，rknputest 和 charsiu_run 来自 woa-rk3576-npu，�
 - 用 lodctr 根据驱动存储中的清单注册 GPU（`RK3576 GPU`，maliwddm）和 NPU（`RK3576 NPU`，rknpu）性能计数器，并添加任务
   `\RK3576\Performance counters`（SYSTEM，每次开机 30 秒后），在驱动更新移动了它们之后重新注册。没装的驱动会被跳过，
   等以后某次开机再补上。
+- 让 Edge、Chrome 和 WebView2 在 GPU 运行 WDDM 2.x 时用 GPU 渲染：`setup\rk3576-browser-gpu.ps1 -Action Install`
+  把 `--disable-direct-composition` 加到它们的快捷方式、打开命令和 WebView2 的参数里，任务 `\RK3576\Browser GPU`
+  在浏览器更新后把它重新加上。改了什么、怎么关掉、怎么测试，见 [BROWSER-GPU.zh-CN.md](BROWSER-GPU.zh-CN.md)。
 
 `install.cmd /quiet /nostart` 安装时不暂停，也不立即启动 rk-monitor。日志：`%ProgramData%\RK3576\setup.log`。
 
@@ -40,7 +44,7 @@ rk-monitor 来自本仓库，rknputest 和 charsiu_run 来自 woa-rk3576-npu，�
 Settings、Apps、RK3576 tools（设置、应用）；或开始菜单里的 Uninstall RK3576 tools；或
 `uninstall.cmd`（在 `install.cmd` 旁边，或在 `%ProgramFiles%\RK3576\setup` 里）。
 它会删除安装时添加的所有东西：文件夹、快捷方式、登录任务（以及离线安装的 Run 项）、`HKLM\SOFTWARE\RK3576`、
-应用列表里的那一项、计数器任务和任务文件夹、它所做的计数器注册、`%ProgramData%\RK3576`，以及每个用户的
+应用列表里的那一项、计数器任务和任务文件夹、它所做的计数器注册、浏览器 GPU 开关（先从所有快捷方式和命令中去掉，策略恢复原状）、`%ProgramData%\RK3576`，以及每个用户的
 rk-monitor 设置（`HKCU\Software\RK3576` 和每用户的 Run 项；没有登录的用户通过其配置文件的 `NTUSER.DAT` 处理）。
 驱动不会被动到。
 
