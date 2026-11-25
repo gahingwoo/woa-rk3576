@@ -179,7 +179,33 @@
    "present": true,
    "status": "OK",
    "service": "maliwddm"
-  }
+  },
+  "audioDevices": [
+   {
+    "name": "Rockchip I2S Audio (WDM)",
+    "instanceId": "CSAUDIO\\RK&CLTR\\5&1a2b3c4d&0&00000000",
+    "status": "OK",
+    "parent": "ACPI\\RKCP3004\\6"
+   },
+   {
+    "name": "Rockchip I2S Audio (WDM)",
+    "instanceId": "CSAUDIO\\RK&CLTR\\5&5e6f7a8b&0&00000000",
+    "status": "OK",
+    "parent": "ACPI\\RKCP3004\\1"
+   },
+   {
+    "name": "AC Interface",
+    "instanceId": "USB\\VID_2C7C&PID_0125&MI_02\\6&ABC&0&0002",
+    "status": "OK",
+    "parent": "USB\\VID_2C7C&PID_0125\\0123456789AB"
+   },
+   {
+    "name": "Everest 8388 Audio Codec (RK3576 SAI)",
+    "instanceId": "ACPI\\RKCP8388\\0",
+    "status": "OK",
+    "parent": "ACPI\\RKCP3001\\2"
+   }
+  ]
  },
  "tools": {
   "rknputest info": {

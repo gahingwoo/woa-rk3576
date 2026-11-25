@@ -64,6 +64,51 @@ foreach ($m in Get-ChildItem (Join-Path $PSScriptRoot '.') -Filter 'mock-*.json'
     }
     Write-Host "checked $($mock.expect.PSObject.Properties.Name.Count) expectations, $(@($res.results).Count) rows"
 }
+# Run-Tool for real, outside -DryRun: the exit code of a tool that exits at
+# once must come back (Start-Process lost it for rknputest info on the
+# 2026-11-25 board run), as must its output, a timeout and the arguments.
+Write-Host ''
+Write-Host '== Run-Tool, live'
+$tokens = $null; $errs = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'regress.ps1'), [ref]$tokens, [ref]$errs)
+foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and @('Run-Tool', 'Join-Arguments') -contains $n.Name }, $true)) {
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+$script:DryRunMode = $false
+$script:OutDir = Join-Path $tmp 'runtool'
+New-Item -ItemType Directory -Force -Path $script:OutDir | Out-Null
+$onWindows = $env:OS -eq 'Windows_NT'
+function Shell-Exe { if ($onWindows) { return (Join-Path $env:SystemRoot 'System32\cmd.exe') } return '/bin/sh' }
+function Shell-Args([string]$cmd) { if ($onWindows) { return @('/c', $cmd) } return @('-c', $cmd) }
+$cases = @(
+    @{ name = 'exit 0 at once'; cmd = 'exit 0'; code = 0 },
+    @{ name = 'exit 3 at once'; cmd = 'exit 3'; code = 3 },
+    @{ name = 'output and exit 2'; cmd = 'echo RKNPU INFO: OK&& exit 2'; code = 2; out = 'RKNPU INFO: OK' }
+)
+if (-not $onWindows) { $cases[2].cmd = 'echo RKNPU INFO: OK; exit 2' }
+foreach ($c in $cases) {
+    # many times: the lost exit code was a race with a tool that exits at once
+    for ($i = 0; $i -lt 20; $i++) {
+        $r = Run-Tool "t$i" (Shell-Exe) (Shell-Args $c.cmd) 30
+        if ($r.ExitCode -isnot [int] -or $r.ExitCode -ne $c.code -or $r.TimedOut) {
+            Write-Host "RUN-TOOL $($c.name): exit '$($r.ExitCode)' timedOut $($r.TimedOut), expected $($c.code) (try $i)"; $fail++; break
+        }
+        if ($c.out -and $r.Output -notmatch [regex]::Escape($c.out)) { Write-Host "RUN-TOOL $($c.name): output '$($r.Output)'"; $fail++; break }
+    }
+    Write-Host "run-tool  $($c.name)"
+}
+$slow = @('/c', 'ping -n 30 127.0.0.1 >nul'); if (-not $onWindows) { $slow = @('-c', 'sleep 30') }
+$t0 = Get-Date
+$r = Run-Tool 'slow' (Shell-Exe) $slow 2
+if (-not $r.TimedOut -or $r.ExitCode -ne -1 -or ((Get-Date) - $t0).TotalSeconds -gt 20) { Write-Host "RUN-TOOL timeout: timedOut $($r.TimedOut) exit $($r.ExitCode)"; $fail++ } else { Write-Host 'run-tool  timeout' }
+$r = Run-Tool 'missing' (Join-Path $tmp 'no-such-tool.exe') @('info') 5
+if ($r.ExitCode -ne -1) { Write-Host "RUN-TOOL missing tool: exit $($r.ExitCode)"; $fail++ } else { Write-Host 'run-tool  missing tool' }
+# arguments with spaces, quotes and trailing backslashes arrive as they were
+$argv = @('a b', 'say "hi"', 'C:\dir with space\', '')
+$line = Join-Arguments $argv
+$want = '"a b" "say \"hi\"" "C:\dir with space\\" ""'
+if ($line -ne $want) { Write-Host "JOIN-ARGUMENTS: [$line], expected [$want]"; $fail++ } else { Write-Host 'run-tool  argument quoting' }
+
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 Write-Host ''
 if ($fail) { Write-Host "run-dryrun: $fail problem(s)"; exit 1 }

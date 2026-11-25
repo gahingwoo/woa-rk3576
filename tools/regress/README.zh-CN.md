@@ -47,7 +47,7 @@ sudo ./regress.sh [--board auto|tspi3m|cm5io|rock4d] [--quick] [--out DIR]
 | `-ToolsDir DIR` | `rknputest.exe` 和 `vdpu383test.exe` 所在目录；还会查找脚本旁的 `bin\`、`%ProgramFiles%\RK3576`、`%ProgramFiles%\RK3576\npu`（RK3576 工具包）和 `PATH` |
 | `-User NAME` | 会话类检查使用的桌面用户（默认：当前已登录用户） |
 | `-ExpectFirmware REGEX` | 额外要求固件版本字符串匹配，例如某个发布标签 |
-| `-Require nvme,sd,...` | 本次运行把可选部件当作必需：`nvme`、`sd`、`emmc`、`wifi`、`bluetooth`、`npu`、`vdec`、`analog`、`hdmiaudio` |
+| `-Require nvme,sd,...` | 本次运行把可选部件当作必需：`nvme`、`sd`、`emmc`、`wifi`、`bluetooth`、`npu`、`vdec`、`analog`、`hdmiaudio`，以及 `jack`（耳机端点必须处于活动状态：耳机孔要插着东西） |
 | `-FetchStreams` | 在板子上直接下载缺少的解码码流 |
 | `-DryRun -Mock FILE` | 用记录好的数据评估各项检查（见“测试”） |
 
@@ -72,13 +72,13 @@ FAIL）、`"optional"`（缺失为 SKIP，用于不一定装配或不一定开�
 | `gpu.temp` | `\RK3576 GPU(*)\Temperature (C)` 在 10 到 90 C 之间 | |
 | `display.mode` | 在用户会话中（`EnumDisplaySettings`）：当前模式是 59 或 60 Hz 下可选的最大模式，且运行在 59 或 60 Hz | |
 | `display.tdr` | 运行开始后系统日志中没有 Display 事件 4101（驱动重置）；最后评估 | |
-| `audio.hdmi`、`audio.analog` | 有名称含 HDMI / Headphone 且状态 OK 的音频端点。HDMI 端点需要接带扬声器的显示器 | csaudiork3x 的端点名称 |
+| `audio.hdmi`、`audio.analog` | 通过 MMDevice API 读取所有状态的端点（失败时退回 PnP 的在位端点）。HDMI：清单 `hdmiSai`（`ACPI\RKCP3004\6`）上 csaudiork3x 设备的活动播放端点，按 KS 筛选器（`topologyhdmi`）或名称（`HDMI` 或 `Digital Output`）识别；需要接带扬声器的显示器。模拟音频，在有 `analogCodec` 的板子上：编解码器（`ACPI\RKCP8388`）和 `analogSai` 上的 csaudiork3x 设备已启动；耳机孔空着时耳机端点不出现，所以只作提示，除非 `-Require jack`。没有 `analogCodec` 时：要有活动的耳机端点 | 清单的 `audio.*Endpoint`、`hdmiSai`、`analogSai`、`analogCodec` |
 | `net.ethernet`、`net.gateway` | `ACPI\RKCP6543` 上的网卡为 Up 且有 IPv4 地址；默认网关能 ping 通 | |
 | `net.wifi`、`net.bluetooth` | 仅泰山派 3M：一个 802.11 网卡（可选：驱动还在分支上）；`RKCP4345` 正常且有一个蓝牙设备正常 | |
 | `usb.controllers`、`usb.devices` | 至少两个 `ACPI\PNP0D10` xHCI 控制器正常；列出 USB 设备，CM5-IO 上必须有板载 Hub | |
 | `storage.emmc`、`storage.sd`、`storage.nvme` | `ACPI\RKCP0D40`（eMMC）、`ACPI\RKCPFE2C`（SD）下的磁盘，PCIe 上的磁盘（NVMe）；状态 Healthy | |
 | `storage.rw` | 以直写方式向系统盘写入 64 MiB（`-Quick` 时 16 MiB），读回，比较 SHA-256，删除 | Maskrom Studio 的自检 |
-| `npu.info`、`npu.m3` | 当 `ACPI\RKCP3576` 存在时（设置里开启了 NPU）：绑定到 `rknpu`，`rknputest info` 退出码 0，`rknputest m3 --core both --iters 1` 退出码 0（逐位一致） | woa-rk3576-npu 的 `tools/rknputest` |
+| `npu.info`、`npu.m3` | 当 `ACPI\RKCP3576` 存在时（设置里开启了 NPU）：绑定到 `rknpu`，`rknputest info` 退出码 0 且报告清单 `npuCores` 个核心（2），`rknputest m3 --core both --iters 1` 退出码 0（逐位一致） | woa-rk3576-npu 的 `tools/rknputest` |
 | `vdec.warmup`、`vdec.<编码>.<码流>` | 当 `ACPI\RKCP0383` 存在时：绑定到 `vdpu383`，`vdpu383test warmup` 退出码 0，然后用 `vdpu383test decode` 解 [`streams.txt`](streams.txt) 里的每个码流，比较帧数、硬件错误为 0 以及输出的 MD5 | `tools/vdpu383test/hevc-conformance.ps1` |
 | `thermal.zones` | 至少三个 ACPI 热区，每个在 0 到 90 C 之间 | rk-monitor 用的计数器 |
 | `time.clock`、`time.rtc` | 年份在 2026..2040 之间，且与 `time.windows.com` 相差不超过 120 秒（`w32tm /stripchart`，只读）；`HYMB0001` 正常 | |
