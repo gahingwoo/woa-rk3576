@@ -52,7 +52,7 @@ Rockchip RK3576 开发板的 Windows on Arm 驱动，以及把 Windows 11 23H2 �
 
 ## 开发文档
 
-[架构](docs/dev/architecture.zh-CN.md)、[编译](docs/dev/building.zh-CN.md)、[调试](docs/dev/debugging.zh-CN.md)、[音频](docs/dev/audio.zh-CN.md)、[显示](docs/dev/display.zh-CN.md)、[无线](docs/dev/wireless.zh-CN.md)、[历史记录](docs/history/README.md)。
+[架构](docs/dev/architecture.zh-CN.md)、[编译](docs/dev/building.zh-CN.md)、[调试](docs/dev/debugging.zh-CN.md)、[音频](docs/dev/audio.zh-CN.md)、[显示](docs/dev/display.zh-CN.md)、[无线](docs/dev/wireless.zh-CN.md)、[EC20 4G](docs/dev/ec20.zh-CN.md)、[历史记录](docs/history/README.md)。
 
 ## 致谢
 
