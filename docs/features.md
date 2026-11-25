@@ -85,6 +85,16 @@ matched FFmpeg's output bit for bit. It needs edk2-rk3576 with *Video
 Decoder (VDPU383)* enabled in setup (off by default). Video players do not
 use it yet; the plan is in [video decode](dev/video-decode.md).
 
+## ADC keys and headphone jack on the SARADC (not run on a board)
+
+[rk3xsaradc](../drivers/adc/rk3xsaradc) reads the RK3576's SARADC when the
+firmware declares it (`ACPI\RKCP0ADC`, a board branch of edk2-rk3576 for
+now): the TaishanPi 3M's Recovery key and the CM5-IO's and ROCK 4D's Maskrom
+keys become HID buttons (vendor page 0xFF00, Windows does nothing with them
+by itself), and the ROCK 4D's headphone jack, which has no detect switch and
+is read on ADC channel 3, drives the Headphones endpoint through es8323.
+`tools/adctest` reads any channel.
+
 ## NPU
 
 [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) (TaishanPi 3M).
