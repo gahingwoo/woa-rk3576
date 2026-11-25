@@ -384,7 +384,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $s = (Resolve-Path tools\rk3576-tools\setup\rk3576-browser-gpu.ps1).Path
-          $F = '--disable-direct-composition'
+          $SW = '--disable-direct-composition'
           function Snap {
             $o = [ordered]@{}
             foreach ($n in 'MSEdgeHTM', 'MSEdgePDF', 'microsoft-edge', 'ChromeHTML', 'ChromePDF') {
@@ -433,12 +433,12 @@ jobs:
           foreach ($k in $before.Keys) {
             if ($k -like 'HKLM:*') {
               $c = $after[$k]
-              if ($c -match '(msedge|chrome)\.exe"' -and $c -notmatch ('\.exe" ' + $F + '( |$)')) { throw "no switch right after the program: $k = $c" }
+              if ($c -match '(msedge|chrome)\.exe"' -and $c -notmatch ('\.exe" ' + $SW + '( |$)')) { throw "no switch right after the program: $k = $c" }
             } elseif ($k -like '*.lnk') {
-              if ($after[$k] -notmatch "^$F") { throw "shortcut without the switch: $k" }
+              if ($after[$k] -notmatch "^$SW") { throw "shortcut without the switch: $k" }
             }
           }
-          if ($after['env'] -notmatch $F) { throw 'WebView2 variable' }
+          if ($after['env'] -notmatch $SW) { throw 'WebView2 variable' }
           if ($after['Microsoft\Edge|StartupBoostEnabled'] -ne 0 -or $after['Google\Chrome|BackgroundModeEnabled'] -ne 0) { throw 'policies' }
           Get-Content "$env:ProgramData\RK3576\browser-gpu.log"
           # running it again changes nothing

@@ -26,36 +26,36 @@ function Eq([string]$Name, $Got, $Want) {
     Check $Name ($Got -ceq $Want) "`n      got:  [$Got]`n      want: [$Want]"
 }
 
-$F = '--disable-direct-composition'
+$SW = '--disable-direct-composition'
 $edge = '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"'
 $chrome = '"C:\Program Files\Google\Chrome\Application\chrome.exe"'
 
 # --- strings -------------------------------------------------------------
-Eq 'edge open command gets the switch before --single-argument' (Add-FlagToCommand "$edge --single-argument %1") "$edge $F --single-argument %1"
-Eq 'chrome open command' (Add-FlagToCommand "$chrome --single-argument %1") "$chrome $F --single-argument %1"
-Eq 'chrome PDF command with -- ' (Add-FlagToCommand "$chrome -- `"%1`"") "$chrome $F -- `"%1`""
-Eq 'command with nothing after the program' (Add-FlagToCommand $edge) "$edge $F"
-Eq 'idempotent' (Add-FlagToCommand (Add-FlagToCommand "$edge --single-argument %1")) "$edge $F --single-argument %1"
-Eq 'a switch after --single-argument is part of the URL, so it is added in front' (Add-FlagToCommand "$edge --single-argument $F") "$edge $F --single-argument $F"
-Eq 'unquoted path with spaces' (Add-FlagToCommand 'C:\Program Files\Google\Chrome\Application\chrome.exe --single-argument %1') "C:\Program Files\Google\Chrome\Application\chrome.exe $F --single-argument %1"
-Eq 'proxy (installed web app)' (Add-FlagToCommand '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge_proxy.exe" --profile-directory=Default --app-id=abc') "`"C:\Program Files (x86)\Microsoft\Edge\Application\msedge_proxy.exe`" $F --profile-directory=Default --app-id=abc"
+Eq 'edge open command gets the switch before --single-argument' (Add-FlagToCommand "$edge --single-argument %1") "$edge $SW --single-argument %1"
+Eq 'chrome open command' (Add-FlagToCommand "$chrome --single-argument %1") "$chrome $SW --single-argument %1"
+Eq 'chrome PDF command with -- ' (Add-FlagToCommand "$chrome -- `"%1`"") "$chrome $SW -- `"%1`""
+Eq 'command with nothing after the program' (Add-FlagToCommand $edge) "$edge $SW"
+Eq 'idempotent' (Add-FlagToCommand (Add-FlagToCommand "$edge --single-argument %1")) "$edge $SW --single-argument %1"
+Eq 'a switch after --single-argument is part of the URL, so it is added in front' (Add-FlagToCommand "$edge --single-argument $SW") "$edge $SW --single-argument $SW"
+Eq 'unquoted path with spaces' (Add-FlagToCommand 'C:\Program Files\Google\Chrome\Application\chrome.exe --single-argument %1') "C:\Program Files\Google\Chrome\Application\chrome.exe $SW --single-argument %1"
+Eq 'proxy (installed web app)' (Add-FlagToCommand '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge_proxy.exe" --profile-directory=Default --app-id=abc') "`"C:\Program Files (x86)\Microsoft\Edge\Application\msedge_proxy.exe`" $SW --profile-directory=Default --app-id=abc"
 Eq 'other programs are left alone' (Add-FlagToCommand '"C:\Windows\notepad.exe" "%1"') '"C:\Windows\notepad.exe" "%1"'
 Eq 'a program named like a browser only in a folder name is left alone' (Add-FlagToCommand '"C:\chrome.exe.d\tool.exe" %1') '"C:\chrome.exe.d\tool.exe" %1'
 Eq 'empty command' (Add-FlagToCommand '') ''
 Eq 'remove gives back the original' (Remove-FlagFromCommand (Add-FlagToCommand "$edge --single-argument %1")) "$edge --single-argument %1"
 Eq 'remove from a command without it' (Remove-FlagFromCommand "$edge --single-argument %1") "$edge --single-argument %1"
-Eq 'startup boost Run value' (Add-FlagToCommand "$edge --no-startup-window --win-session-start") "$edge $F --no-startup-window --win-session-start"
-Eq 'shortcut arguments, empty' (Add-FlagToArgs '') $F
-Eq 'shortcut arguments, a profile' (Add-FlagToArgs '--profile-directory=Default') "$F --profile-directory=Default"
-Eq 'shortcut arguments, already there' (Add-FlagToArgs "--x $F") "--x $F"
-Eq 'shortcut arguments, removed' (Remove-FlagFromText "$F --profile-directory=Default") '--profile-directory=Default'
-Eq 'shortcut arguments, removed to empty' (Remove-FlagFromText $F) ''
+Eq 'startup boost Run value' (Add-FlagToCommand "$edge --no-startup-window --win-session-start") "$edge $SW --no-startup-window --win-session-start"
+Eq 'shortcut arguments, empty' (Add-FlagToArgs '') $SW
+Eq 'shortcut arguments, a profile' (Add-FlagToArgs '--profile-directory=Default') "$SW --profile-directory=Default"
+Eq 'shortcut arguments, already there' (Add-FlagToArgs "--x $SW") "--x $SW"
+Eq 'shortcut arguments, removed' (Remove-FlagFromText "$SW --profile-directory=Default") '--profile-directory=Default'
+Eq 'shortcut arguments, removed to empty' (Remove-FlagFromText $SW) ''
 Eq 'a longer switch is not ours' (Test-HasFlag '--disable-direct-composition-video-overlays') $false
-Eq 'a longer switch gets ours too' (Add-FlagToArgs '--disable-direct-composition-video-overlays') "$F --disable-direct-composition-video-overlays"
-Eq 'WebView2 list, empty' (Add-FlagToList '') $F
-Eq 'WebView2 list, appended' (Add-FlagToList '--remote-debugging-port=9222') "--remote-debugging-port=9222 $F"
-Eq 'WebView2 list, removed' (Remove-FlagFromText "--remote-debugging-port=9222 $F") '--remote-debugging-port=9222'
-Eq 'WebView2 list, removed from the middle' (Remove-FlagFromText "--a $F --b") '--a --b'
+Eq 'a longer switch gets ours too' (Add-FlagToArgs '--disable-direct-composition-video-overlays') "$SW --disable-direct-composition-video-overlays"
+Eq 'WebView2 list, empty' (Add-FlagToList '') $SW
+Eq 'WebView2 list, appended' (Add-FlagToList '--remote-debugging-port=9222') "--remote-debugging-port=9222 $SW"
+Eq 'WebView2 list, removed' (Remove-FlagFromText "--remote-debugging-port=9222 $SW") '--remote-debugging-port=9222'
+Eq 'WebView2 list, removed from the middle' (Remove-FlagFromText "--a $SW --b") '--a --b'
 Check 'browser exe names' ((Test-BrowserExe 'C:\x\MSEDGE.EXE') -and (Test-BrowserExe 'R:\chrome\chrome.exe') -and -not (Test-BrowserExe 'C:\x\msedgewebview2.exe'))
 
 # --- decisions -----------------------------------------------------------
@@ -179,24 +179,24 @@ if (-not $onWindows) {
     Eq 'apply changes what the dry run said' $c1.Count $dry.Count
     Check 'apply: no errors' (-not ($c1 | Where-Object { $_.Kind -eq 'error' })) (($c1 | Where-Object { $_.Kind -eq 'error' } | ForEach-Object { "$($_.Where): $($_.After)" }) -join '; ')
     foreach ($k in $cmds.Keys) { Eq "apply: $($k -replace '.*RK3576BgTest\\', '')" (Get-Cmd $k) (Add-FlagToCommand $cmds[$k]) }
-    Check 'apply: switch before --single-argument' ((Get-Cmd "$M\Classes\MSEdgeHTM\shell\open\command") -like "*msedge.exe`" $F --single-argument %1")
+    Check 'apply: switch before --single-argument' ((Get-Cmd "$M\Classes\MSEdgeHTM\shell\open\command") -like "*msedge.exe`" $SW --single-argument %1")
     Eq 'apply: value kind kept' (Get-Kind "$M\Classes\MSEdgeHTM\shell\runas\command") 'ExpandString'
     foreach ($k in $others.Keys) { Eq "apply leaves alone: $($k -replace '.*RK3576BgTest\\', '')" (Get-Cmd $k) $others[$k] }
     Eq 'apply: startup boost Run value' ((Get-ItemProperty "$U\Software\Microsoft\Windows\CurrentVersion\Run").'MicrosoftEdgeAutoLaunch_0123') (Add-FlagToCommand $boost)
     Eq 'apply: other Run values alone' ((Get-Item "$M\Run").GetValue('SecurityHealth', $null, 'DoNotExpandEnvironmentNames')) '%windir%\system32\SecurityHealthSystray.exe'
-    Eq 'apply: Edge pinned taskbar shortcut' (Get-LnkArgs (Join-Path $uPinned 'Microsoft Edge.lnk')) "$F --profile-directory=Default"
-    Eq 'apply: Edge Start menu shortcut' (Get-LnkArgs (Join-Path $mStart 'Microsoft Edge.lnk')) $F
-    Eq 'apply: Chrome Start menu shortcut' (Get-LnkArgs (Join-Path $mStart 'Google Chrome.lnk')) $F
-    Eq 'apply: portable Chrome shortcut' (Get-LnkArgs (Join-Path $uDesk 'Chrome (portable).lnk')) "$F --user-data-dir=R:\profile"
-    Eq 'apply: read-only shortcut' (Get-LnkArgs $ro) $F
+    Eq 'apply: Edge pinned taskbar shortcut' (Get-LnkArgs (Join-Path $uPinned 'Microsoft Edge.lnk')) "$SW --profile-directory=Default"
+    Eq 'apply: Edge Start menu shortcut' (Get-LnkArgs (Join-Path $mStart 'Microsoft Edge.lnk')) $SW
+    Eq 'apply: Chrome Start menu shortcut' (Get-LnkArgs (Join-Path $mStart 'Google Chrome.lnk')) $SW
+    Eq 'apply: portable Chrome shortcut' (Get-LnkArgs (Join-Path $uDesk 'Chrome (portable).lnk')) "$SW --user-data-dir=R:\profile"
+    Eq 'apply: read-only shortcut' (Get-LnkArgs $ro) $SW
     Check 'apply: read-only shortcut stays read-only' ((Get-Item $ro).IsReadOnly)
     Eq 'apply: Notepad shortcut alone' (Get-LnkArgs (Join-Path $mStart 'Notepad.lnk')) '/A'
     Check 'apply: shortcut target kept' ($wsh.CreateShortcut((Join-Path $uPinned 'Microsoft Edge.lnk')).TargetPath -eq $edgeExe)
     Eq 'apply: Edge StartupBoostEnabled' ((Get-ItemProperty "$M\Policies\Microsoft\Edge").StartupBoostEnabled) 0
     Eq 'apply: Edge BackgroundModeEnabled' ((Get-ItemProperty "$M\Policies\Microsoft\Edge").BackgroundModeEnabled) 0
     Eq 'apply: Chrome BackgroundModeEnabled' ((Get-ItemProperty "$M\Policies\Google\Chrome").BackgroundModeEnabled) 0
-    Eq 'apply: WebView2 variable appended' ((Get-ItemProperty "$M\Env").$BgEnvName) "--remote-debugging-port=9222 $F"
-    Eq 'apply: WebView2 registry fallback' ((Get-ItemProperty "$M\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments").'*') $F
+    Eq 'apply: WebView2 variable appended' ((Get-ItemProperty "$M\Env").$BgEnvName) "--remote-debugging-port=9222 $SW"
+    Eq 'apply: WebView2 registry fallback' ((Get-ItemProperty "$M\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments").'*') $SW
 
     $c2 = Invoke-BrowserGpuSync $ctx $true $false
     Eq 'apply again changes nothing' $c2.Count 0
@@ -212,7 +212,7 @@ if (-not $onWindows) {
     $c4 = Invoke-BrowserGpuSync $ctx $true $false
     Eq "a user's Mode 0 takes their entries out (class, Run, 3 shortcuts)" $c4.Count 5
     Eq "a user's Mode 0: pinned shortcut back" (Get-LnkArgs (Join-Path $uPinned 'Microsoft Edge.lnk')) '--profile-directory=Default'
-    Eq "a user's Mode 0: machine entries keep it" (Get-LnkArgs (Join-Path $mStart 'Microsoft Edge.lnk')) $F
+    Eq "a user's Mode 0: machine entries keep it" (Get-LnkArgs (Join-Path $mStart 'Microsoft Edge.lnk')) $SW
     Remove-Item -Path "$U\Software\RK3576" -Recurse -Force
 
     # an administrator changed a policy after us: revert leaves it
@@ -237,7 +237,7 @@ if (-not $onWindows) {
     # a variable we made from nothing is deleted on revert
     Remove-ItemProperty -Path "$M\Env" -Name $BgEnvName
     [void](Invoke-BrowserGpuSync $ctx $true $false)
-    Eq 'variable made from nothing' ((Get-ItemProperty "$M\Env").$BgEnvName) $F
+    Eq 'variable made from nothing' ((Get-ItemProperty "$M\Env").$BgEnvName) $SW
     [void](Invoke-BrowserGpuSync $ctx $false $false)
     Check 'variable made from nothing is deleted' ($null -eq (Get-ItemProperty "$M\Env").$BgEnvName)
 
