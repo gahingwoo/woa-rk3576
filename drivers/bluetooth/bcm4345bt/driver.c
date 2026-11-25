@@ -10,7 +10,13 @@
  *   GpioIo     BT_REG_ON (GPIO1 PC7)
  *   GpioIo     BT_WAKE (GPIO1 PD4)
  *
- * and sets the UART's pins and its 24 MHz clock before boot. This driver
+ * and sets the UART's pins and its 24 MHz clock before boot. The CM5-IO's
+ * firmware publishes ACPI\RKCP4362 (the CM5's BCM43752, Bluetooth core
+ * BCM4362A2) with the same four resources on UART4 (0x2ad70000, GSIV 112)
+ * and the same two GPIOs; nothing here depends on which UART it is, and
+ * the INF gives that device its own FirmwarePath.
+ *
+ * This driver
  * runs the UART itself (uart.c), powers and initialises the controller and
  * downloads its patchram (hci.c), and then enumerates one child that the
  * in-box BthMini binds to (pdo.c).

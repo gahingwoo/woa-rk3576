@@ -37,7 +37,7 @@ jobs:
   hcd:
     name: bcm4345bt patchram walker (Linux, gcc)
     # The driver's .hcd walker is plain C. Build it with the host tool and
-    # run it over both patchram files install-firmware.ps1 can fetch, at the
+    # run it over the patchram files install-firmware.ps1 can fetch, at the
     # same pinned commits and hashes, so a change to the walker that would
     # reject (or mis-split) the real files fails here. The files are only
     # downloaded into the runner, never stored or uploaded.
@@ -60,11 +60,17 @@ jobs:
           fetch rpi.hcd \
             https://raw.githubusercontent.com/RPi-Distro/bluez-firmware/cdf61dc691a49ff01a124752bd04194907f0f9cd/debian/firmware/broadcom/BCM4345C5.hcd \
             fb9f4ec2df5301bd35f416384e103c012c5983024c49aa72fbbaf90177512caa
+          # the CM5-IO's BCM43752 (Bluetooth core BCM4362A2)
+          fetch bcm4362a2.hcd \
+            https://raw.githubusercontent.com/armbian/firmware/db8cc456dad5ad511b04f8a5130acda392cad20b/brcm/BCM4362A2.hcd \
+            18901a5bef1d418b6895e92d0afae36234f4160b237465dfca3d75e9844e93ef
           ./hcdcheck ampak.hcd --records 198
           ./hcdcheck rpi.hcd --records 235
+          ./hcdcheck bcm4362a2.hcd --records 508
           # the hashes in install-firmware.ps1 must be the ones checked here
           grep -qi f67164f0eda8d4ca96305e177a61542bf8b470f2f1c456b66fe8c660650f1c7a $B/install-firmware.ps1
           grep -qi fb9f4ec2df5301bd35f416384e103c012c5983024c49aa72fbbaf90177512caa $B/install-firmware.ps1
+          grep -qi 18901a5bef1d418b6895e92d0afae36234f4160b237465dfca3d75e9844e93ef $B/install-firmware.ps1
           # a truncated file must be refused
           head -c 1000 ampak.hcd > trunc.hcd
           if ./hcdcheck trunc.hcd; then exit 1; fi

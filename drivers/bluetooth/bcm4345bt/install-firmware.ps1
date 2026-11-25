@@ -1,5 +1,6 @@
-# install-firmware.ps1 - fetch the BCM4345C5 patchram for bcm4345bt and put
-# it where the driver looks for it.
+# install-firmware.ps1 - fetch the Bluetooth patchram for bcm4345bt and put
+# it where the driver looks for it: BCM4345C5.hcd (TaishanPi 3M, default)
+# or, with -Chip 4362a2, BCM4362A2.hcd (ArmSoM CM5 on the CM5-IO).
 #
 # The patchram is Broadcom/Cypress firmware and is not part of this
 # repository or its driver packages. This script downloads it on the machine
@@ -17,6 +18,12 @@
 #                  tuning: try it only if the Ampak file misbehaves.
 #   -File PATH     use a file you already have (checked with the walker's
 #                  rules only by the driver, not by hash).
+#   -Chip 4362a2   the CM5-IO's BCM43752, whose Bluetooth core Linux names
+#                  BCM4362A2: Ampak's "BCM43752A2 UART 37.4MHz Ampak AP6398
+#                  sLNA iLNA CL1" build from armbian/firmware, the file
+#                  Linux's btbcm asks for on this chip. Not tuned for the
+#                  CM5's BW3752-50B1 module. No licence given. Only
+#                  -Source ampak exists for it.
 #
 # Run as administrator, then restart the device (or reboot):
 #   powershell -ExecutionPolicy Bypass -File install-firmware.ps1
@@ -26,6 +33,7 @@
 
 param(
     [ValidateSet('ampak', 'rpi')] [string] $Source = 'ampak',
+    [ValidateSet('4345c5', '4362a2')] [string] $Chip = '4345c5',
     [string] $File = ''
 )
 
@@ -42,16 +50,32 @@ $sources = @{
         Sha256 = 'FB9F4EC2DF5301BD35F416384E103C012C5983024C49AA72FBBAF90177512CAA'
         Size   = 55676
     }
+    ampak4362a2 = @{
+        Url    = 'https://raw.githubusercontent.com/armbian/firmware/db8cc456dad5ad511b04f8a5130acda392cad20b/brcm/BCM4362A2.hcd'
+        Sha256 = '18901A5BEF1D418B6895E92D0AFAE36234F4160B237465DFCA3D75E9844E93EF'
+        Size   = 80602
+    }
+}
+
+if ($Chip -eq '4362a2') {
+    if ($Source -ne 'ampak') { throw "-Source $Source has no file for the BCM4362A2; use ampak" }
+    $key = 'ampak4362a2'
+    $fileName = 'BCM4362A2.hcd'
+    $hwid = 'ACPI\RKCP4362\*'
+} else {
+    $key = $Source
+    $fileName = 'BCM4345C5.hcd'
+    $hwid = 'ACPI\RKCP4345\*'
 }
 
 $destDir = Join-Path $env:SystemRoot 'System32\drivers\brcm'
-$dest = Join-Path $destDir 'BCM4345C5.hcd'
-$tmp = Join-Path $env:TEMP 'BCM4345C5.hcd.download'
+$dest = Join-Path $destDir $fileName
+$tmp = Join-Path $env:TEMP "$fileName.download"
 
 if ($File -ne '') {
     Copy-Item -LiteralPath $File -Destination $tmp -Force
 } else {
-    $s = $sources[$Source]
+    $s = $sources[$key]
     Write-Host "Downloading $($s.Url)"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -UseBasicParsing -Uri $s.Url -OutFile $tmp
@@ -69,7 +93,7 @@ Move-Item -LiteralPath $tmp -Destination $dest -Force
 Write-Host "Installed $dest"
 
 $dev = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-       Where-Object { $_.InstanceId -like 'ACPI\RKCP4345\*' }
+       Where-Object { $_.InstanceId -like $hwid }
 if ($dev) {
     Write-Host "Restarting $($dev.FriendlyName) so it loads the patchram"
     Disable-PnpDevice -InstanceId $dev.InstanceId -Confirm:$false
