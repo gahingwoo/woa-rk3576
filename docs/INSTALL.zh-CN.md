@@ -2,16 +2,11 @@
 
 [English](INSTALL.md) | 简体中文
 
-用本仓库的 WinPE U 盘，把 Windows 11 23H2 装到 ArmSoM CM5-IO 或立创泰山派 3M 的 eMMC 上。
-
-第一次接触这些板子？请从 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/blob/main/README.zh-CN.md) 开始。
-[Maskrom Studio](https://github.com/gahingwoo/maskrom-studio) 可以在电脑上通过 USB 完成同样的安装，不用 U 盘；截至 2026-11-24 还没有在板子上跑过。
-
-用这个方法装过的：2026-10-01 在 CM5-IO 上装的 Windows 11 23H2 企业版（22631.2428，首次启动后做过原地修复）；2026-11-13 在泰山派 3M 上用当前脚本全新安装。
+用本仓库的 WinPE U 盘，把 Windows 11 23H2 装到 ArmSoM CM5-IO 或立创泰山派 3M 的 eMMC 上。两块板都板测过。新板子请从 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/blob/main/README.zh-CN.md) 开始。[Maskrom Studio](https://github.com/gahingwoo/maskrom-studio) 可以在电脑上通过 USB 完成同样的安装（仅 CI）。
 
 ## 用哪个版本
 
-RK3576 是 ARMv8.0。Windows 11 24H2 及以后的版本需要 ARMv8.1 原子指令，跑不了，固件也绕不过去。
+RK3576 是 ARMv8.0。Windows 11 24H2 及以后的版本需要 ARMv8.1 原子指令，跑不了。
 
 | 目标 | 版本号 | |
 |---|---|---|
@@ -23,9 +18,7 @@ RK3576 是 ARMv8.0。Windows 11 24H2 及以后的版本需要 ARMv8.1 原子指�
 
 ## 为什么不用 Windows 安装程序
 
-23H2 的安装程序没有 eMMC 控制器的驱动，看不到 eMMC。它还会因为没有 TPM 2.0 和安全启动而拒绝这些板子，在
-CM5-IO 上还会因为 eMMC 小于 64 GB 而拒绝。装好的系统从第一次启动起就需要测试签名模式，因为系统盘的驱动是测试签名的。
-所以改用本仓库的 WinPE，通过 DISM 写入系统映像。
+安装程序看不到 eMMC（没有它的控制器驱动），会因为没有 TPM 2.0 和安全启动而拒绝这些板子，还会嫌 CM5-IO 的 eMMC 小于 64 GB。装好的系统从第一次启动起也需要测试签名模式。所以改用本仓库的 WinPE，通过 DISM 写入系统映像。
 
 ## 需要准备
 
@@ -36,8 +29,7 @@ CM5-IO 上还会因为 eMMC 小于 64 GB 而拒绝。装好的系统从第一次
 - Windows 11 23H2 ARM64 ISO 里的 `install.wim` 或 `install.esd`。
 - 一个 USB 键盘。泰山派 3M 还需要 HDMI 显示器或立创的 DSI 屏。
 
-不要混用旧版本。泰山派 3M 上 0.3.0 之前、CM5-IO 上 0.4.0 之前的固件，以及 0.1.0 的驱动，把 eMMC 跑在 148.5 MHz
-而不是 52 MHz，Windows 下写入的文件可能读回来就变了，却不报任何错。
+不要用旧版本：0.3.0 之前（泰山派 3M）或 0.4.0 之前（CM5-IO）的固件，以及 0.1.0 的驱动，把 eMMC 跑在 148.5 MHz，可能悄悄损坏文件。
 
 在泰山派 3M 上，触摸、蓝牙、耳机孔、HDMI 音频和 USB-C 需要 0.4.1 之后的固件：下一个正式版发布前，用 edk2-rk3576
 的 [`ci` 构建](https://edk2.gahingwoo.com/flash.zh-CN.html#滚动的-ci-构建)。安装本身用 0.4.1 就可以。
@@ -96,7 +88,7 @@ Windows 会完成初始设置（不联网也能完成），进入桌面，右下
 - 固件必须在 eMMC 上。固件放在 SD 卡上时，脚本会看到两个 SD/eMMC 磁盘而停下。
 - 写入固件完整映像会替换立创的出厂系统，要恢复出厂系统得重新写立创自己的固件。
 - 以后在已装好 Windows 的板子上更新固件，选"UEFI firmware, keep the partitions"。写完整映像会清掉分区表。
-- 接着立创的 DSI 屏时，固件用屏幕而不是 HDMI，Windows 也在屏幕上以竖屏显示（装 wddm-mali-g52 后可横屏）。2026-11-13 那次是通过 HDMI 安装的；想照做，先断电拔下屏幕排线。
+- 接着立创的 DSI 屏时，固件用屏幕而不是 HDMI，Windows 也在屏幕上以竖屏显示（装 wddm-mali-g52 后可横屏）。想通过 HDMI 安装，先断电拔下屏幕排线。
 - WinPE 和第一次设置时，手边准备一个 USB 键盘。
 
 启动不了时：见[故障排查](troubleshooting.zh-CN.md)。

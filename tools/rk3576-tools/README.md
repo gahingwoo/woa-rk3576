@@ -27,14 +27,9 @@ administrator rights). It:
 - copies `RK3576\` to `%ProgramFiles%\RK3576` (again: an upgrade in place;
   a running rk-monitor is stopped first and started again for you);
 - starts rk-monitor at every logon, for all users, with the desktop widget
-  on (each user can turn it off in the tray menu). That is the task
-  `\RK3576\RK3576 Monitor`: triggered at the logon of any user, run as
-  that user (the Users group, not elevated, only while signed in), with no
-  delay. A Run entry would wait for Explorer's startup delay, about 30 s.
-  rk-monitor started this way waits 5 s before its first sample and runs in
-  background mode for its first minute, so it adds nothing to the busy
-  start of a session; the tray icon and the widget are there at once, with
-  "..." until the first sample;
+  on (each user can turn it off in the tray menu), through the task
+  `\RK3576\RK3576 Monitor` (any user's logon, run as that user, not
+  elevated, no delay). It shows "..." for about 5 s until the first sample;
 - adds `Start menu\Programs\RK3576`: RK3576 Monitor, RK3576 tools folder,
   Uninstall RK3576 tools; and the entry in Settings, Apps;
 - registers the GPU (`RK3576 GPU`, maliwddm) and NPU (`RK3576 NPU`, rknpu)
@@ -46,8 +41,7 @@ administrator rights). It:
   `setup\rk3576-browser-gpu.ps1 -Action Install` adds
   `--disable-direct-composition` to their shortcuts, open commands and
   WebView2's arguments, and the task `\RK3576\Browser GPU` keeps it there
-  after browser updates. [BROWSER-GPU.md](BROWSER-GPU.md) has what it
-  changes, the switch to turn it off and how to test it.
+  after browser updates ([BROWSER-GPU.md](BROWSER-GPU.md)).
 
 `install.cmd /quiet /nostart` installs without the pause and without
 starting rk-monitor now. Log: `%ProgramData%\RK3576\setup.log`.
@@ -118,22 +112,13 @@ registers the counters; it always exits 0, logs to `%ProgramData%\RK3576`, and
 not a Windows or the bundle is incomplete, 3 when copying or the registry
 failed (the hive is unloaded again).
 
-## Testing on the board
+## Verify
 
-1. `install.cmd`. The tray icon and the widget (top right of the main
-   screen) appear. Start menu, RK3576 has three entries.
-2. `Get-ScheduledTask -TaskPath \RK3576\` lists both tasks;
-   `Get-Counter -ListSet "RK3576 NPU","RK3576 GPU"` lists both sets;
-   `%ProgramData%\RK3576\counters.log` says what was registered.
-3. Win+D: the widget stays. Drag it, sign out and in: it comes back where
-   it was. Tray menu, Widget click-through: clicks go to the desktop.
-4. Reboot and sign in: rk-monitor is there within a few seconds of the
-   desktop (tray icon and widget, "..." for about 5 s), widget on;
-   `reg query HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` has
-   no "RK3576 Monitor". `counters.log` gets a
-   new "already registered" line per driver.
-5. A driver update (stage a new rknpu or maliwddm package, reinstall flag,
-   reboot): `counters.log` shows the new driver store folder registered and
-   rk-monitor's NPU and GPU rows keep their numbers.
-6. `uninstall.cmd`: the folder, the Start menu folder, both tasks and the
-   counter sets are gone; `reg query HKLM\SOFTWARE\RK3576` finds nothing.
+| Check | Expected |
+|---|---|
+| after `install.cmd` | tray icon and widget (top right of the main screen); three entries under Start menu > RK3576 |
+| `Get-ScheduledTask -TaskPath \RK3576\` | the tasks listed above |
+| `Get-Counter -ListSet "RK3576 NPU","RK3576 GPU"` | both sets; `%ProgramData%\RK3576\counters.log` says what was registered |
+| reboot and sign in | rk-monitor within a few seconds; no "RK3576 Monitor" in `HKLM\...\CurrentVersion\Run` |
+| after a driver update | `counters.log` shows the new driver store folder; rk-monitor's NPU and GPU rows keep their numbers |
+| after `uninstall.cmd` | folder, Start menu folder, tasks and counter sets gone; `reg query HKLM\SOFTWARE\RK3576` finds nothing |

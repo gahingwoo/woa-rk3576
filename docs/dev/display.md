@@ -2,8 +2,6 @@
 
 English | [简体中文](display.zh-CN.md)
 
-Status on 2026-11-24.
-
 Without a GPU driver, Windows draws on the framebuffer the firmware sets up.
 The firmware brings up VOP2 and the HDMI PHY (or the TaishanPi 3M's DSI
 screen) and hands over a UEFI GOP framebuffer, and the inbox BasicDisplay
@@ -14,7 +12,7 @@ changes, no hot-plug, no acceleration.
 for the Mali-G52 that also owns the display: the desktop is composed on the
 GPU and scanned out by VOP2, with rotation, DSI brightness, HDMI hot-plug at
 the monitor's own timing, and HDMI audio. It binds the firmware's ACPI
-devices `RKCP7402` (GPU) and `RKCP7403` (display). It has run on the
+devices `RKCP7402` (GPU) and `RKCP7403` (display). Board-tested on the
 TaishanPi 3M. Nothing in this repository is involved.
 
 The notes from before that driver existed are in

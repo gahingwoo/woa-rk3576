@@ -1,149 +1,63 @@
-# Windows 上的硬件视频解码（和编码）：计划
+# Windows 上的硬件视频解码（和编码）
 
 [English](video-decode.md) | 简体中文
 
-写于 2026-11-22。V1 和 V2 已于 2026-11-24 在泰山派 3M 上跑过（见下表）；V3 和 V4 还没有跑过。板子顺序：先立创泰山派 3M，再 CM5-IO，然后 ROCK 4D
-（同一颗 SoC，同一个固件选项）。
+RK3576 VDPU383 在 Windows 下的计划。板子顺序：泰山派 3M，然后 CM5-IO，然后 ROCK 4D（同一颗 SoC，同一个固件选项）。调试驱动的安装和测试见 [vdpu383 README](../../drivers/video/vdpu383/README.zh-CN.md)。
 
 ## 决定：通过显示驱动做 D3D11 视频解码
 
-Windows 应用使用硬件解码器有两条路：
+应用使用硬件解码器有两条路：
 
-- **(a) D3D11VA**：显示驱动的用户态驱动（UMD）通过 `ID3D11VideoDevice` 提供解码器 profile；
-  runtime 把 DXVA 图像参数、slice 控制信息和码流交给它；内核驱动启动解码引擎，再发出一个 fence 信号。
-- **(b) 一个 Media Foundation 解码器（MFT）**，它和一个单独的 KMDF 驱动通信，把 NV12 返回到系统内存或 D3D 内存。
+- (a) D3D11VA：显示驱动的用户态驱动（UMD）通过 `ID3D11VideoDevice` 提供解码器 profile，接收 DXVA 图像参数、slice 和码流，由内核驱动启动解码引擎并发出 fence 信号。
+- (b) 一个 Media Foundation 解码器（MFT），通过单独的 KMDF 驱动工作，把 NV12 返回到系统内存或 D3D 内存。
 
-我们选 **(a)**。原因：
+我们选 (a)：
 
-1. Edge 和所有 Chromium 构建只通过它们用来渲染的那个 D3D11 设备上的 `ID3D11VideoDevice` 解码
-   （`D3D11VideoDecoder`），从来不加载第三方 MFT。没有 (a)，不管别的做了什么，YouTube 都只能软件解码。
-2. Movies & TV、Media Player 以及其他基于 Media Foundation 的应用，用的是微软自己的解码器 MFT
-   （H.264 系统自带；HEVC、VP9 和 AV1 Video Extensions）。这些 MFT 是 DXVA 客户端：只要有一个带解码器 profile 的
-   D3D11 设备，它们就通过它做硬件解码。所以 (a) 同样能服务 MF 应用，不需要我们自己写 MFT。
-3. 解码出来的 NV12 surface 留在 Mali 能采样、VOP2 能扫描输出的内存里。单独驱动上的 MFT 没有共享的 D3D 设备，
-   每一帧都要经过 CPU。
-4. 解码器的 MMIO、中断和 IOMMU 只有一个所有者，就在已经管着 VOP2 及其 IOMMU 的那个驱动里（页表代码相同）。
+1. Edge 和 Chromium 只通过渲染用的 D3D11 设备上的 `ID3D11VideoDevice` 解码，从不加载第三方 MFT。
+2. Movies & TV、Media Player 等 MF 应用用的是微软自己的解码器 MFT（H.264 系统自带；HEVC、VP9、AV1 扩展），它们是 DXVA 客户端。所以 (a) 也能服务它们。
+3. 解码出的 NV12 留在 Mali 能采样、VOP2 能扫描输出的内存里；单独驱动上的 MFT 每一帧都要经过 CPU。
+4. 解码器的 MMIO、中断和 IOMMU 只有一个所有者：已经管着 VOP2 及其 IOMMU 的那个驱动。
 
-(b) 不做。只有当显示驱动永远做不出视频 DDI 时它才值得做，而且那时也只对 MF 应用有用。
+KMDF 驱动 [vdpu383](../../drivers/video/vdpu383) 是调试用的试验台，不是最终产品。它的寄存器构建器（`drivers/video/vdpu383/lib`，纯 C，不分配内存，不用浮点，输入是 DXVA 结构体）会原样搬进 UMD。这和 wddm-mali-g52 的 `docs/D3D11-UMD.md`（U4 视频 DDI，U5 解码节点）一致。
 
-这和 wddm-mali-g52 的 `docs/D3D11-UMD.md`（U4 视频 DDI，U5 解码节点，2026-11-21 决定）一致。
-本仓库里的 KMDF 驱动 `drivers/video/vdpu383` 是 bring-up 用的试验台，不是最终产品：它用来验证寄存器编程；
-它的寄存器构建器（`drivers/video/vdpu383/lib`，纯 C，不分配内存，不用浮点，输入是 DXVA 结构体）会原样搬进 UMD。
-
-编解码器顺序：**先 H.264**。DXVA 的 H.264 结构体最简单；mainline 的 `rkvdec-vdpu383-h264.c` 是 mainline
-里最短的路径；ITU 一致性测试集给每条码流都附带了参考 YUV；浏览器要求 avc1 时，YouTube 也会给 avc1。
-接下来是 HEVC（mainline 有 `rkvdec-vdpu383-hevc.c`），然后是 VP9 和 AV1（只有 MPP 有；mainline 里 VDPU383 不支持）。
+编解码器顺序：H.264（DXVA 结构体最简单，有 mainline 的 `rkvdec-vdpu383-h264.c`，ITU 一致性测试集带参考 YUV），然后 HEVC（mainline 的 `rkvdec-vdpu383-hevc.c`），然后 VP9 和 AV1（只有 MPP）。
 
 ## 里程碑
 
-| | 目标 | 在哪里 | 状态 | 工作量 |
-|---|---|---|---|---|
-| V1 | 固件给 PD_VDEC 上电并声明设备；Windows 绑定驱动；寄存器可读 | edk2-rk3576 `vdpu383-acpi-v2`，woa-rk3576 `vdpu383-v2` | 完成：2026-11-24 在泰山派 3M 上，Windows 把 `vdpu383.sys` 绑定到 `ACPI\RKCP0383`（edk2-rk3576 合并提交 `a23adb9`） | 已完成 |
-| V2 | 在测试工具里从保存的码流解码 H.264 帧，和参考 YUV 的 MD5 比对 | `tools/vdpu383test`，`drivers/video/vdpu383/lib` | 代码完成：解析器、寄存器构建器、测试框架、replay、MD5；2026-11-24 在泰山派 3M 上，试过的六个 H.264 一致性码流与 FFmpeg 的参考逐位一致，硬件错误为 0（edk2-rk3576 合并提交 `a23adb9`） | 板上迭代 1 到 3 周 |
-| V3 | 面向应用的路径：`ID3D11VideoDevice` 列出 H.264，`DecoderBeginFrame` 能解码 | wddm-mali-g52 U4 + U5，单独一个分支 | 未开始；需要 U4（视频 DDI）和第二个节点 | V2 之后 5 到 8 周 |
-| V4 | Edge 上的 YouTube（avc1）和 Movies & TV 用硬件播放 1080p | 同上 | 未开始 | V3 之后 2 到 4 周（NV12 显示、参考 surface 生命周期、电源） |
+| | 目标 | 在哪里 | 状态 |
+|---|---|---|---|
+| V1 | 固件给 PD_VDEC 上电并声明 `ACPI\RKCP0383`；Windows 绑定 `vdpu383.sys`；寄存器可读 | edk2-rk3576、`drivers/video/vdpu383` | 板测（泰山派 3M） |
+| V2 | `vdpu383test` 解码存好的 H.264，与参考 MD5 一致 | `tools/vdpu383test`、`drivers/video/vdpu383/lib` | 板测：六条一致性码流与 FFmpeg 一致，0 个硬件错误 |
+| V3a | 给 `UmdVideo` 列出的进程提供带 H.264 的 `ID3D11VideoDevice`，在播放器进程里通过 vdpu383 的 `UserAccess` 接口解码 | wddm-mali-g52 `video-decode`、woa-rk3576 `vdpu383-d3d11va` | 分支 |
+| V3b | 打开解码器 IOMMU，通过 maliwddm 解码；取代 V3a | wddm-mali-g52 | 未开始 |
+| V4 | Edge 上的 YouTube（avc1）和 Movies & TV 硬件播放 1080p | wddm-mali-g52 | 未开始 |
 
-V2 是在上板之前"能做到的稳妥程度"：凡是能从 mainline、MPP 或 vendor 内核读出来的值都已经写进去了；
-它们之间有分歧的值，两种写法都写了（见驱动 README 的 "Verified, derived, guessed"）。下一步的代码改动要根据板子的反馈来做。
+调试驱动里的其他编解码器（细节和数字见它的 README）：HEVC Main 和 VP9 已用 `vdpu383test` 板测，AV1 仅 CI。解码器从一张表里读 HEVC SPS 的短期参考图像集，而 DXVA 不带这些信息，所以 HEVC 构建器（`lib/vdpu383_hevc.c`，来自 MPP 的 VDPU383 HEVC HAL）从 DXVA 重建这张表并加以检查。
 
-### V3 需要显示驱动提供什么（建议的接口，尚未实现）
+mainline、MPP 和厂商内核说法不一致的值，两种写法都保留了；见驱动 README 的"硬件事实和来源"。
 
-这项工作不改动显示驱动任何分支上的东西。以下是给做 U4/U5 的人（或者给从 `hpd-edge` 拉出的 `video-decode` 分支）的建议：
+### V3b 需要显示驱动提供什么（提议，尚未实现）
 
-1. **所有权。** 固件选项增加一个值：`AcpiVdec` 为 1 时，为 bring-up 驱动发布 `ACPI\RKCP0383`（现在的做法）；
-   为 2 时不出现 `RKCP0383`（`_STA` 0），并把 `\_SB.VDRS` 资源模板（MMIO 0x27B00000，GSIV 340/341，SRAM）
-   追加到 GPU0 的 `_CRS` 里、放在 maliwddm 已经解析的那些资源之后，这样这个模块始终只有一个驱动去映射。
-   为此 Vdec.asl 把这个模板放在一个具名对象里。
-2. **节点。** `MW_UMD_ADAPTER_INFO.DecodeNode`（adapter-info 查询里已经预留）设为解码节点的序号；
-   `UmdVideo` 为 2 时打开这些 profile。
-3. **提交。** 每张图像一条私有命令：`vdpu383_h264_build()` 生成的寄存器映像，加上分配列表（码流、输出和参考 NV12、
-   RCB 和辅助缓冲区）。KMD 填入 IOVA，按列表检查每个地址寄存器（和现在的 `V383Run` 一样），写寄存器，
-   用 `V383Run` 的方式启动核心，在中断里完成 fence，超时就执行 `V383IpReset`。
-4. **IOMMU。** 解码器的 IOMMU（`rockchip,rk3568-iommu`，在 +0x800 和 +0x900）和 VOP2 的是同一种：
-   scanout.c 的页表代码多一个客户端。bring-up 驱动是在关闭分页的情况下运行的，所以 V2 的结果不依赖它。
+1. 归属。`AcpiVdec` 为 1 时给调试驱动发布 `ACPI\RKCP0383`；为 2 时不发布它（`_STA` 0），并把 `\_SB.VDRS` 资源模板（MMIO 0x27B00000、GSIV 340/341、SRAM）附加到 GPU0 的 `_CRS` 后面，这样只有一个驱动映射这个模块。Vdec.asl 为此把模板放在一个具名对象里。
+2. 节点。`MW_UMD_ADAPTER_INFO.DecodeNode`（已预留）设为解码节点的序号；`UmdVideo` 为 2 时打开 profile。
+3. 提交。每张图一个私有命令：`vdpu383_h264_build()` 生成的寄存器映像加分配列表（码流、输出和参考 NV12、RCB 和辅助缓冲区）。KMD 填入 IOVA，按列表检查每个地址寄存器（和 `V383Run` 一样），启动内核，在中断里完成 fence，超时则执行 `V383IpReset`。
+4. IOMMU。解码器的 IOMMU（`rockchip,rk3568-iommu`，在 +0x800 和 +0x900）和 VOP2 的是同一种，所以 scanout.c 的页表代码多一个客户。vdpu383 用自己的页表驱动它（driver.c 的 IOMMU 部分），因为在板上拿不到物理连续的数 MiB 缓冲区。
 
 ## 编码：只定范围
 
-- **硬件模块。** RK3576 有两个 `rkv-encoder-rk3576-core` 实例（MPP 把这一代叫 VEPU510；vendor dtsi：
-  0x27A00000 和 0x27A10000，各有自己的 IOMMU，共用一个 CCU），用于 H.264 和 HEVC；还有一个 JPEG 编码器
-  （`rkv-jpeg-encoder-v1`，0x27910800，和 JPEG 解码器共用 IOMMU）。RK3576 上没有 Hantro VEPU。
-- **Mainline。** linux-next（2026-11-22）里这两个模块都没有驱动，也没有设备树节点。能读的源码只有 vendor 内核
-  （`drivers/video/rockchip/mpp/mpp_rkvenc2.c`）和 MPP 的 `hal_h264e_vepu510.c` / `hal_h265e_vepu510.c`
-  （Apache-2.0 OR MIT）。码率控制在 MPP 的用户态里做。
-- **Windows 上的路径。** D3D11 没有视频编码 DDI（D3D12 有，而这套驱动是 D3D11）。编码器是以硬件 MFT
-  （`MFT_ENUM_FLAG_HARDWARE`）的形式提供给应用（相机、Teams、Game Bar）的，所以编码终究还是走方案 (b)：
-  一个基于 KMDF 驱动或第三个节点的编码器 MFT。
-- **工作量。** 固件选项和电源：1 周。按 V1/V2 的模式做 bring-up 试验台（移植 MPP 的 VEPU510 H.264 HAL，
-  输入原始 NV12，输出 Annex B，和 Linux 上的 MPP 比对）：4 到 6 周。带码率控制的硬件 MFT：再 4 到 6 周。
-  V4 之前不值得开始。
+- 模块：两个 `rkv-encoder-rk3576-core`（VEPU510；厂商 dtsi 里在 0x27A00000 和 0x27A10000，各有 IOMMU，共用一个 CCU），负责 H.264 和 HEVC；一个 JPEG 编码器（`rkv-jpeg-encoder-v1`，0x27910800，与 JPEG 解码器共用 IOMMU）。没有 Hantro VEPU。
+- 资料：mainline 没有驱动也没有设备树节点。厂商内核的 `drivers/video/rockchip/mpp/mpp_rkvenc2.c`，以及 MPP 的 `hal_h264e_vepu510.c` / `hal_h265e_vepu510.c`（Apache-2.0 OR MIT）。码率控制在 MPP 用户态。
+- Windows 路径：D3D11 没有视频编码 DDI，编码器以硬件 MFT（`MFT_ENUM_FLAG_HARDWARE`）的形式提供给应用（相机、Teams、Game Bar），也就是方案 (b)。
+- 工作量：固件 1 周；试验台（移植 MPP 的 VEPU510 H.264 HAL，NV12 进，Annex B 出，和 Linux 上的 MPP 对比）4 到 6 周；带码率控制的硬件 MFT 再 4 到 6 周。V4 之前不做。
 
-## 板上测试，每个里程碑一项
+## 板测
 
-固件由主会话负责刷写。每项测试都从一块现在能启动 Windows 的板子开始。每次固件或驱动改动只跑一项测试。
-
-### V0：固件，选项关闭（预期没有变化）
-
-固件：edk2-rk3576 `vdpu383-acpi-v2`。保持 *Video Decoder (VDPU383, experimental)*（视频解码器，实验性）为
-Disabled，分别启动一次 Windows 和 Linux。
-
-通过标准：两者都和以前一样启动；设备管理器里没有新设备。
-
-### V1：电源、设备、驱动、寄存器
-
-1. 在 Setup 的 *ACPI / Device Tree* 里：config table mode 要包含 ACPI；把 *Video
-   Decoder (VDPU383, experimental)* 设为 Enabled；保存，重启。串口日志里应有：
-   `RK3576Dxe: VDEC powered, version=0x...`。
-2. Windows：设备管理器里出现一个未知设备 `ACPI\RKCP0383\0`。
-3. 从 `vdpu383-v2` 的 WinPE workflow artifact `woa-drivers-signed-arm64` 里取文件，以管理员身份运行
-   （先同步时钟：`w32tm /resync /force`）：
-
-   ```
-   certutil -addstore -f Root signer.cer
-   certutil -addstore -f TrustedPublisher signer.cer
-   pnputil /add-driver vdpu383\vdpu383.inf
-   ```
-
-   然后以 SYSTEM 身份，在 `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0` 下的 `ConfigFlags`
-   里置上 bit 0x20（CONFIGFLAG_REINSTALL），再重启。
-4. 重启之后：
-
-   ```
-   reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters"
-   vdpu383test info
-   ```
-
-通过标准：`LastStep` 为 `D0Entry: done`，`Version` 非零且等于固件日志里的 `version=`，`RegsPa` 为 0x27b00000；
-`vdpu383test info` 打印出相同的版本号，两个 IOMMU 都是分页关闭状态。
-
-需要发回：上面两条命令的输出；如果串口日志里没有那行固件输出，也把串口日志发回。
-
-### V2：解出一张图像，然后跑一致性测试
-
-从同一个 ITU-T H.264.1 一致性测试 zip 里，把 `BA1_Sony_D.jsv` 和对应的参考 `.yuv` 复制到 `vdpu383test.exe` 旁边，然后：
-
-```
-vdpu383test warmup
-vdpu383test decode BA1_Sony_D.jsv --ref REFERENCE.yuv -o out.yuv
-```
-
-通过标准：`reference: 17 frames; MATCH`，输出的 MD5 为
-114d1cf94a2fcaffda0cf1b49964bf3d。如果失败，后续步骤（replay、寄存器转储、用来比对的 Linux 抓取）见
-[驱动 README](../../drivers/video/vdpu383/README.zh-CN.md) 的 "Test plan" 第 2 到 4 步。
-那里的完整码流列表就是 V2 的完成标准。
-
-### V3 和 V4
-
-定义在 wddm-mali-g52 `docs/D3D11-UMD.md` 的 U4 和 U5 里：`UmdVideo` 为 2 时 `d3dprobe` 列出 H.264 profile；
-`edge://gpu` 显示 "Video Decode: Hardware accelerated"；强制 avc1 的 YouTube 播放 1080p 不丢帧；
-Movies & TV 播放本地 1080p H.264 文件时 CPU 空闲。
+V1 和 V2 的步骤（安装、`vdpu383test info`、`BA1_Sony_D.jsv` 及其预期 MD5 114d1cf94a2fcaffda0cf1b49964bf3d、完整码流列表）见[驱动 README](../../drivers/video/vdpu383/README.zh-CN.md)。V3 和 V4 的通过条件：`UmdVideo` 为 2 时 `d3dprobe` 列出 H.264 profile；`edge://gpu` 显示 "Video Decode: Hardware accelerated"；强制 avc1 的 YouTube 播放 1080p 不丢帧；Movies & TV 播放本地 1080p H.264 文件时 CPU 空闲（wddm-mali-g52 `docs/D3D11-UMD.md` 的 U4 和 U5）。
 
 ## 回退
 
-- **Windows 里出了任何问题：** 在固件设置里把 *Video Decoder* 设为 Disabled。这样 SSDT 不会安装，
-  `ACPI\RKCP0383` 不存在，驱动也就不会加载。PD_VDEC 保持断电。这一步不需要进 Windows，所以启动时蓝屏也能用它恢复。
-- **事后想看失败原因：** 选项关闭后，失败那次启动留下的痕迹（`LastStep` 等）仍然在该设备的
-  `Device Parameters` 键里。
-- **删除驱动：** 运行 `pnputil /enum-drivers`，找到 `vdpu383.inf` 对应的 `oemNN.inf`，然后在选项关闭的状态下运行
-  `pnputil /delete-driver oemNN.inf`（没有绑定的设备，所以不会从正在运行的驱动底下把它卸掉）。
-- **怀疑是预热（warm-up）的问题：** 它在每次进入 D0 时和每次 IP 复位后运行（`WarmupAtD0` 1；2026-11-25 发现 H.264 需要它之后改为默认值）；`WarmupAtD0` 0 关闭它。`vdpu383test warmup` 可按需运行。
-- **固件：** 刷回之前的映像；没有这个选项的固件会忽略该选项的变量（`AcpiVdec`）。
+- 固件设置里把 *Video Decoder* 设为 Disabled：不装 SSDT，没有 `ACPI\RKCP0383`，驱动不会加载，PD_VDEC 保持关闭。不需要进 Windows，所以启动蓝屏时也能用。
+- 失败那次启动留下的痕迹（`LastStep` 等）仍在设备的 `Device Parameters` 键里。
+- 在选项关闭时删除驱动：`pnputil /enum-drivers` 找到 `vdpu383.inf` 对应的 `oemNN.inf`，然后 `pnputil /delete-driver oemNN.inf`。
+- 预热在每次进入 D0 和每次 IP 复位后运行（`WarmupAtD0` 为 1，默认；H.264 需要它）。`WarmupAtD0` 设为 0 关闭；`vdpu383test warmup` 可手动运行。
+- 固件：刷回上一个映像；旧固件会忽略 `AcpiVdec`。

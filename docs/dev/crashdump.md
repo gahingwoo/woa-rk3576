@@ -1,86 +1,48 @@
 # Crash dumps from the eMMC
 
 Windows writes a crash dump through a second copy of the boot storage
-driver. On these boards that is `dwcsdhc` (the eMMC, `RKCP0D40`), and before
-this change nothing ever reached the disk: no
-`C:\Windows\Minidump`, no System event 1001, and Kernel-Power 41 reporting
-bugcheck code 0 after every crash (TaishanPi 3M, 2026-11-22).
+driver: `dump_dwcsdhc.sys` under `dumpsdport.sys` for the eMMC
+(`RKCP0D40`). Crash dumps are off by default. Status: CI only.
 
-## How the dump path works here
+## How the dump path works
 
-Read from the 23H2 binaries (`crashdmp.sys`, `sdport.sys` 10.0.22621.608,
-`dumpsdport.sys` 10.0.22621.1) with their public symbols:
+From the 23H2 binaries (`crashdmp.sys`, `sdport.sys` 10.0.22621.608,
+`dumpsdport.sys` 10.0.22621.1) and their public symbols:
 
-- At boot, `crashdmp` asks the disk for its dump pointers. sdport's PDO
-  answers (`SdhostPdoScsiGetDumpPointers`), copies its slot and miniport
-  state into a dump context and preallocates a 64 KB uncached buffer for
-  DMA. The dump stack is `dumpsdport.sys` plus `dump_dwcsdhc.sys`, a second
-  copy of this driver with its own globals.
-- At bugcheck time, at HIGH_LEVEL with interrupts off, `crashdmp` calls the
-  copy's `DriverEntry`, which calls `SdPortInitialize`, which calls
-  `SdhcSlotInitialize(CrashdumpMode = TRUE)`.
-- `dumpsdport`'s open routine then powers the eMMC up again from scratch
-  (`SdhostPowerOnMmc`): ResetHw, ResetHost(All), 3.3 V, SetClock(400 kHz),
-  CMD0, CMD1, CMD2, CMD3, CMD7, EXT_CSD, power class, bus width, speed,
-  operating clock. Every request after that is polled: dumpsdport calls the
-  miniport's interrupt and DPC routines itself.
+- At boot, `crashdmp` asks the disk for its dump pointers; sdport's PDO
+  copies its slot and miniport state into a dump context and preallocates a
+  64 KB uncached DMA buffer.
+- At bugcheck, at HIGH_LEVEL with interrupts off, `crashdmp` calls the
+  copy's `DriverEntry`, then `SdhcSlotInitialize(CrashdumpMode = TRUE)`.
+  dumpsdport powers the eMMC up from scratch (reset, 3.3 V, 400 kHz, CMD0 to
+  CMD7, EXT_CSD, bus width, speed, clock) and polls every request through
+  the miniport's interrupt and DPC routines.
 
-## What was wrong
+What `dwcsdhc` does for this:
 
-Two faults in `dwcsdhc`, both only in the dump copy:
+- `DriverEntry` skips `ExInitializeDriverRuntime` above PASSIVE_LEVEL (its
+  routines bugcheck at HIGH_LEVEL).
+- The card clock comes only from the CRU (`CRU_CLKSEL_CON89`; the SDHCI
+  divider does not work on this controller), and the dump copy cannot map
+  the CRU at HIGH_LEVEL. So the running driver publishes its CRU mapping in
+  its own image, and the dump copy follows slot extension, `SD_MINIPORT`,
+  `ConfigurationInfo.DeviceObject`, the FDO's driver object and
+  `DriverStart` back to it, checks it is the same build (PE timestamp, size,
+  checksum), the structure's magic, self pointer and CRU address, and
+  borrows the mapping read-only.
+- With `Parameters\CrashDump` not 1, or any check failing, the dump copy
+  returns `STATUS_NOT_SUPPORTED` from `SdhcSlotInitialize` before touching a
+  register: the card is left as it was and Windows records a failed dump.
+- In crashdump mode only: DAT and CMD reset at the end of initialise;
+  SDR50, DDR50, SDR104 and tuning masked out, so the eMMC runs high speed at
+  52 MHz; interrupt signals cleared; `EMMC_RST_N` released if asserted;
+  commands that could leave the user area or change the card permanently
+  refused (CMD26 to CMD29, CMD35, CMD36, CMD38, CMD42, and CMD6 to EXT_CSD
+  136 to 155, 162, 167, 171, 173, 177, 178, 179).
 
-1. `DriverEntry` called `ExInitializeDriverRuntime`, which runs
-   `RtlGetVersion`, `MmGetSystemRoutineAddress` and
-   `NtQuerySystemInformation`. Those are PASSIVE_LEVEL routines; at
-   HIGH_LEVEL they bugcheck inside the dump. This alone is enough to explain
-   a dump that never starts.
-2. The card clock comes only from the CRU (`CRU_CLKSEL_CON89`; the SDHCI
-   divider does not work on Rockchip's controller, as mainline Linux also
-   says). The dump copy cannot map the CRU at HIGH_LEVEL, so it never
-   changed the clock, and dumpsdport's CMD0 to CMD3 identification ran at
-   the 51.65 MHz the running system had set instead of 400 kHz.
-
-The rest of the dump contract was already met: no paged code, no
-allocations, interrupt signals left off in crashdump mode, R1b commands
-completed on both command and transfer complete, and the SDHCI vendor bits
-restored after every reset.
-
-## What the branch changes
-
-- `DriverEntry` skips `ExInitializeDriverRuntime` above PASSIVE_LEVEL.
-  The driver allocates no pool, so nothing depends on it.
-- The running driver publishes its CRU mapping in a small structure in its
-  own image, after checking that the path the dump copy will take
-  (slot extension, `SD_MINIPORT`, `ConfigurationInfo.DeviceObject`, the FDO's
-  driver object, `DriverStart`) leads back to itself.
-- The dump copy follows that path, checks that the running image is the same
-  build (PE timestamp, size and checksum), finds the structure at the same
-  offset, checks its magic, self pointer and the CRU physical address, and
-  borrows the mapping. It only reads; it maps, allocates and locks nothing.
-  If any check fails it refuses to start (below).
-- Crash dumps are off unless `Parameters\CrashDump` (REG_DWORD) under the
-  `dwcsdhc` service key is 1. Off, the running driver publishes nothing and
-  the dump copy returns `STATUS_NOT_SUPPORTED` from `SdhcSlotInitialize`
-  before it writes a single register, so a crash leaves the card exactly as
-  it was and Windows records a failed dump. The same refusal happens when
-  the share cannot be found or belongs to another build: the clock cannot
-  be set without it, and the old fallback (identify at 51.65 MHz) is gone.
-- In crashdump mode only: a DAT and a CMD reset at the end of initialise,
-  so a command or ADMA transfer the crash interrupted stops before
-  dumpsdport starts; SDR50, DDR50, SDR104 and SDR50 tuning masked out of the
-  capabilities, so the dump copy runs the eMMC in high speed at 52 MHz like
-  the running driver; interrupt signal enables cleared at initialise,
-  `EMMC_RST_N` released if it was ever found asserted, and commands that
-  could leave the user area or change the card permanently are refused
-  (CMD26 to CMD29, CMD35, CMD36, CMD38, CMD42, and CMD6 to EXT_CSD 136 to
-  155, 162, 167, 171, 173, 177, 178, 179). CMD0 already selects the user
-  area.
-
-The normal path is unchanged apart from reading `CrashDump` once in
-`DriverEntry`, recording one pointer when it is 1, and reading the CRU
-mapping from the slot extension instead of a global. sdport still sees
-`CrashdumpSupported = TRUE`, as before, so the dump stack loads at boot the
-same way whether the parameter is set or not.
+The normal path only reads `CrashDump` once and records one pointer when it
+is 1. sdport sees `CrashdumpSupported = TRUE` either way, so the dump stack
+loads at boot the same way.
 
 Turning it on (administrator, then restart):
 
@@ -90,13 +52,9 @@ reg add HKLM\SYSTEM\CurrentControlSet\Services\dwcsdhc\Parameters /v CrashDump /
 
 Turning it off: the same with `/d 0`, or delete the value.
 
-A card caught mid-transfer is handled by dumpsdport's own sequence: the
-controller reset stops the DMA engine and CMD0 returns the card to idle from
-any state.
-
 ## Checks on Windows
 
-Before and after the change, from an administrator PowerShell over SSH:
+From an administrator PowerShell:
 
 ```
 Get-CimInstance Win32_OSRecoveryConfiguration | fl DebugInfoType,MiniDumpDirectory,OverwriteExistingDebugFile,WriteToSystemLog
@@ -119,7 +77,7 @@ What they mean:
 - volmgr event 45 or 46 at boot: the dump stack did not load or initialise
   (an import or dump pointer problem, before the miniport runs). Event 161:
   a dump was attempted and failed while writing. Neither, and still no dump:
-  it died inside the dump copy, which is what fault 1 looked like.
+  it died inside the dump copy.
 - After a crash that produced a dump: Kernel-Power 41 carries the real
   bugcheck code, and event 1001 (BugCheck) names the dump file.
 - `dwcsdhc` must be `Start` 0 (boot) with `BootFlags` 8.

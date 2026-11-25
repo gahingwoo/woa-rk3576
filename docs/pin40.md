@@ -4,9 +4,8 @@ English | [简体中文](pin40.zh-CN.md)
 
 The 40-pin header's UARTs as COM ports, and its GPIO pins, I2C buses and
 SPI bus for applications (`Windows.Devices.Gpio`, `.I2c`, `.Spi`, the
-Raspberry Pi Windows IoT model). Nothing here has run on a board yet: the
-drivers build in CI and the firmware tables compile and disassemble cleanly.
-The [test plan](#test-plan) at the end is what has to happen first.
+Raspberry Pi Windows IoT model). Status: CI only on every board; the
+[test plan](#test-plan) is what runs first.
 
 ## What it takes
 
@@ -35,25 +34,13 @@ any board, and rk3xuart refuses to start on it.
 
 ## Why a UART driver of our own
 
-Windows' inbox `serial.sys` drives 16550 UARTs whose registers are one byte
-apart. The register stride is a compile-time constant (`SERIAL_REGISTER_STRIDE`
-is 1 in the `serial.sys` source Microsoft publishes in Windows-driver-samples,
-`serial/serial/serial.h`), registers are read and written a byte at a time,
-and there is no registry value or `_DSD` property that changes either. The
-RK3576 UARTs are DesignWare APB UARTs with 32-bit registers four bytes apart
-(`reg-shift = 2`, `reg-io-width = 4` in `rk3576.dtsi`), and they raise a
-DesignWare-only "busy detect" interrupt that `serial.sys` would not clear.
-The `16550 with GAS` SPCR/DBG2 subtypes that take a 32-bit stride are for the
-kernel debugger, not for `serial.sys`.
-
-So rk3xuart is a SerCx2 controller driver (PIO, no DMA). The firmware gives
-each UART `"SerCx-FriendlyName"` in `_DSD`, which makes SerCx2 publish a
-`GUID_DEVINTERFACE_COMPORT` interface (Windows 10 1903 and later). That is
-what `Windows.Devices.SerialCommunication` finds and what Win32 programs can
-open by interface path. For programs that only take a COM name, rk3xuart
-also creates `COMn` for UARTn and lists it in
-`HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`. See the driver's
-[README](../drivers/serial/rk3xuart/README.md).
+The inbox `serial.sys` only handles 16550 registers one byte apart, and does
+not clear the DesignWare busy-detect interrupt; the RK3576 UARTs have 32-bit
+registers four bytes apart. rk3xuart is a SerCx2 driver (PIO, no DMA). It
+publishes a `GUID_DEVINTERFACE_COMPORT` interface (from the firmware's
+`"SerCx-FriendlyName"`), which `Windows.Devices.SerialCommunication` finds,
+and also creates `COMn` for UARTn in `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`.
+Details: the driver's [README](../drivers/serial/rk3xuart/README.md).
 
 ## Pin maps
 

@@ -42,7 +42,7 @@ so `git log -- drivers/<class>/<name>` shows what differs from RK3588:
 
 - dwcsdhc: card clock from the CRU instead of a TF-A SiP call; Rockchip vendor
   bits restored after each controller reset; ADMA2 descriptors split at the
-  128 MiB boundary (merged 2026-11-24).
+  128 MiB boundary.
 - dwcmshc: clock from the CRU, phases in the controller's `TIMING_CON`, 3.3 V
   only.
 - rk3xgpio: accepts GPIO version `V2_2`.

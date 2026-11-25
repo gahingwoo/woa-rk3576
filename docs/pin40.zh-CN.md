@@ -3,8 +3,7 @@
 [English](pin40.md) | 简体中文
 
 把 40 针排针上的 UART 变成 COM 口，并让应用程序通过 `Windows.Devices.Gpio`、`.I2c`、`.Spi`
-使用排针上的 GPIO、I2C 和 SPI（即树莓派 Windows IoT 的做法）。这里的东西都还没有在板子上跑过：
-驱动在 CI 里能编译，固件表能编译也能正常反汇编。最后的[测试计划](#测试计划)是接下来要先做的事。
+使用排针上的 GPIO、I2C 和 SPI（即树莓派 Windows IoT 的做法）。状态：各板都仅 CI；先按[测试计划](#测试计划)跑。
 
 ## 需要什么
 
@@ -31,18 +30,7 @@ Linux 没有任何作用。
 
 ## 为什么要自己写 UART 驱动
 
-Windows 自带的 `serial.sys` 只支持寄存器间隔 1 字节的 16550。寄存器间隔是编译期常量（微软在
-Windows-driver-samples 里公开的 `serial.sys` 源码 `serial/serial/serial.h` 中 `SERIAL_REGISTER_STRIDE`
-为 1），寄存器按字节读写，注册表值和 `_DSD` 属性都改变不了。RK3576 的 UART 是 DesignWare APB UART，
-32 位寄存器、间隔 4 字节（`rk3576.dtsi` 里 `reg-shift = 2`、`reg-io-width = 4`），还会产生 DesignWare
-特有的 "busy detect" 中断，`serial.sys` 不会清它。SPCR/DBG2 里支持 32 位间隔的 "16550 with GAS"
-子类型只给内核调试器用，与 `serial.sys` 无关。
-
-所以 rk3xuart 是一个 SerCx2 控制器驱动（PIO，不用 DMA）。固件在每个 UART 的 `_DSD` 里写
-`"SerCx-FriendlyName"`，SerCx2 就会发布 `GUID_DEVINTERFACE_COMPORT` 接口（Windows 10 1903 起）：
-`Windows.Devices.SerialCommunication` 找的就是它，Win32 程序可以用接口路径打开它。对只认 COM 名的程序，
-rk3xuart 还为 UARTn 建立 `COMn`，并写入 `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`。详见驱动的
-[README](../drivers/serial/rk3xuart/README.zh-CN.md)。
+系统自带的 `serial.sys` 只支持寄存器间隔 1 字节的 16550，也不会清 DesignWare 的 busy detect 中断；RK3576 的 UART 是 32 位寄存器、间隔 4 字节。rk3xuart 是一个 SerCx2 驱动（PIO，不用 DMA）。它发布 `GUID_DEVINTERFACE_COMPORT` 接口（来自固件的 `"SerCx-FriendlyName"`），`Windows.Devices.SerialCommunication` 找的就是它；它还为 UARTn 建立 `COMn`，写入 `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`。详见驱动的 [README](../drivers/serial/rk3xuart/README.zh-CN.md)。
 
 ## 引脚表
 

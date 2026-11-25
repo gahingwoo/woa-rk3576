@@ -21,13 +21,9 @@ differing byte, and it says what the page holds instead:
 With `--dump DIR` each bad page is saved as a `.bin` file, so it can be
 searched for in Windows binaries later.
 
-## Why
-
-On 2026-11-23 a 1.3 GB file copied over scp to R: on the TaishanPi 3M eMMC
-had one 4 KiB page replaced by a page of
-`Windows.Security.Authentication.Web.Core.dll` (10.0.22621.2070, RVA
-0x12e000, file offset 0x12c600, byte identical). This tool makes that kind of
-event countable, so changes can be compared by rate instead of by anecdote.
+It exists because a 1.3 GB file copied to the TaishanPi 3M eMMC once had
+one 4 KiB page replaced by a page of a Windows DLL; the tool turns such
+events into a rate that can be compared between changes.
 
 ## Build
 

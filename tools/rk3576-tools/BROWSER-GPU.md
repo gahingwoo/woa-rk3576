@@ -4,17 +4,13 @@ English | [简体中文](BROWSER-GPU.zh-CN.md)
 
 At WDDM 2.x, Chromium's DirectComposition presents fail on maliwddm. The GPU
 process crashes three times and the browser falls back to software
-rendering. Started with `--disable-direct-composition`, Edge 158 and
-Chrome 158 (ARM64) render on the Mali-G52 through ANGLE D3D11 (feature level
-10_1) with no GPU process crash. This was measured on a TaishanPi 3M on
-2026-11-25.
+rendering. With `--disable-direct-composition`, Edge 158 and Chrome 158
+(ARM64) render on the Mali-G52 through ANGLE D3D11 (feature level 10_1)
+without a GPU process crash (board-tested, TaishanPi 3M).
 
-The browser process reads that switch as well as the GPU process: without
-it, Windows 11 22H2 and later give the browser window no redirection
-surface. So maliwddm cannot turn DirectComposition off by itself (the
-analysis is in wddm-mali-g52, `docs/EDGE-PRESENT.md`, "DirectComposition off
-without a flag"). Neither Edge nor Chrome has a policy for the switch or for
-extra command-line switches. So `setup\rk3576-browser-gpu.ps1` puts the
+The browser process reads that switch too, so maliwddm cannot turn
+DirectComposition off by itself (wddm-mali-g52 `docs/EDGE-PRESENT.md`), and
+neither browser has a policy for it. `setup\rk3576-browser-gpu.ps1` puts the
 switch on every launch path and keeps it there.
 
 ## What it changes
@@ -125,15 +121,11 @@ installs the bundle's own copy again.
 
 ## Testing
 
-CI (`browser-gpu` job in `.github/workflows/ci.yml`): the unit tests in
+CI (`browser-gpu` job in `.github/workflows/ci.yml`) runs
 [tests/browser-gpu.tests.ps1](tests/browser-gpu.tests.ps1) under Windows
-PowerShell 5.1 and PowerShell 7, against a made-up machine and user under
-`HKCU\Software\RK3576BgTest` and `.lnk` files in a temporary folder. Then,
-on the runner's own Edge and Chrome: Install (the gate says no, nothing
-changes), `Mode` 2, the task's own run (the switch on the Edge and Chrome
-open commands and Start menu shortcuts, policies, WebView2), a second run
-that changes nothing, Disable, Uninstall, and a check that everything is as
-it was before.
+PowerShell 5.1 and PowerShell 7 against a fake machine and user under
+`HKCU\Software\RK3576BgTest`, then installs, applies (`Mode` 2), disables and
+uninstalls on the runner's own Edge and Chrome and checks nothing is left.
 
 On the board (TaishanPi 3M, WDDM 2.0):
 
