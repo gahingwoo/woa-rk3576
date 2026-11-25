@@ -1,0 +1,87 @@
+;
+; aic8800usb.inf - AICSemi AIC8800D80 USB Wi-Fi (Radxa ROCK 4D, Dragon Q6A),
+; bring-up driver (docs/dev/aic8800.md): it downloads the firmware, scans
+; and joins one WPA2-PSK network named in the registry. No network
+; interface yet, so Windows shows no Wi-Fi; that is the next stage.
+;
+; Target: Windows 11 on ARM64, 22H2/23H2 and later (KMDF 1.33). It binds
+; both faces of the chip:
+;   USB\VID_A69C&PID_8D80        the ROM loader, before the firmware runs
+;   USB\VID_A69C&PID_8D81&MI_02  the WLAN interface of the running firmware
+; MI_00 and MI_01 of PID_8D81 are the Bluetooth HCI interface; the in-box
+; BthUsb takes them by class, nothing here binds them.
+;
+; The firmware files are not part of this package; see README.md and
+; install-firmware.ps1. Stage (below) is 0: nothing is sent to the chip
+; until it is raised.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = aic8800usb.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+aic8800usb.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%AIC.LoaderDesc%  = AIC_Inst,USB\VID_A69C&PID_8D80
+%AIC.RuntimeDesc% = AIC_Inst,USB\VID_A69C&PID_8D81&MI_02
+
+[AIC_Inst.NT]
+CopyFiles = AIC_CopyFiles
+
+[AIC_CopyFiles]
+aic8800usb.sys
+
+[AIC_Inst.NT.Services]
+AddService = aic8800usb,0x00000002,AIC_Service
+
+[AIC_Service]
+DisplayName   = %AIC.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\aic8800usb.sys
+AddReg        = AIC_Service.AddReg
+
+[AIC_Service.AddReg]
+; Settings for both device instances, under the service's Parameters key.
+; FLG_ADDREG_NOCLOBBER (0x2) keeps a value set on the board across driver
+; updates.
+; Stage: 0 open only, 1 also download the firmware (loader) / read the chip
+; ID (runtime), 2 also initialise and scan, 3 also join Ssid with
+; Passphrase (replaced by Pmk on first use) and keep the link.
+HKR,Parameters,"Stage",0x00010003,0
+HKR,Parameters,"FirmwareDir",0x00000002,"\SystemRoot\System32\drivers\aic8800"
+HKR,Parameters,"ScanTimeoutMs",0x00010003,8000
+HKR,Parameters,"ConnectTimeoutMs",0x00010003,15000
+
+[AIC_Inst.NT.Wdf]
+KmdfService = aic8800usb, AIC_wdfsect
+
+[AIC_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName     = "woa-rk3576"
+DiskName         = "AIC8800D80 Wi-Fi Installation Disk"
+AIC.LoaderDesc   = "AIC8800D80 USB Wi-Fi (firmware loader, bring-up)"
+AIC.RuntimeDesc  = "AIC8800D80 USB Wi-Fi (bring-up)"
+AIC.SvcDesc      = "AIC8800D80 USB Wi-Fi bring-up driver"

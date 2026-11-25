@@ -8,7 +8,8 @@
 # .vcxproj must have source (C, C++ or assembly; a header-only static library
 # counts); each one that is not a static library must also ship an INF or INX.
 # A driver binds a hardware ID: ACPI\<HID> for devices the firmware publishes,
-# or a bus-enumerated ID such as CSAUDIO\... for a child of another driver.
+# or a bus-enumerated ID such as CSAUDIO\... for a child of another driver,
+# USB\VID_... for a USB device or SD\VID_... for an SDIO card.
 #
 set -uo pipefail
 
@@ -57,7 +58,7 @@ while IFS= read -r inf; do
         echo "::error file=$inf::INF does not target NTARM64"
         fail=1
     fi
-    if ! grep -qE '(ACPI|CSAUDIO)\\[A-Za-z0-9&_]+' <<<"$text"; then
+    if ! grep -qE '(ACPI|CSAUDIO|USB|SD)\\[A-Za-z0-9&_]+' <<<"$text"; then
         echo "::error file=$inf::INF has no ACPI\\<HID> or bus hardware id"
         fail=1
     fi

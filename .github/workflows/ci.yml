@@ -68,6 +68,128 @@ jobs:
           # a truncated file must be refused
           head -c 1000 ampak.hcd > trunc.hcd
           if ./hcdcheck trunc.hcd; then exit 1; fi
+  aictest:
+    name: aic8800usb core against a simulated chip (Linux, gcc)
+    # The AIC8800D80 driver's protocol, firmware loader, scan, join, WPA2
+    # supplicant and data path are plain C (drivers/net/aic8800usb/aic_*.c).
+    # tools/aictest runs them against a simulated chip and access point:
+    # crypto test vectors, then the download, init, scan, the 4-way
+    # handshake, key install and data frames. Then the download again with
+    # the real firmware files install-firmware.ps1 fetches, at the same
+    # pinned commit and hashes, and a compile-time check of every message
+    # ID and parameter offset against AICSemi's own headers from that commit.
+    # The files are only downloaded into the runner, never stored or uploaded.
+    runs-on: ubuntu-latest
+    env:
+      AIC_REF: 5562c254b0231be34588dc608ec28c4f1d613285
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and check
+        run: |
+          set -eux
+          B=drivers/net/aic8800usb
+          SRC="$B/aic_core.c $B/aic_fw.c $B/aic_wlan.c $B/aic_data.c $B/aic_wpa.c $B/aic_crypto.c"
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -o aictest tools/aictest/main.c tools/aictest/fakechip.c $SRC
+          gcc -std=c99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror \
+              -o aictest-asan tools/aictest/main.c tools/aictest/fakechip.c $SRC
+          # the core must build with no libc at all, as it does in the driver
+          for f in $SRC; do
+            gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror \
+                -c "$f" -o /dev/null
+          done
+          ./aictest
+          ./aictest-asan
+          R=https://raw.githubusercontent.com/radxa-pkg/aic8800/$AIC_REF/src/USB/driver_fw
+          fetch() {
+            curl -fsSL -o "$1" "$2"
+            echo "$3  $1" | sha256sum -c -
+          }
+          mkdir -p fw vendor
+          fetch fw/fw_patch_table_8800d80_u02.bin $R/fw/aic8800D80/fw_patch_table_8800d80_u02.bin \
+            9decb77435b7e9713e33e32da483d683b7329ed93b672b2d1b134031d7da5f67
+          fetch fw/fw_adid_8800d80_u02.bin $R/fw/aic8800D80/fw_adid_8800d80_u02.bin \
+            a526cbd02fcdc495f049f3ad6b5933cb08cd984b16790c716a060d582fee1a56
+          fetch fw/fw_patch_8800d80_u02.bin $R/fw/aic8800D80/fw_patch_8800d80_u02.bin \
+            f0e2f5bbc17bc327ca7f1574ff55370dfd863d931514347bb4abc18a74f6218f
+          fetch fw/fw_patch_8800d80_u02_ext0.bin $R/fw/aic8800D80/fw_patch_8800d80_u02_ext0.bin \
+            ca738f5ea5aca6021c4f48b60ff35e835dfdaf072a8490e3ba8ba0a42440e3e5
+          fetch fw/fmacfw_8800d80_u02.bin $R/fw/aic8800D80/fmacfw_8800d80_u02.bin \
+            23f2bed2ac0e8f7bda8f36df7defd30d9b928c97867f6f0f01f28d89dd78d670
+          ./aictest-asan files fw --fw-version 06090101
+          # the hashes in install-firmware.ps1 must be the ones checked here
+          for h in 9decb77435b7e9713e33e32da483d683b7329ed93b672b2d1b134031d7da5f67 \
+                   a526cbd02fcdc495f049f3ad6b5933cb08cd984b16790c716a060d582fee1a56 \
+                   f0e2f5bbc17bc327ca7f1574ff55370dfd863d931514347bb4abc18a74f6218f \
+                   ca738f5ea5aca6021c4f48b60ff35e835dfdaf072a8490e3ba8ba0a42440e3e5 \
+                   23f2bed2ac0e8f7bda8f36df7defd30d9b928c97867f6f0f01f28d89dd78d670 \
+                   c5c8c774dfae93aed71f8da7489e35159192135e4929591ea8a945b76deba6bd; do
+            grep -qi "$h" $B/install-firmware.ps1
+          done
+          # aic_proto.h against the vendor's lmac_msg.h / ipc_shared.h
+          for h in lmac_msg.h lmac_mac.h lmac_types.h ipc_shared.h ipc_compat.h; do
+            curl -fsSL -o vendor/$h $R/drivers/aic8800/aic8800_fdrv/$h
+          done
+          gcc -std=c11 -w -I tools/aictest/layout-stubs -I vendor -DCONFIG_RWNX_FULLMAC -DAICWF_USB_SUPPORT \
+              -DUSE_5G -DNX_TXQ_CNT=5 -DCONFIG_USER_MAX=1 -DNX_REMOTE_STA_MAX=10 \
+              -o layoutcheck tools/aictest/layoutcheck.c
+          ./layoutcheck
+
+  aic8800-package:
+    name: AIC8800D80 Wi-Fi bring-up package, test-signed (aic8800usb)
+    # For a ROCK 4D board session: aic8800usb test-signed with a certificate
+    # made for this run, with signer.cer, install-firmware.ps1, the
+    # bring-up helper and the README, for pnputil on an installed Windows
+    # (docs/dev/aic8800.md). Not put on the WinPE media.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build, catalog and sign
+        shell: pwsh
+        run: |
+          msbuild drivers\net\aic8800usb\aic8800usb.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /p:SignMode=Off /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'msbuild failed for aic8800usb' }
+          $pkg = 'C:\aic-pkg'
+          $d = "$pkg\aic8800usb"
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          Get-ChildItem drivers\net\aic8800usb\ARM64\Release -Recurse -Include *.sys,*.inf |
+            Copy-Item -Destination $d -Force
+          $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
+          $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
+          $pw = 'rk3576-test'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=woa-rk3576 test signing' `
+                    -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(5)
+          $pfx = 'C:\aic-test.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $pw -Force -AsPlainText) | Out-Null
+          Export-Certificate -Cert $cert -FilePath "$pkg\signer.cer" | Out-Null
+          & $i2c /driver:"$d" /os:10_RS3_ARM64 /verbose
+          if ($LASTEXITCODE) { throw "inf2cat failed: $LASTEXITCODE" }
+          $files = Get-ChildItem $d -Include *.cat,*.sys -Recurse | Select-Object -ExpandProperty FullName
+          & $st sign /fd sha256 /f $pfx /p $pw $files
+          if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
+          foreach ($sig in Get-AuthenticodeSignature $files) {
+            Write-Host ("   {0,-14} {1}" -f $sig.Status, (Split-Path $sig.Path -Leaf))
+            if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
+          }
+          foreach ($f in 'aic8800usb.inf', 'aic8800usb.sys', 'aic8800usb.cat') {
+            if (-not (Test-Path (Join-Path $d $f))) { throw "package: $f missing" }
+          }
+          Copy-Item drivers\net\aic8800usb\install-firmware.ps1, drivers\net\aic8800usb\aic-bringup.ps1, `
+                    drivers\net\aic8800usb\README.md $pkg -Force
+          "woa-rk3576 $env:GITHUB_SHA, run ${{ github.run_number }}" | Set-Content "$pkg\VERSION.txt" -Encoding ascii
+          Get-ChildItem $pkg -Recurse -File | Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aic8800-bringup-signed-arm64
+          path: C:\aic-pkg\
+          retention-days: 30
+          if-no-files-found: error
+
   harness:
     name: vdpu383 builder and parser (Linux, gcc)
     # The register builder (drivers/video/vdpu383/lib) and the test tool's
@@ -614,6 +736,7 @@ jobs:
           - { name: bluetooth, proj: drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj }
           - { name: vdpu383, proj: drivers/video/vdpu383/vdpu383.vcxproj }
           - { name: vdpu383test, proj: tools/vdpu383test/vdpu383test.vcxproj }
+          - { name: wifi-aic8800, proj: drivers/net/aic8800usb/aic8800usb.vcxproj }
 
           - { name: pageverify, proj: tools/pageverify/pageverify.vcxproj }
     steps:
