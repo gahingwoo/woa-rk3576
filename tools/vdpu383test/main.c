@@ -204,7 +204,7 @@ static int cmd_info(void)
     print_status_bits(in.warmup.status & 0xFFFF);
     printf(") polls %u buffer 0x%08x\n", in.warmup.polls, in.warmup.buffer_dma);
     if (!in.warmup.ran)
-        printf("warm-up at D0 entry: not run (Device Parameters WarmupAtD0 is not 1); "
+        printf("warm-up at D0 entry: not run (Device Parameters WarmupAtD0 is 0, or an older driver); "
                "`vdpu383test warmup` runs it now\n");
     if (in.warmup.ran) {
         int ok = !in.warmup.timed_out && (in.warmup.status & V383_STA_FRAME_RDY) &&
@@ -310,9 +310,9 @@ static int cmd_warmup_direct(void)
     in->regs[149] = 0x00000200;
     in->regs[168] = b.dma + 1344;
     in->regs[216] = b.dma + 2880;
-    for (i = 8; i <= 30; i++) in->write_mask[i / 32] |= 1u << (i % 32);
-    for (i = 64; i <= 106; i++) in->write_mask[i / 32] |= 1u << (i % 32);
-    for (i = 128; i <= 232; i++) in->write_mask[i / 32] |= 1u << (i % 32);
+    for (i = 8; i <= 31; i++) in->write_mask[i / 32] |= 1u << (i % 32);
+    for (i = 64; i <= 107; i++) in->write_mask[i / 32] |= 1u << (i % 32);
+    for (i = 128; i <= 235; i++) in->write_mask[i / 32] |= 1u << (i % 32);
     in->link_ip_timeout = 0x7ffff;
     in->link_ip_enable = 0;
     in->timeout_ms = 200;

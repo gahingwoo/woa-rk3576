@@ -33,7 +33,7 @@ Edge 将来要用的解码器计划放在显示驱动里（[wddm-mali-g52](https
 | 启动：link 0x54 = 超时值，0x58 = 0，0x40 = 1；中断：读 0x48/0x4C，向 0x4C 写 0x03FF0000，向 0x48 写 0x00030000 | 主线 rkvdec-vdpu383-h264.c、rkvdec.c | 从源码读出 |
 | +0x600 处的参考帧读缓存：进入 D0 时和每次 IP 复位后设 CACHE0_CFG = 0x13、MAX_READS = 0x1C；每次解码前 CLR_CACHE0 = 1 | 主线 "configure the reference read cache"（v3，已合并） | 已移植；主线实测一个 2688x1520 码流，用上电默认值时每帧 22.5 或 65.4 ms，用这些值时 3.6 ms。复位后重新设置是我们加的：主线没有确定复位会不会清掉它们 |
 | 超时的解码一定会做 IP 复位（link 0x48 关中断，0x44 = 1，等待状态位 11，清状态），然后排空排队中的 DPC | 主线 "Stop the VDPU383 core on timeout"（已发出，那边只做过编译测试）和 "Handle interrupts without a current context" | 已移植；出错状态仍然只在 `VDPU383_RUN_RESET_ON_ERROR` 下才复位 |
-| 预热解码 | 厂商内核 mpp_hack_rk3576.c（GPL-2.0+ OR MIT） | 原样移植；主线不做这一步，所以可能不需要。只有 Device Parameters 里 `WarmupAtD0` = 1（默认 0）时才在进入 D0 时运行；`vdpu383test warmup` 可按需运行 |
+| 预热解码 | 厂商内核 mpp_hack_rk3576.c（GPL-2.0+ OR MIT） | 原样移植；主线不做这一步。实际需要：没有它，上电后每次 H.264 解码都是错的，直到运行过一次预热（板上，2026-11-25）。每次进入 D0 时和每次 IP 复位后运行，除非 Device Parameters 里 `WarmupAtD0` = 0；`vdpu383test warmup` 可按需运行 |
 | 寄存器值、SPS/PPS/RPS 位布局、RCB 大小、CABAC 表 | MPP hal_h264d_vdpu383.c 等文件 | 已移植；RCB 计算从浮点改成整数（值相同，在 `selftest` 里检查） |
 | SPS/PPS 记录同时写在偏移 0（MPP）和 pps_id * 176（主线） | 两者说法不一致 | 不管硬件读哪个都能覆盖到 |
 | 由 DXVA_PicParams_H264 得到的默认参考列表 P/B0/B1 | H.264 8.2.4.2，按主线交给硬件的方式 | 新写的 |
@@ -65,7 +65,7 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters"
 
 | 设置 | 默认值 | 含义 |
 |---|---|---|
-| `WarmupAtD0` | 0 | 1：每次进入 D0 时运行厂商内核的预热解码，和厂商内核在 probe 和 resume 时的做法一样 |
+| `WarmupAtD0` | 1 | 1：每次进入 D0 时运行厂商内核的预热解码（和厂商内核在 probe 和 resume 时的做法一样），每次 IP 复位后也运行。0：驱动自己从不运行（上电后 H.264 解码会出错，直到运行过 `vdpu383test warmup`） |
 
 ## 测试计划
 
@@ -117,7 +117,7 @@ vdpu383test info
 
 - `version register` 不为零，和固件 `version=` 那一行一致
 - 两个 IOMMU 实例都是 `paging off`
-- `warm-up at D0 entry: not run`（默认值，`WarmupAtD0` 为 0）
+- `warm-up at D0 entry: ran 1`，`warm-up verdict: PASS`（默认值，`WarmupAtD0` 为 1；`WarmupAtD0` 为 0 或 2026-11-26 之前的驱动显示 `not run`）
 
 然后运行 `vdpu383test warmup`（通过 link 寄存器，中断开启）：`irq 0x0000000?`，状态位 0（`frame_rdy`）置位，位 1-9 清零，
 `verdict: PASS`。位 10-15 可能置位，它们不是错误。再运行 `vdpu383test warmup-direct`（同样的 32x32 图像，走普通的启动路径）。

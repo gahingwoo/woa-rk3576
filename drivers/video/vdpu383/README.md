@@ -53,7 +53,7 @@ SSDT with the device.
 | Start: link 0x54 = timeout, 0x58 = 0, 0x40 = 1; interrupt: read 0x48/0x4C, write 0x03FF0000 to 0x4C and 0x00030000 to 0x48 | mainline rkvdec-vdpu383-h264.c, rkvdec.c | read from source |
 | Reference read cache at +0x600: CACHE0_CFG = 0x13, MAX_READS = 0x1C at D0 entry and after every IP reset; CLR_CACHE0 = 1 before every decode | mainline "configure the reference read cache" (v3, merged) | ported; mainline measured a 2688x1520 stream at 22.5 or 65.4 ms per frame with the power-on values and 3.6 ms with these. Reprogramming after a reset is ours: mainline left open whether the reset clears them |
 | A timed-out decode always gets an IP reset (link 0x48 irq off, 0x44 = 1, wait for status bit 11, clear status), then queued DPCs are drained | mainline "Stop the VDPU383 core on timeout" (posted, compile-tested there) and "Handle interrupts without a current context" | ported; an error status still resets only with `VDPU383_RUN_RESET_ON_ERROR` |
-| Warm-up decode | vendor kernel mpp_hack_rk3576.c (GPL-2.0+ OR MIT) | ported unchanged; mainline does not do it, so it may be unnecessary. At D0 entry only with Device Parameters `WarmupAtD0` = 1 (default 0); `vdpu383test warmup` runs it on demand |
+| Warm-up decode | vendor kernel mpp_hack_rk3576.c (GPL-2.0+ OR MIT) | ported unchanged; mainline does not do it. Needed: without it every H.264 decode after a power-on is wrong until one warm-up has run (board, 2026-11-25). At every D0 entry and after every IP reset unless Device Parameters `WarmupAtD0` = 0; `vdpu383test warmup` runs it on demand |
 | Register values, SPS/PPS/RPS bit layouts, RCB sizes, CABAC table | MPP hal_h264d_vdpu383.c and friends | ported; RCB arithmetic changed from float to integer (same values, checked in `selftest`) |
 | SPS/PPS record written both at offset 0 (MPP) and at pps_id * 176 (mainline) | the two disagree | whichever the hardware reads is covered |
 | Default reference lists P/B0/B1 from DXVA_PicParams_H264 | H.264 8.2.4.2, as mainline hands them to the hardware | written fresh |
@@ -89,7 +89,7 @@ Settings, DWORDs in the same key, read at each start of the device:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `WarmupAtD0` | 0 | 1: run the vendor kernel's warm-up decode at every D0 entry, as the vendor kernel does at probe and resume |
+| `WarmupAtD0` | 1 | 1: run the vendor kernel's warm-up decode at every D0 entry, as the vendor kernel does at probe and resume, and after every IP reset. 0: never by itself (H.264 then decodes wrong after a power-on until `vdpu383test warmup` has run) |
 | `Iommu` | 1 | 1: buffers are any pages, mapped through the decoder's IOMMU, and `dma` is an IO address. 0: the old path, physically contiguous buffers below 4 GiB, paging off. Takes effect at the next start of the device (disable/enable or reboot) |
 | `UserAccess` | 0 | 0: SYSTEM and administrators only, one handle at a time (vdpu383test). 1: every user may open `\\.\VDPU383`, many handles at once, so that a video player's process reaches it through the display driver's user-mode part (wddm-mali-g52 `video-decode`, D3D11 video decode milestone V3a); 2: low-integrity processes too (a browser's GPU process). With 1 or 2 `VDPU383_RUN_NO_ADDR_CHECK` is ignored, and each handle may hold at most 384 MiB of decoder buffers. Read when the device starts: set it, then restart the device or the board |
 
@@ -163,7 +163,7 @@ Expected (from the vendor code, not measured):
 
 - `version register` non-zero, the same as the firmware's `version=` line
 - both IOMMU instances `paging ON` with the same `dte` (`paging off` with Device Parameters `Iommu` 0, and with drivers before branch `vdpu383-iommu`)
-- `warm-up at D0 entry: not run` (the default, `WarmupAtD0` 0)
+- `warm-up at D0 entry: ran 1`, `warm-up verdict: PASS` (the default, `WarmupAtD0` 1; `not run` with `WarmupAtD0` 0 and with drivers before 2026-11-26)
 
 Then `vdpu383test warmup` (through the link registers, with interrupts
 live): `irq 0x0000000?`, status bit 0 (`frame_rdy`) set and bits 1-9
@@ -241,6 +241,18 @@ Send back on failure, for the first stream that fails:
 3. the Linux capture of the same stream (below) and `compare-regs.py`
    output for the first picture that differs
 4. `vdpu383test info` after the failure
+
+Board, 2026-11-25 (driver 3.37.25.177, `WarmupAtD0` 0): after a reboot
+all six streams were wrong, both ways (BA1_Sony_D: luma exact, about 860
+bytes of each chroma plane per frame; luma too with `Iommu` 0), the same
+within one boot and different from boot to boot; HEVC decodes first did
+not change it, one `vdpu383test warmup` did, for good. The warm-up shares
+no buffer with a decode, so the state it sets up is inside the decoder.
+Since then the driver runs the warm-up at every D0 entry and after every
+IP reset (`WarmupAtD0` 1, the default), as the vendor kernel does at
+probe and resume, and the builders write registers 31, 107 and 233-235
+(left alone by MPP, zero after the vendor's warm-up) as 0. Which of the
+two is the cure is not known yet: a boot with `WarmupAtD0` 0 tells.
 
 ### 5. HEVC Main conformance
 

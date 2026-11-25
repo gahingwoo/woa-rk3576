@@ -694,9 +694,9 @@ int v383_vp9_build(const V383_Vp9Input *in, V383_RegFile *rf)
     reg_set(rf, 216, in->colmv_dma[colmv_cur]);
     reg_set(rf, 217, in->colmv_dma[s->frames ? s->colmv_last : colmv_cur]);
 
-    mask_range(rf, 8, 30);
-    mask_range(rf, 64, 106);
-    mask_range(rf, 128, 232);
+    mask_range(rf, 8, 31);             /* the link mode's blocks, as vdpu383_h264.c */
+    mask_range(rf, 64, 107);
+    mask_range(rf, 128, 235);
 
     /* ---- what the next frame needs to know of this one (MPP ls_info) */
     if ((V383_VP9_SEG_ENABLED(pp) && V383_VP9_SEG_UPDATE_MAP(pp)) ||

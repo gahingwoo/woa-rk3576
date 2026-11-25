@@ -145,5 +145,5 @@ Movies & TV 播放本地 1080p H.264 文件时 CPU 空闲。
   `Device Parameters` 键里。
 - **删除驱动：** 运行 `pnputil /enum-drivers`，找到 `vdpu383.inf` 对应的 `oemNN.inf`，然后在选项关闭的状态下运行
   `pnputil /delete-driver oemNN.inf`（没有绑定的设备，所以不会从正在运行的驱动底下把它卸掉）。
-- **怀疑是预热（warm-up）的问题：** 它在 D0 时默认关闭（`WarmupAtD0` 0）。只有 `vdpu383test warmup` 会运行它。
+- **怀疑是预热（warm-up）的问题：** 它在每次进入 D0 时和每次 IP 复位后运行（`WarmupAtD0` 1；2026-11-25 发现 H.264 需要它之后改为默认值）；`WarmupAtD0` 0 关闭它。`vdpu383test warmup` 可按需运行。
 - **固件：** 刷回之前的映像；没有这个选项的固件会忽略该选项的变量（`AcpiVdec`）。

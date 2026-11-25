@@ -216,7 +216,9 @@ frames; Movies & TV plays a local 1080p H.264 file with the CPU idle.
 - **Remove the driver:** `pnputil /enum-drivers`, find `vdpu383.inf`'s
   `oemNN.inf`, then `pnputil /delete-driver oemNN.inf` with the option off
   (no device bound, so nothing is uninstalled from under a running driver).
-- **Warm-up suspected:** it is off at D0 by default (`WarmupAtD0` 0). Only
-  `vdpu383test warmup` runs it.
+- **Warm-up suspected:** it runs at every D0 entry and after every IP reset
+  (`WarmupAtD0` 1, the default since H.264 was found to need it,
+  2026-11-25); `WarmupAtD0` 0 turns it off. `vdpu383test warmup` runs it
+  on demand.
 - **Firmware:** flash the previous image back; the option's variable
   (`AcpiVdec`) is ignored by firmware without the option.
