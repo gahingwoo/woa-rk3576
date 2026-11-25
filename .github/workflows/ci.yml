@@ -807,6 +807,11 @@ jobs:
           - { name: vdpu383test, proj: tools/vdpu383test/vdpu383test.vcxproj }
           - { name: saradc, proj: drivers/adc/rk3xsaradc/rk3xsaradc.vcxproj }
           - { name: adctest, proj: tools/adctest/adctest.vcxproj }
+          - { name: pwrkey, proj: drivers/input/rk806pwrkey/rk806pwrkey.vcxproj }
+          - { name: leds, proj: drivers/leds/rkled/rkled.vcxproj }
+          - { name: eeprom, proj: drivers/misc/rkeeprom/rkeeprom.vcxproj }
+          - { name: eepromtool, proj: tools/eeprom/eeprom.vcxproj }
+          - { name: wdthang, proj: tools/wdthang/wdthang.vcxproj }
 
           - { name: pageverify, proj: tools/pageverify/pageverify.vcxproj }
     steps:

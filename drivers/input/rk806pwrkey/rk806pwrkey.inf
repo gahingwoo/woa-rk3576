@@ -1,0 +1,75 @@
+;
+; rk806pwrkey.inf - the RK806 PMIC's power key as the Windows power button
+;
+; Target: Windows on ARM64. Binds ACPI\RKCP806B, \_SB.I2C1.PWRK, which
+; edk2-rk3576 publishes only with the setup option "Power button (RK806)" on
+; (PwrKey.asl). The driver reads and clears the PMIC's interrupt status over
+; I2C (rk3xi2c) on each interrupt (GPIO0_A6 through rk3xgpio) and reports a
+; press as HID System Control "System Power Down"; vhf.sys, the in-box
+; Virtual HID Framework, is its lower filter.
+;
+; A firmware without \_SB.I2C1.PWRK publishes nothing for this INF to bind,
+; so installing it there changes nothing.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = HIDClass
+ClassGuid   = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = rk806pwrkey.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+rk806pwrkey.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%PWRK.DeviceDesc% = PWRK_Inst,ACPI\RKCP806B
+
+[PWRK_Inst.NT]
+CopyFiles = PWRK_CopyFiles
+
+[PWRK_CopyFiles]
+rk806pwrkey.sys
+
+[PWRK_Inst.NT.HW]
+AddReg = PWRK_Inst.NT.HW.AddReg
+
+[PWRK_Inst.NT.HW.AddReg]
+; vhf.sys under this driver, as the VHF documentation requires.
+HKR,,"LowerFilters",0x00010000,"vhf"
+
+[PWRK_Inst.NT.Services]
+AddService = rk806pwrkey,0x00000002,PWRK_Service
+
+[PWRK_Service]
+DisplayName   = %PWRK.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\rk806pwrkey.sys
+
+[PWRK_Inst.NT.Wdf]
+KmdfService = rk806pwrkey, PWRK_wdfsect
+
+[PWRK_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName       = "woa-rk3576"
+DiskName           = "RK806 Power Key Installation Disk"
+PWRK.DeviceDesc    = "Rockchip RK806 power key"
+PWRK.SvcDesc       = "Rockchip RK806 Power Key Driver"

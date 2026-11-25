@@ -57,6 +57,10 @@ edk2-rk3576 newer than 0.4.1 (its `ci` build until the next release).
 | NPU | not available | works with [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) | rknpu |
 | Video decoder (VDPU383) | not tried | hardware decoder works with vdpu383test (H.264 conformance streams match FFmpeg, 2026-11-24); players not yet ([video decode](docs/dev/video-decode.md)) | vdpu383 |
 | ADC keys, jack on the ADC | driver written, not tried | driver written, not tried | rk3xsaradc |
+| Power button (RK806) | driver written, firmware on its board branch; not tried | driver written, not tried (setup option, off by default) | [rk806pwrkey](drivers/input/rk806pwrkey) |
+| Board LEDs (heartbeat, disk activity) | driver written, firmware on its board branch; not tried | driver written, not tried (setup option, off by default) | [rkled](drivers/leds/rkled) |
+| Hardware watchdog | firmware WDAT for the inbox driver; not tried | the same | inbox; test with [wdthang](tools/wdthang) |
+| ROCK 4D EEPROM | | | [rkeeprom](drivers/misc/rkeeprom), [eeprom](tools/eeprom); ROCK 4D firmware branch, not tried |
 | RTC, PMIC, pin controller, UART2 | no driver needed | no driver needed; named, no yellow mark (2026-11-24 on the TaishanPi 3M; UART2 no longer declared there) | [null](drivers/null) |
 
 Each result is from one board. Most of the CM5-IO column was seen on
