@@ -11,7 +11,7 @@
   "gpu": { "clockMHz": 594, "wddmVersion": 20, "tempMaxC": 90, "note": "775 mV raise not ported: 594 MHz" },
   "display": { "refreshHz": 60 },
   "audio": { "hdmi": true, "analog": true },
-  "network": { "ethernet": true, "wifi": false, "bluetooth": false },
+  "network": { "ethernet": true, "wifi": false, "bluetooth": true, "bluetoothDevice": "USB\\VID_A69C&PID_8D81&MI_00", "note": "branch aic8800-usb: Bluetooth is the in-box BthUsb on the module HCI interface after aic8800usb loads the firmware; wifi stays false until WiFiCx" },
   "usb": { "controllers": 2, "hub": false },
   "storage": { "emmc": false, "sd": "optional", "nvme": "optional" },
   "npu": true,

@@ -88,7 +88,7 @@ enabled) or `false` (N-A). Edit the manifest when a board changes.
 | `display.tdr` | no Display event 4101 (driver reset) in the System log since the run started; evaluated last | |
 | `audio.hdmi`, `audio.analog` | an audio endpoint named HDMI / Headphone with status OK. The HDMI endpoint needs a monitor with speakers | csaudiork3x endpoint names |
 | `net.ethernet`, `net.gateway` | the adapter on `ACPI\RKCP6543` is Up with an IPv4 address; the default gateway answers a ping | |
-| `net.wifi`, `net.bluetooth` | TaishanPi 3M only: an 802.11 adapter (optional: its driver is on a branch); `RKCP4345` OK and a Bluetooth device OK | |
+| `net.wifi`, `net.bluetooth` | an 802.11 adapter (TaishanPi 3M only, optional: its driver is on a branch); the radio's device OK and a Bluetooth device OK. The radio's device is `ACPI\RKCP4345` unless the manifest names another in `network.bluetoothDevice` (ROCK 4D: `USB\VID_A69C&PID_8D81&MI_00`, the AIC8800D80 HCI interface under in-box BthUsb) | |
 | `usb.controllers`, `usb.devices` | at least two `ACPI\PNP0D10` xHCI controllers OK; the USB devices are listed, and on the CM5-IO the onboard hub must be there | |
 | `storage.emmc`, `storage.sd`, `storage.nvme` | a disk behind `ACPI\RKCP0D40` (eMMC), `ACPI\RKCPFE2C` (SD), on PCIe (NVMe); Healthy | |
 | `storage.rw` | 64 MiB (16 with `-Quick`) written to the system disk with write-through, read back, SHA-256 compared, deleted | Maskrom Studio's self-test |
@@ -111,7 +111,7 @@ those checks are a SKIP.
 | Device Manager whitelist | EC20 interface 4 (`USB\VID_2C7C&PID_0125&MI_04`) | none | AIC8800D80 USB Wi-Fi (`USB\VID_A69C`) |
 | GPU clock | 702 MHz | 594 MHz | 594 MHz |
 | Analog audio | required | optional (ES8388 on branch `cm5io-parity`) | required |
-| Wi-Fi / Bluetooth | optional / required | N-A | N-A (USB module, no driver on 23H2) |
+| Wi-Fi / Bluetooth | optional / required | N-A | N-A / required (AIC8800D80 HCI, needs aic8800usb to load the firmware first) |
 | USB hub | | required | |
 | eMMC / SD / NVMe | required / optional / optional | required / optional / required | N-A / optional / optional |
 | NPU | when enabled in setup | optional (setup option only on `cm5io-parity`) | when enabled in setup |

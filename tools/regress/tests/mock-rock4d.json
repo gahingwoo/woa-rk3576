@@ -97,12 +97,13 @@
    "ms": 0.6
   },
   "bluetooth": {
-   "present": false,
-   "instanceId": "ACPI\\RKCP4345\\0",
+   "present": true,
+   "instanceId": "USB\\VID_A69C&PID_8D81&MI_00\\7&1A2B3C4D&0&0000",
+   "name": "Generic Bluetooth Adapter",
    "status": "OK",
    "problem": 0,
-   "service": "bcm4345bt",
-   "radios": 0
+   "service": "BTHUSB",
+   "radios": 2
   },
   "usb": {
    "controllers": 2,
@@ -201,6 +202,7 @@
   "storage.sd": "PASS",
   "storage.nvme": "SKIP",
   "net.wifi": "N-A",
+  "net.bluetooth": "PASS",
   "vdec.warmup": "PASS",
   "vdec.streams": "SKIP",
   "stress.furmark": "SKIP"

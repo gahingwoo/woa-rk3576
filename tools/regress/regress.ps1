@@ -276,8 +276,15 @@ function Pnp-Service {
 # One ACPI device by _HID: present, status, problem code, service.
 function Acpi-Device {
     param([string]$Hid)
+    return Pnp-DeviceById "ACPI\$Hid"
+}
+
+# The first present device whose instance ID starts with $Id and a backslash:
+# 'ACPI\RKCP4345' or 'USB\VID_A69C&PID_8D81&MI_00'
+function Pnp-DeviceById {
+    param([string]$Id)
     if (-not $script:PnpCache) { $script:PnpCache = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue) }
-    $d = $script:PnpCache | Where-Object { $_.InstanceId -like "ACPI\$Hid\*" } | Select-Object -First 1
+    $d = $script:PnpCache | Where-Object { $_.InstanceId -like "$Id\*" } | Select-Object -First 1
     if (-not $d) { return [pscustomobject]@{ present = $false } }
     return [pscustomobject]@{
         present    = $true
@@ -738,17 +745,22 @@ $cb = Cap $M.network.bluetooth 'bluetooth'
 if ($cb -eq 'no') {
     Add-Result 'net.bluetooth' 'Bluetooth radio' 'N-A' '' '' 'no Windows Bluetooth driver for this board'
 } else {
+    # the radio's own device: the SDIO/UART BCM4345 is an ACPI device; a USB
+    # module names its HCI interface in the manifest (network.bluetoothDevice)
+    $btId = 'ACPI\RKCP4345'
+    if ($M.network.PSObject.Properties.Name -contains 'bluetoothDevice') { $btId = [string]$M.network.bluetoothDevice }
+    $btName = ($btId -split '\\')[-1]
     $bt = Fact 'bluetooth' {
-        $a = Acpi-Device 'RKCP4345'
+        $a = Pnp-DeviceById $btId
         $radios = @(Get-PnpDevice -PresentOnly -Class Bluetooth -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' })
         $a | Add-Member -NotePropertyName radios -NotePropertyValue $radios.Count -PassThru
     }
     if ($bt -and $bt.present -and $bt.status -eq 'OK' -and $bt.radios -gt 0) {
-        Add-Result 'net.bluetooth' 'Bluetooth radio' 'PASS' "$($bt.service), $($bt.radios) Bluetooth device(s) OK" 'RKCP4345 OK, a radio'
+        Add-Result 'net.bluetooth' 'Bluetooth radio' 'PASS' "$($bt.service), $($bt.radios) Bluetooth device(s) OK" "$btName OK, a radio"
     } else {
         $v = ''; if ($bt) { $v = "present $($bt.present), status $($bt.status), radios $($bt.radios)" }
         $st = 'FAIL'; if ($cb -eq 'optional') { $st = 'SKIP' }
-        Add-Result 'net.bluetooth' 'Bluetooth radio' $st $v 'RKCP4345 OK, a radio' ''
+        Add-Result 'net.bluetooth' 'Bluetooth radio' $st $v "$btName OK, a radio" ''
     }
 }
 

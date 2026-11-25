@@ -74,7 +74,7 @@ FAIL）、`"optional"`（缺失为 SKIP，用于不一定装配或不一定开�
 | `display.tdr` | 运行开始后系统日志中没有 Display 事件 4101（驱动重置）；最后评估 | |
 | `audio.hdmi`、`audio.analog` | 有名称含 HDMI / Headphone 且状态 OK 的音频端点。HDMI 端点需要接带扬声器的显示器 | csaudiork3x 的端点名称 |
 | `net.ethernet`、`net.gateway` | `ACPI\RKCP6543` 上的网卡为 Up 且有 IPv4 地址；默认网关能 ping 通 | |
-| `net.wifi`、`net.bluetooth` | 仅泰山派 3M：一个 802.11 网卡（可选：驱动还在分支上）；`RKCP4345` 正常且有一个蓝牙设备正常 | |
+| `net.wifi`、`net.bluetooth` | 一个 802.11 网卡（仅泰山派 3M，可选：驱动还在分支上）；蓝牙芯片本身的设备正常且有一个蓝牙设备正常。芯片设备默认是 `ACPI\RKCP4345`，清单里 `network.bluetoothDevice` 可以指定别的（ROCK 4D：`USB\VID_A69C&PID_8D81&MI_00`，AIC8800D80 的 HCI 接口，由系统自带的 BthUsb 驱动） | |
 | `usb.controllers`、`usb.devices` | 至少两个 `ACPI\PNP0D10` xHCI 控制器正常；列出 USB 设备，CM5-IO 上必须有板载 Hub | |
 | `storage.emmc`、`storage.sd`、`storage.nvme` | `ACPI\RKCP0D40`（eMMC）、`ACPI\RKCPFE2C`（SD）下的磁盘，PCIe 上的磁盘（NVMe）；状态 Healthy | |
 | `storage.rw` | 以直写方式向系统盘写入 64 MiB（`-Quick` 时 16 MiB），读回，比较 SHA-256，删除 | Maskrom Studio 的自检 |
@@ -94,7 +94,7 @@ FAIL）、`"optional"`（缺失为 SKIP，用于不一定装配或不一定开�
 | 设备管理器白名单 | EC20 的接口 4（`USB\VID_2C7C&PID_0125&MI_04`） | 无 | AIC8800D80 USB Wi-Fi（`USB\VID_A69C`） |
 | GPU 频率 | 702 MHz | 594 MHz | 594 MHz |
 | 模拟音频 | 必需 | 可选（ES8388 在分支 `cm5io-parity` 上） | 必需 |
-| Wi-Fi / 蓝牙 | 可选 / 必需 | N-A | N-A（USB 模块，23H2 下没有驱动） |
+| Wi-Fi / 蓝牙 | 可选 / 必需 | N-A | N-A / 必需（AIC8800D80 HCI，要先由 aic8800usb 加载固件） |
 | USB Hub | | 必需 | |
 | eMMC / SD / NVMe | 必需 / 可选 / 可选 | 必需 / 可选 / 必需 | N-A / 可选 / 可选 |
 | NPU | 设置中开启时 | 可选（设置选项只在 `cm5io-parity` 上） | 设置中开启时 |
