@@ -94,7 +94,13 @@ jobs:
             'drivers/adc/rk3xsaradc/rk3xsaradc.vcxproj',
             # binds ACPI\RKCP3006, which only the firmware's "40-pin UART"
             # option publishes: nothing to bind on a board without it
-            'drivers/serial/rk3xuart/rk3xuart.vcxproj'
+            'drivers/serial/rk3xuart/rk3xuart.vcxproj',
+            # bind ACPI\RKCP806B, RKCP1ED0 and RKCP2416, which the firmware
+            # publishes only with "Power button (RK806)", "Board LEDs for the
+            # OS" on, or on the ROCK 4D (its EEPROM): nothing to bind elsewhere
+            'drivers/input/rk806pwrkey/rk806pwrkey.vcxproj',
+            'drivers/leds/rkled/rkled.vcxproj',
+            'drivers/misc/rkeeprom/rkeeprom.vcxproj'
           )
           # Record the sdport miniport API surface into the log.
           #
@@ -192,6 +198,21 @@ jobs:
                   /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /m /nologo /v:minimal
           if ($LASTEXITCODE -ne 0) { throw "msbuild failed for adctest" }
           Copy-Item tools\adctest\ARM64\Release\adctest.exe C:\rk-tools\ -Force
+          # The EEPROM reader (needs rkeeprom), and the watchdog test driver,
+          # which is signed below with the drivers but never injected: it
+          # hangs the machine when started (tools\wdthang\README.md).
+          msbuild tools\eeprom\eeprom.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed for eeprom" }
+          Copy-Item tools\eeprom\ARM64\Release\eeprom.exe C:\rk-tools\ -Force
+          msbuild tools\wdthang\wdthang.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /p:SignMode=Off /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed for wdthang" }
+          $wdthang = Get-ChildItem tools\wdthang -Recurse -Filter wdthang.sys |
+                     Where-Object { $_.FullName -match '\\ARM64\\Release\\' } | Select-Object -First 1
+          if (-not $wdthang) { throw 'no wdthang.sys came out of the build' }
+          Copy-Item $wdthang.FullName C:\rk-tools\ -Force
+          Copy-Item tools\wdthang\README.md C:\rk-tools\wdthang-README.md -Force
           Copy-Item tools\vdpu383-capture\* C:\rk-tools\ -Force
 
           # Test-sign them.
@@ -249,6 +270,11 @@ jobs:
               if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
             }
           }
+
+          # wdthang.sys is no package (no INF, no catalog): an embedded
+          # signature is all it needs to load under test signing.
+          & $st sign /fd sha256 /f $pfx /p $pfxPw C:\rk-tools\wdthang.sys
+          if ($LASTEXITCODE) { throw "signtool failed for wdthang.sys: $LASTEXITCODE" }
 
           # bcm4345bt on its own, for pnputil on an installed Windows: the
           # test-signed package, this run's signer certificate (certutil

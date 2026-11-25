@@ -1,0 +1,67 @@
+;
+; rkled.inf - the board's LEDs (heartbeat, disk activity, on, off)
+;
+; Target: Windows on ARM64. Binds ACPI\RKCP1ED0, \_SB.LEDS, which
+; edk2-rk3576 publishes only with the setup option "Board LEDs for the OS"
+; on, from the board's Leds.asl. Drives the LED pins through rk3xgpio.
+; What each LED shows is in _DSD and can be changed with TriggerN values
+; (README.md).
+;
+; A firmware without \_SB.LEDS publishes nothing for this INF to bind, so
+; installing it there changes nothing.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = rkled.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+rkled.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%RKLED.DeviceDesc% = RKLED_Inst,ACPI\RKCP1ED0
+
+[RKLED_Inst.NT]
+CopyFiles = RKLED_CopyFiles
+
+[RKLED_CopyFiles]
+rkled.sys
+
+[RKLED_Inst.NT.Services]
+AddService = rkled,0x00000002,RKLED_Service
+
+[RKLED_Service]
+DisplayName   = %RKLED.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\rkled.sys
+
+[RKLED_Inst.NT.Wdf]
+KmdfService = rkled, RKLED_wdfsect
+
+[RKLED_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName       = "woa-rk3576"
+DiskName           = "RK3576 Board LED Installation Disk"
+RKLED.DeviceDesc    = "Rockchip RK3576 board LEDs"
+RKLED.SvcDesc       = "Rockchip RK3576 Board LED Driver"
