@@ -105,6 +105,30 @@ reach another's buffers. That is why `UserAccess` is 0 by default and meant
 for a test board only; the product path is the decode node inside maliwddm
 (docs/dev/video-decode.md, V3b).
 
+## Zero copy: the display driver's textures (interface version 3)
+
+`IOCTL_VDPU383_IMPORT` maps the pages of a display driver allocation, a
+D3D11 decoder output texture of wddm-mali-g52's maliwddm, at IO addresses
+of the decoder, so that the decoder writes the picture into the texture
+itself and the UMD copies nothing (wddm-mali-g52 docs/VIDEO-DECODE.md, V3b
+zero copy). The process names the allocation by a token maliwddm's escape
+gave it; vdpu383.sys gets the pages from maliwddm, kernel to kernel,
+through the callback object `\Callback\MaliwddmVdecExport`
+(`vdpu383_import.h`): maliwddm checks the token and that the caller is the
+process it gave the token to, so a process reaches only its own GPU
+memory, never pages it names itself. Only with the IOMMU on.
+
+When the pages stop being the allocation's (VidMm unmaps it, it is
+destroyed, maliwddm stops), maliwddm calls vdpu383.sys first: a decode in
+progress finishes (the decode gate, held from a run's address check to its
+end), the mapping is cleared and the import is dead. A decode naming a dead
+import returns `VDPU383_RUN_REVOKED` before the decoder starts; the UMD
+exports again and refreshes the import (same IO addresses, new pages) and
+runs the same register file again. `vdpu383test info` prints the imports
+made, taken back and failed.
+
+Not run on the board yet (2026-11-25, CI only).
+
 ## Test plan
 
 Run in this order. Each step says what to send back if it fails.

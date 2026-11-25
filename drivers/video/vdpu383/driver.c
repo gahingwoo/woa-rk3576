@@ -33,6 +33,13 @@
  * the core. Iommu 0, or paging that does not come on, gives the old path:
  * paging off, physical addresses, contiguous buffers below 4 GiB.
  *
+ * Zero copy (interface version 3, IOCTL_VDPU383_IMPORT): the pages of a
+ * display driver allocation (wddm-mali-g52's D3D11 decoder output texture)
+ * at IO addresses of the decoder, from a token the display driver gave the
+ * calling process; the pages come from the display driver itself, kernel to
+ * kernel (vdpu383_import.h), and it takes them back through V383ImportRevoke
+ * before they stop being the allocation's.
+ *
  * Only administrators and SYSTEM can open the device, and one handle at a
  * time. Every address register of a decode is checked against the
  * caller's buffers before the decoder is started, unless the caller asks
@@ -944,6 +951,65 @@ V383EvtD0ExitPreInterrupts(
     return STATUS_SUCCESS;
 }
 
+/* ---------------------------------------------------- decode gate */
+
+static VOID
+V383GateEnter(
+    _In_ PDEVICE_CONTEXT Ctx
+    )
+{
+    (VOID)KeWaitForSingleObject(&Ctx->RunGate, Executive, KernelMode, FALSE, NULL);
+}
+
+static VOID
+V383GateLeave(
+    _In_ PDEVICE_CONTEXT Ctx
+    )
+{
+    KeSetEvent(&Ctx->RunGate, IO_NO_INCREMENT, FALSE);
+}
+
+/* One call to the exporter (vdpu383_import.h). Status stays
+ * STATUS_NOT_FOUND when no display driver has registered. */
+static VOID
+V383ExporterCall(
+    _In_ ULONG Op,
+    _Inout_ PVDPU383_IMPORT_REQUEST Req
+    )
+{
+    UNICODE_STRING name;
+    OBJECT_ATTRIBUTES oa;
+    PCALLBACK_OBJECT cb;
+
+    Req->Version = VDPU383_IMPORT_VERSION;
+    Req->Size = sizeof(*Req);
+    Req->Status = STATUS_NOT_FOUND;
+    RtlInitUnicodeString(&name, VDPU383_IMPORT_CALLBACK_NAME);
+    InitializeObjectAttributes(&oa, &name, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    if (!NT_SUCCESS(ExCreateCallback(&cb, &oa, FALSE, FALSE)))
+        return;
+    ExNotifyCallback(cb, Req, (PVOID)(ULONG_PTR)Op);
+    ObDereferenceObject(cb);
+}
+
+/* The exporter forgets the import: no revoke for it after this returns.
+ * Called holding none of this driver's locks (the exporter may be inside
+ * a revoke that waits for the decode gate). */
+static VOID
+V383ImportRelease(
+    _In_ ULONG64 Token,
+    _In_ ULONG Handle
+    )
+{
+    VDPU383_IMPORT_REQUEST r;
+
+    RtlZeroMemory(&r, sizeof(r));
+    r.Token = Token;
+    r.ProcessId = PsGetCurrentProcessId();
+    r.Cookie = Handle;
+    V383ExporterCall(VDPU383_IMPORT_OP_RELEASE, &r);
+}
+
 /* ---------------------------------------------------- DMA buffers */
 
 static VOID
@@ -955,6 +1021,11 @@ V383FreeAlloc(
     KAPC_STATE apc;
     BOOLEAN attach = (A->Process && A->Process != PsGetCurrentProcess());
 
+    /* An import: out of the list already (under the decode gate), so no
+     * revoke reaches it; the exporter is told before the IO addresses go
+     * back to the pool. */
+    if (A->Import && A->Token)
+        V383ImportRelease(A->Token, A->Handle);
     /* the decoder loses the pages before anything else does */
     if (A->Iova && A->Dma)
         V383MmuUnmapRange(Ctx, A->Dma, A->Size);
@@ -1081,7 +1152,7 @@ V383Alloc(
         WdfWaitLockAcquire(Ctx->AllocLock, NULL);
         for (e = Ctx->Allocs.Flink; e != &Ctx->Allocs; e = e->Flink) {
             PV383_ALLOC h = CONTAINING_RECORD(e, V383_ALLOC, Link);
-            if (h->Owner == fo)
+            if (h->Owner == fo && !h->Import)
                 held += h->Size;
         }
         WdfWaitLockRelease(Ctx->AllocLock);
@@ -1145,6 +1216,9 @@ V383Free(
     if (!NT_SUCCESS(status))
         return status;
 
+    /* under the gate: a decode using the buffer finishes first, and a
+     * revoke never meets an import being freed */
+    V383GateEnter(Ctx);
     WdfWaitLockAcquire(Ctx->AllocLock, NULL);
     for (e = Ctx->Allocs.Flink; e != &Ctx->Allocs; e = e->Flink) {
         PV383_ALLOC a = CONTAINING_RECORD(e, V383_ALLOC, Link);
@@ -1155,6 +1229,7 @@ V383Free(
         }
     }
     WdfWaitLockRelease(Ctx->AllocLock);
+    V383GateLeave(Ctx);
     if (!found)
         return STATUS_INVALID_HANDLE;
     V383FreeAlloc(Ctx, found);
@@ -1171,6 +1246,7 @@ V383EvtFileCleanup(
     PLIST_ENTRY e, next;
 
     InitializeListHead(&mine);
+    V383GateEnter(ctx);
     WdfWaitLockAcquire(ctx->AllocLock, NULL);
     for (e = ctx->Allocs.Flink; e != &ctx->Allocs; e = next) {
         PV383_ALLOC a = CONTAINING_RECORD(e, V383_ALLOC, Link);
@@ -1181,13 +1257,18 @@ V383EvtFileCleanup(
         }
     }
     WdfWaitLockRelease(ctx->AllocLock);
+    V383GateLeave(ctx);
     while (!IsListEmpty(&mine))
         V383FreeAlloc(ctx, CONTAINING_RECORD(RemoveHeadList(&mine), V383_ALLOC, Link));
 }
 
-/* Is [addr] inside a buffer this file allocated, or the SRAM? Lock held. */
-static BOOLEAN
-V383AddrOk(
+/* Is [addr] inside a buffer this file allocated or imported, or the SRAM?
+ * V383_ADDR_DEAD: inside an import its exporter took back. Lock held. */
+#define V383_ADDR_BAD   0
+#define V383_ADDR_OK    1
+#define V383_ADDR_DEAD  2
+static ULONG
+V383AddrCheck(
     _In_ PDEVICE_CONTEXT Ctx,
     _In_ WDFFILEOBJECT Fo,
     _In_ ULONG Addr
@@ -1196,15 +1277,15 @@ V383AddrOk(
     PLIST_ENTRY e;
 
     if (Addr == 0)
-        return TRUE;
+        return V383_ADDR_OK;
     if (Ctx->SramPresent && Addr >= Ctx->SramPa.QuadPart && Addr < Ctx->SramPa.QuadPart + Ctx->SramLen)
-        return TRUE;
+        return V383_ADDR_OK;
     for (e = Ctx->Allocs.Flink; e != &Ctx->Allocs; e = e->Flink) {
         PV383_ALLOC a = CONTAINING_RECORD(e, V383_ALLOC, Link);
         if (a->Owner == Fo && Addr >= a->Dma && (ULONG64)Addr < (ULONG64)a->Dma + a->Size)
-            return TRUE;
+            return a->Dead ? V383_ADDR_DEAD : V383_ADDR_OK;
     }
-    return FALSE;
+    return V383_ADDR_BAD;
 }
 
 /* The H.264 address registers (MPP's trans_vdpu383_tbl_h264d) */
@@ -1229,7 +1310,7 @@ V383IsAddrReg(
 /* --------------------------------------------------------- decode */
 
 static NTSTATUS
-V383Run(
+V383RunGated(
     _In_ PDEVICE_CONTEXT Ctx,
     _In_ WDFREQUEST Request,
     _Out_ ULONG_PTR *Info
@@ -1268,10 +1349,12 @@ V383Run(
     if (!(in->flags & VDPU383_RUN_NO_ADDR_CHECK) || Ctx->UserAccess) {
         WdfWaitLockAcquire(Ctx->AllocLock, NULL);
         for (r = 0; r < V383_NUM_REGS; r++) {
+            ULONG chk;
             if (!(in->write_mask[r / 32] & (1u << (r % 32))) || !V383IsAddrReg(r))
                 continue;
-            if (!V383AddrOk(Ctx, fo, in->regs[r])) {
-                out->result = VDPU383_RUN_BAD_ADDRESS;
+            chk = V383AddrCheck(Ctx, fo, in->regs[r]);
+            if (chk != V383_ADDR_OK) {
+                out->result = chk == V383_ADDR_DEAD ? VDPU383_RUN_REVOKED : VDPU383_RUN_BAD_ADDRESS;
                 out->bad_reg = r;
                 break;
             }
@@ -1395,6 +1478,221 @@ V383Run(
     return STATUS_SUCCESS;
 }
 
+/* One decode under the gate: from the address check until the decoder is
+ * done (or stopped), no import's pages can be taken back. */
+static NTSTATUS
+V383Run(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _In_ WDFREQUEST Request,
+    _Out_ ULONG_PTR *Info
+    )
+{
+    NTSTATUS status;
+
+    V383GateEnter(Ctx);
+    status = V383RunGated(Ctx, Request, Info);
+    V383GateLeave(Ctx);
+    return status;
+}
+
+/* ------------------------------------------------------------ imports */
+
+/*
+ * The exporter takes an import's pages back (vdpu383_import.h): the decode
+ * in progress, if any, ends first (the gate), then the entries are cleared
+ * and the import is dead; its IO addresses stay reserved for a refresh.
+ * PASSIVE_LEVEL, from the exporter, holding none of this driver's locks.
+ */
+static VOID
+V383ImportRevoke(
+    _In_ PVOID Context,
+    _In_ ULONG64 Cookie
+    )
+{
+    PDEVICE_CONTEXT ctx = (PDEVICE_CONTEXT)Context;
+    PLIST_ENTRY e;
+    PV383_ALLOC found = NULL;
+    BOOLEAN live = FALSE;
+
+    V383GateEnter(ctx);
+    WdfWaitLockAcquire(ctx->AllocLock, NULL);
+    for (e = ctx->Allocs.Flink; e != &ctx->Allocs; e = e->Flink) {
+        PV383_ALLOC a = CONTAINING_RECORD(e, V383_ALLOC, Link);
+        if (a->Import && a->Handle == (ULONG)Cookie) {
+            found = a;
+            break;
+        }
+    }
+    if (found) {
+        live = !found->Dead;
+        found->Dead = TRUE;
+    }
+    WdfWaitLockRelease(ctx->AllocLock);
+    if (live) {
+        ExAcquireFastMutex(&ctx->MmuLock);
+        V383MmuClear(ctx, found->Dma, (ULONG)(found->Size >> PAGE_SHIFT));
+        V383MmuZap(ctx);
+        ExReleaseFastMutex(&ctx->MmuLock);
+        ctx->Revokes++;
+    }
+    V383GateLeave(ctx);
+}
+
+/*
+ * IOCTL_VDPU383_IMPORT, in the caller's context (the exporter checks the
+ * process its token was given to). A new import reserves its IO addresses
+ * and goes into the list dead, so the address check refuses it until its
+ * pages are entered; a refresh enters new pages at the same addresses.
+ */
+static NTSTATUS
+V383Import(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _In_ WDFREQUEST Request,
+    _Out_ ULONG_PTR *Info
+    )
+{
+    VDPU383_IMPORT_IN *in;
+    VDPU383_IMPORT_OUT *out;
+    VDPU383_IMPORT_REQUEST r;
+    WDFFILEOBJECT fo = WdfRequestGetFileObject(Request);
+    PV383_ALLOC a = NULL;
+    PPFN_NUMBER pfns;
+    PLIST_ENTRY e;
+    ULONG64 token;
+    ULONG pages, handle;
+    BOOLEAN created = FALSE, imported = FALSE;
+    NTSTATUS status;
+
+    *Info = 0;
+    status = WdfRequestRetrieveInputBuffer(Request, sizeof(*in), (PVOID *)&in, NULL);
+    if (!NT_SUCCESS(status))
+        return status;
+    status = WdfRequestRetrieveOutputBuffer(Request, sizeof(*out), (PVOID *)&out, NULL);
+    if (!NT_SUCCESS(status))
+        return status;
+    /* METHOD_BUFFERED: in and out are the same system buffer */
+    token = in->token;
+    pages = in->pages;
+    handle = in->handle;
+    if (!Ctx->IommuOn)
+        return STATUS_NOT_SUPPORTED;
+    if (token == 0 || pages == 0 || pages > ((256u * 1024 * 1024) >> PAGE_SHIFT))
+        return STATUS_INVALID_PARAMETER;
+    pfns = (PPFN_NUMBER)ExAllocatePool2(POOL_FLAG_NON_PAGED, (SIZE_T)pages * sizeof(PFN_NUMBER), V383_POOL_TAG);
+    if (!pfns)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    V383GateEnter(Ctx);
+    if (handle) {
+        WdfWaitLockAcquire(Ctx->AllocLock, NULL);
+        for (e = Ctx->Allocs.Flink; e != &Ctx->Allocs; e = e->Flink) {
+            PV383_ALLOC h = CONTAINING_RECORD(e, V383_ALLOC, Link);
+            if (h->Import && h->Handle == handle && h->Owner == fo) {
+                a = h;
+                break;
+            }
+        }
+        WdfWaitLockRelease(Ctx->AllocLock);
+        if (!a || a->Size != ((SIZE_T)pages << PAGE_SHIFT)) {
+            status = STATUS_INVALID_HANDLE;
+            goto fail;
+        }
+        if (!a->Dead) {
+            /* still mapped: nothing to refresh */
+            status = a->Token == token ? STATUS_SUCCESS : STATUS_INVALID_DEVICE_STATE;
+            if (!NT_SUCCESS(status))
+                goto fail;
+            goto done;
+        }
+    } else {
+        a = (PV383_ALLOC)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*a), V383_POOL_TAG);
+        if (!a) {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            goto fail;
+        }
+        a->Import = TRUE;
+        a->Dead = TRUE;
+        a->Iova = TRUE;
+        a->Size = (SIZE_T)pages << PAGE_SHIFT;
+        a->Owner = fo;
+        ExAcquireFastMutex(&Ctx->MmuLock);
+        a->Dma = V383IovaAlloc(Ctx, pages);
+        ExReleaseFastMutex(&Ctx->MmuLock);
+        if (!a->Dma) {
+            ExFreePoolWithTag(a, V383_POOL_TAG);
+            a = NULL;
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            goto fail;
+        }
+        WdfWaitLockAcquire(Ctx->AllocLock, NULL);
+        a->Handle = ++Ctx->NextHandle;
+        InsertTailList(&Ctx->Allocs, &a->Link);
+        WdfWaitLockRelease(Ctx->AllocLock);
+        created = TRUE;
+    }
+
+    RtlZeroMemory(&r, sizeof(r));
+    r.Token = token;
+    r.ProcessId = PsGetCurrentProcessId();
+    r.Cookie = a->Handle;
+    r.Revoke = V383ImportRevoke;
+    r.RevokeContext = Ctx;
+    r.Pfns = pfns;
+    r.MaxPages = pages;
+    V383ExporterCall(VDPU383_IMPORT_OP_IMPORT, &r);
+    if (!NT_SUCCESS(r.Status)) {
+        status = r.Status;
+        goto fail;
+    }
+    imported = TRUE;
+    if (r.Pages != pages) {
+        status = STATUS_INVALID_PARAMETER;
+        goto fail;
+    }
+    ExAcquireFastMutex(&Ctx->MmuLock);
+    status = V383MmuEnter(Ctx, a->Dma, pfns, 0, pages);
+    /* a previous mapping of these addresses may still be in the TLB */
+    V383MmuZap(Ctx);
+    ExReleaseFastMutex(&Ctx->MmuLock);
+    if (!NT_SUCCESS(status))
+        goto fail;
+    WdfWaitLockAcquire(Ctx->AllocLock, NULL);
+    a->Token = token;
+    a->Dead = FALSE;
+    WdfWaitLockRelease(Ctx->AllocLock);
+    Ctx->Imports++;
+
+done:
+    out->handle = a->Handle;
+    out->dma = a->Dma;
+    out->size = (ULONG)a->Size;
+    out->flags = VDPU383_ALLOC_IOVA | VDPU383_ALLOC_IMPORTED;
+    V383GateLeave(Ctx);
+    ExFreePoolWithTag(pfns, V383_POOL_TAG);
+    *Info = sizeof(*out);
+    return STATUS_SUCCESS;
+
+fail:
+    Ctx->ImportFailures++;
+    if (created) {
+        WdfWaitLockAcquire(Ctx->AllocLock, NULL);
+        RemoveEntryList(&a->Link);
+        WdfWaitLockRelease(Ctx->AllocLock);
+    }
+    V383GateLeave(Ctx);
+    /* the exporter holds our revoke routine for this token: given back
+     * with no lock of ours held */
+    if (imported)
+        V383ImportRelease(token, a->Handle);
+    if (created) {
+        V383MmuUnmapRange(Ctx, a->Dma, a->Size);
+        ExFreePoolWithTag(a, V383_POOL_TAG);
+    }
+    ExFreePoolWithTag(pfns, V383_POOL_TAG);
+    V383_LOG("import of %u pages (handle %u) failed: 0x%08x", pages, handle, status);
+    return status;
+}
+
 /* ---------------------------------------------------------- dispatch */
 
 static BOOLEAN
@@ -1430,6 +1728,10 @@ V383EvtIoInCallerContext(
         case IOCTL_VDPU383_FREE:
             status = V383Free(ctx, Request);
             WdfRequestComplete(Request, status);
+            return;
+        case IOCTL_VDPU383_IMPORT:
+            status = V383Import(ctx, Request, &info);
+            WdfRequestCompleteWithInformation(Request, status, info);
             return;
         default:
             break;
@@ -1498,6 +1800,9 @@ V383EvtIoDeviceControl(
         o->mmu_faults = (ULONG)ctx->MmuFaults;
         o->mmu_enables = ctx->MmuEnables;
         o->alloc_failures = ctx->AllocFailures;
+        o->imports = ctx->Imports;
+        o->revokes = ctx->Revokes;
+        o->import_failures = ctx->ImportFailures;
         if (olen > sizeof(*o))
             olen = sizeof(*o);
         RtlCopyMemory(ob, o, olen);
@@ -1676,6 +1981,7 @@ V383EvtDeviceAdd(
     ctx->UserAccess = userAccess;
     InitializeListHead(&ctx->Allocs);
     KeInitializeEvent(&ctx->RunDone, NotificationEvent, FALSE);
+    KeInitializeEvent(&ctx->RunGate, SynchronizationEvent, TRUE);
     ExInitializeFastMutex(&ctx->MmuLock);
     status = WdfWaitLockCreate(WDF_NO_OBJECT_ATTRIBUTES, &ctx->AllocLock);
     if (!NT_SUCCESS(status))
