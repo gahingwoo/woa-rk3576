@@ -14,6 +14,9 @@
  *   AmpOpenStatus   REG_DWORD   NTSTATUS of opening it
  *   AmpWriteStatus  REG_DWORD   NTSTATUS of the last write, AmpWriteValue
  *   DumpCount       REG_DWORD   increments with every dump
+ *   ActiveOutputRoute, ActiveInputSelect
+ *                   REG_DWORD   the routing in use (es8388_sai.c)
+ *   JackInterrupt   REG_DWORD   1 if _CRS had a GpioInt (jack detect)
  *   Soc_<address>   REG_DWORD   the SoC registers listed below, read through
  *                               a mapping of their page
  *
@@ -110,6 +113,10 @@ static void Es8388DiagDump(_In_ PES8323_CONTEXT pDevice) {
 	DiagSetDword(key, L"AmpWriteStatus", (ULONG)pDevice->AmpWriteStatus);
 	DiagSetDword(key, L"AmpWriteValue", pDevice->AmpWriteValue);
 	DiagSetDword(key, L"DumpCount", pDevice->DiagCount);
+	// Not OutputRoute/InputSelect: those names are the overrides.
+	DiagSetDword(key, L"ActiveOutputRoute", pDevice->OutputRoute);
+	DiagSetDword(key, L"ActiveInputSelect", pDevice->InputSelect);
+	DiagSetDword(key, L"JackInterrupt", pDevice->Interrupt ? 1 : 0);
 
 	for (ULONG i = 0; i < ARRAYSIZE(DiagSocRegs); i++) {
 		WCHAR buf[16];

@@ -9,11 +9,14 @@
 | 耳机孔和耳机孔麦克风（ES8388） | 泰山派 3M | `PcdAnalogAudioPreset`（这块板子上为 TRUE） | rk3xi2sbus、csaudiork3x 1.0.0.135 或更新、es8323、pl330dma | 2026-11-22 起可用 |
 | HDMI 输出，48 kHz 立体声 | 泰山派 3M | `PcdHdmiAudioPreset`（TRUE） | 同上，另加负责 HDMI 的 wddm-mali-g52 | 2026-11-23 起可用 |
 | HDMI 输出 | CM5-IO | `PcdHdmiAudioPreset`（TRUE） | 同上 | 未试过 |
+| ES8388：CN3 排针（OUT2 在测试点上），LIN2/RIN2 差分麦克风焊盘 | CM5-IO | edk2-rk3576 分支 `cm5io-parity` | 同上，es8323 中断可选（`es83-optional-irq`） | 未试过 |
+| ES8388：耳机孔，LIN1 耳机麦克风 | ROCK 4D | edk2-rk3576 分支 `rock4d-parity` | 同上 | 未试过 |
 
 这些需要比 0.4.1 新的 edk2-rk3576 固件（下一个正式版发布前用 `ci` 构建）。USB 音频设备用 Windows 自带的
 USB Audio Class 驱动就能用。
 
-CM5-IO 的 ES8388 只接到一个 3 针排针（CN3），没有耳机孔，而且它的接线不在本项目拿到的任何设备树里，所以没有描述它。
+CM5-IO 和 ROCK 4D 没有耳机检测线，ES8388 的接法也和泰山派 3M 不同，见
+[其他板子](#其他板子没有插拔检测以及路由属性)。
 
 这一页最初来自音频还不能用时写的计划，见
 [history](../history/2026-11-21-audio-plan.md)。
@@ -101,12 +104,38 @@ I²S，两者共用一个 LRCK，LOUT1/ROUT1 为 0 dB，OUT2 关闭，板载麦�
 和 `JackNotifies`；csaudiork3x 在 SAI1 适配器的键下写入 `JackConnected`、`JackReports`、
 `JackEvents` 和 `JackTopologyRegistered`。
 
+## 其他板子：没有插拔检测，以及路由属性
+
+没有检测线的板子，固件定义 `BOARD_CODEC_NO_HPDET`（edk2-rk3576 的 `Es8388.asl`）：没有检测用的
+GpioIo、没有 GpioInt，也没有 `rockchip,hp-det-*` 属性。es8323 这时不创建中断对象（它在
+`OnPrepareHardware` 里根据 `_CRS` 中的 GpioInt 创建，而不是在 `EvtDriverDeviceAdd` 里；在那里创建、
+又没有对应资源的中断对象会让设备启动失败），不做插拔检测，耳机端点一直显示为已插入。SAI 耳机拓扑仍然声明
+`JACKDESC2_PRESENCE_DETECT_CAPABILITY`；`IsConnected` 始终为 TRUE，这正是 Windows 对没有检测的端点的要求。
+
+板子接了 ES8388 的哪些输出、哪路输入，来自同一个 `_DSD` UUID（`daffd814-6eba-4d8c-8a91-bc9bbf4aa301`），
+由固件的 `BOARD_CODEC_OUTPUT_ROUTE` 和 `BOARD_CODEC_INPUT_SELECT` 设置：
+
+| 属性 | 取值 | 寄存器（数据手册第 6 节，主线 `es8328.c`） |
+|---|---|---|
+| `rockchip,output-route` | bit 0 LOUT1/ROUT1，bit 1 LOUT2/ROUT2；默认 1 | 寄存器 0x04 DAC Power：bit 5 LOUT1、4 ROUT1、3 LOUT2、2 ROUT2（0x30、0x0C、0x3C）；有 OUT2 时寄存器 0x30/0x31（LOUT2/ROUT2 音量）= 0x1E，0 dB（复位值 0x00，-45 dB） |
+| `rockchip,input-select` | 1 LIN1/RIN1（默认），2 LIN2/RIN2，3 LIN1-RIN1 差分，4 LIN2-RIN2 差分 | 寄存器 0x0A ADC Control 2：LINSEL 7:6、RINSEL 5:4（00 输入 1，01 输入 2，11 差分）：0x00、0x50、0xF0、0xF0；3 和 4 另写寄存器 0x0B ADC Control 3 bit 7 DS（差分对选择）：0x02、0x82 |
+
+两个属性都没有时，写入的就是泰山派 3M 原来的序列。codec 的 `Device Parameters` 下的 REG_DWORD
+`OutputRoute` 和 `InputSelect` 可以覆盖固件的值（不重刷固件就能试接法）；驱动把实际用的值写成
+`ActiveOutputRoute`、`ActiveInputSelect`，以及 `JackInterrupt`（`_CRS` 有 GpioInt 时为 1）。
+
+| 板子 | 接法（原理图） | `output-route` | `input-select` |
+|---|---|---|---|
+| 泰山派 3M | LOUT1/ROUT1 接功放和耳机孔；LINPUT1 板载麦克风 | （没有：1） | （没有：1） |
+| CM5-IO | LOUT1/ROUT1 接 3 针排针 CN3（HPR、HPL、HP_GND）；LOUT2/ROUT2（AUD_LINEOUT_L/R）只接到测试点 T36/T37，没有接 40 针排针；麦克风焊盘 T34/T35（MIC2P/MIC2N，经 R56/R57/R58 偏置）接 LIN2/RIN2，标注“Differential routing”。HP_DET_L 被 R411 拉低，不能检测 | 3 | 4 |
+| ROCK 4D | LOUT1/ROUT1 接耳机孔 J18；LOUT2/ROUT2 只接未贴片的喇叭功放；耳机麦克风 MIC_INP_PHONE 接 LIN1，RIN1 接 HP_GND，LIN2/RIN2 悬空 | 1 | 1 |
+
 ## 还没做的
 
 - 耳机插拔检测已经写好（见上文），还没在板子上运行过。
 - 硬件音量：Windows 的音量在软件里实现，codec 固定在 0 dB。
 - 耳麦麦克风（RINPUT）、48 kHz 以外的采样率，以及 16 位格式。
-- CM5-IO 的 ES8388。
+- CM5-IO 和 ROCK 4D 的 ES8388：已描述和配置，两块板子上都没运行过。
 
 ## 安装
 
