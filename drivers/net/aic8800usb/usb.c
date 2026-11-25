@@ -279,10 +279,21 @@ AicOpRxEth(void *C, const u8 *Frame, u32 Len)
     }
 }
 
+static void
+AicOpScanBss(void *C, const aic_bss *Bss, const u8 *Body, u32 BodyLen, int ProbeResp)
+{
+    PAIC_DEVICE_CONTEXT ctx = (PAIC_DEVICE_CONTEXT)C;
+
+    if (ctx->Mode == AIC_MODE_WIFICX) {
+        AicWifiScanBss(ctx, Bss, Body, BodyLen, ProbeResp);
+    }
+}
+
 const aic_bus_ops AicUsbOps = {
     AicOpSend,
     AicOpWait,
     AicOpDelay,
     AicOpLog,
     AicOpRxEth,
+    AicOpScanBss,
 };

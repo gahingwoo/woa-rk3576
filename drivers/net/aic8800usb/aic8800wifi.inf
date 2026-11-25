@@ -1,0 +1,113 @@
+;
+; aic8800wifi.inf - AICSemi AIC8800D80 USB Wi-Fi (Radxa ROCK 4D, Dragon Q6A)
+; as a Wi-Fi adapter for Windows' own Wi-Fi (WiFiCx 1.0): the network list
+; in Settings and on the taskbar, Windows' WPA2 supplicant, its profiles.
+; USB\VID_A69C&PID_8D81&MI_02, the WLAN interface of the running firmware.
+; docs/dev/wificx.md describes the model.
+;
+; Same binary and service as aic8800usb.inf (the Ethernet-style adapter
+; with the driver's own supplicant); Mode in Device Parameters tells the
+; driver which one it is. Install one of the two, with aic8800ldr.inf for
+; the ROM loader face (PID_8D80). Needs Stage 2 or more (the firmware
+; init); Ssid and Passphrase are not used in this mode.
+;
+; Target: Windows 11 on ARM64, 22H2/23H2 (build 22621/22631: WiFiCx 1.0,
+; NetAdapterCx 2.2, KMDF 1.33). The firmware files are not part of this
+; package; see README.md and install-firmware.ps1.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Net
+ClassGuid   = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = aic8800wifi.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+aic8800usb.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%AIC.RuntimeDesc% = AIC_Inst,USB\VID_A69C&PID_8D81&MI_02
+
+[AIC_Inst.NT]
+CopyFiles           = AIC_CopyFiles
+AddReg              = AIC_AddReg_Ndi
+Characteristics     = 0x84  ; NCF_PHYSICAL | NCF_HAS_UI, as Microsoft's WiFiCx sample
+BusType             = 15    ; PNPBus
+*IfType             = 71    ; IF_TYPE_IEEE80211
+*MediaType          = 16    ; NdisMediumNative802_11
+*PhysicalMediaType  = 9     ; NdisPhysicalMediumNative802_11
+*IfConnectorPresent = 1
+*ConnectionType     = 1     ; NET_IF_CONNECTION_DEDICATED
+*DirectionType      = 0     ; NET_IF_DIRECTION_SENDRECEIVE
+*AccessType         = 2     ; NET_IF_ACCESS_BROADCAST
+*HardwareLoopback   = 0
+
+[AIC_Inst.NT.HW]
+AddReg = AIC_AddReg_Hw
+
+; Device Parameters. Mode 1: WiFiCx. Written without NOCLOBBER: the key
+; outlives a switch from aic8800usb.inf.
+[AIC_AddReg_Hw]
+HKR,,"Mode",0x00010001,1
+
+[AIC_AddReg_Ndi]
+HKR, Ndi,            Service,    0, aic8800usb
+HKR, Ndi\Interfaces, UpperRange, 0, "ndis5"
+HKR, Ndi\Interfaces, LowerRange, 0, "wlan,ethernet"
+; The station only (no Wi-Fi Direct ports): the Net class installer
+; reserves this many adapters when it installs (rtw89-win INST-1).
+HKR,,                NumberOfNetworkInterfaces, 0x00010001, 1
+
+[AIC_CopyFiles]
+aic8800usb.sys
+
+[AIC_Inst.NT.Services]
+AddService = aic8800usb,0x00000002,AIC_Service
+
+[AIC_Service]
+DisplayName   = %AIC.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\aic8800usb.sys
+AddReg        = AIC_Service.AddReg
+
+[AIC_Service.AddReg]
+; Settings for both services (aic8800ldr reads them here too).
+; FLG_ADDREG_NOCLOBBER (0x2) keeps a value set on the board across driver
+; updates.
+; Stage: 0 open only, 1 also download the firmware (loader) / read the chip
+; ID (runtime), 2 also initialise and scan, 3 also join Ssid with
+; Passphrase (replaced by Pmk on first use) and keep the link, 4 also pass
+; traffic through the network adapter.
+HKR,Parameters,"Stage",0x00010003,0
+HKR,Parameters,"FirmwareDir",0x00000002,"\SystemRoot\System32\drivers\aic8800"
+HKR,Parameters,"ScanTimeoutMs",0x00010003,8000
+HKR,Parameters,"ConnectTimeoutMs",0x00010003,15000
+
+[AIC_Inst.NT.Wdf]
+KmdfService = aic8800usb, AIC_wdfsect
+
+[AIC_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName     = "woa-rk3576"
+DiskName         = "AIC8800D80 Wi-Fi Installation Disk"
+AIC.RuntimeDesc  = "AIC8800D80 USB Wi-Fi (WiFiCx)"
+AIC.SvcDesc      = "AIC8800D80 USB Wi-Fi driver"

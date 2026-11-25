@@ -346,6 +346,14 @@ PutBoot(_In_ PCWSTR Name, _In_ ULONG Value)
 
 /* ------------------------------------------------------------ records */
 
+static VOID PutStats(_In_ PAIC_DEVICE_CONTEXT Ctx);
+
+VOID
+AicPutStats(_In_ PAIC_DEVICE_CONTEXT Ctx)
+{
+    PutStats(Ctx);
+}
+
 static VOID
 PutStats(_In_ PAIC_DEVICE_CONTEXT Ctx)
 {
@@ -676,6 +684,13 @@ RuntimeStage(_In_ PAIC_DEVICE_CONTEXT Ctx)
     aic_dev *d = &Ctx->Aic;
     ULONG tick = 0, retry = 0;
 
+    if (Ctx->Mode == AIC_MODE_WIFICX) {
+        /* Windows asks for scans and connections; the worker carries them
+         * out (and keeps the requests coming even without firmware, to
+         * refuse them) */
+        AicWifiRun(Ctx);
+        return;
+    }
     if (!Ctx->FwReady) {
         return;
     }
@@ -754,11 +769,18 @@ AicEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
     ctx->Aic.TxBufSize = AIC_CMD_BUF_MAX + 2048;
     aic_init(&ctx->Aic);
     AicCrumb(ctx, ctx->Runtime ? "prepare: runtime firmware (PID_8D81)" : "prepare: ROM loader (PID_8D80)");
-    if (ctx->Adapter == NULL) {
-        return STATUS_SUCCESS;          /* the loader service */
+    if (g_LoaderService) {
+        return STATUS_SUCCESS;
     }
     if (ctx->Runtime && ctx->Stage >= AIC_STAGE_FIRMWARE && NT_SUCCESS(AicUsbStartReaders(ctx))) {
         RuntimeInit(ctx);
+    }
+    if (ctx->Mode == AIC_MODE_WIFICX) {
+        /* the capabilities now; WiFiCx then asks for the adapter
+         * (EvtWifiDeviceCreateAdapter), which starts it */
+        status = AicWifiReportCapabilities(ctx);
+        AicPutULong(ctx, L"WifiCapsStatus", (ULONG)status);
+        return status;
     }
     status = AicNetStart(ctx);
     AicPutULong(ctx, L"AdapterStartStatus", (ULONG)status);
@@ -771,6 +793,7 @@ AicEvtReleaseHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Translated)
     PAIC_DEVICE_CONTEXT ctx = AicGetContext(Device);
 
     UNREFERENCED_PARAMETER(Translated);
+    AicWifiReleaseHardware(ctx);
     AicUsbStopReaders(ctx);
     if (ctx->Ring) {
         ExFreePoolWithTag(ctx->Ring, AIC_POOL_TAG);
@@ -861,7 +884,27 @@ static VOID
 AicEvtDeviceCleanup(_In_ WDFOBJECT Object)
 {
     StopWorker(AicGetContext((WDFDEVICE)Object));
+    AicWifiCleanup(AicGetContext((WDFDEVICE)Object));
     AicNetFree(AicGetContext((WDFDEVICE)Object));
+}
+
+/* Mode from the device's hardware key (Device Parameters), which its INF
+ * writes; before WdfDeviceCreate, so through the FDO init. */
+static ULONG
+ReadMode(_In_ PWDFDEVICE_INIT DeviceInit)
+{
+    DECLARE_CONST_UNICODE_STRING(name, L"Mode");
+    WDFKEY key;
+    ULONG v = AIC_MODE_ETHERNET;
+
+    if (NT_SUCCESS(WdfFdoInitOpenRegistryKey(DeviceInit, PLUGPLAY_REGKEY_DEVICE, KEY_READ,
+                                             WDF_NO_OBJECT_ATTRIBUTES, &key))) {
+        if (!NT_SUCCESS(WdfRegistryQueryULong(key, &name, &v))) {
+            v = AIC_MODE_ETHERNET;
+        }
+        WdfRegistryClose(key);
+    }
+    return v == AIC_MODE_WIFICX ? AIC_MODE_WIFICX : AIC_MODE_ETHERNET;
 }
 
 static NTSTATUS
@@ -872,12 +915,20 @@ AicEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     PAIC_DEVICE_CONTEXT ctx;
     WDFDEVICE device;
     NTSTATUS status;
+    ULONG mode = AIC_MODE_ETHERNET;
 
     UNREFERENCED_PARAMETER(Driver);
     if (!g_LoaderService) {
+        mode = ReadMode(DeviceInit);
         status = NetDeviceInitConfig(DeviceInit);
         if (!NT_SUCCESS(status)) {
             return status;
+        }
+        if (mode == AIC_MODE_WIFICX) {
+            status = AicWifiPreDeviceCreate(DeviceInit);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
         }
     }
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
@@ -903,10 +954,18 @@ AicEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     KeInitializeEvent(&ctx->RxEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&ctx->StopEvent, NotificationEvent, FALSE);
     KeInitializeSpinLock(&ctx->DataLock);
-    if (!g_LoaderService) {
-        return AicNetCreateAdapter(ctx);
+    ctx->Mode = mode;
+    if (g_LoaderService) {
+        return STATUS_SUCCESS;
     }
-    return STATUS_SUCCESS;
+    AicPutULong(ctx, L"ActiveMode", mode);
+    if (mode == AIC_MODE_WIFICX) {
+        /* the adapter comes later, when WiFiCx asks for it */
+        status = AicWifiPostDeviceCreate(ctx);
+        AicPutULong(ctx, L"WifiInitStatus", (ULONG)status);
+        return status;
+    }
+    return AicNetCreateAdapter(ctx, NULL);
 }
 
 NTSTATUS

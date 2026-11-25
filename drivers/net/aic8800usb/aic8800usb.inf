@@ -3,15 +3,16 @@
 ; the WLAN interface of the running firmware, USB\VID_A69C&PID_8D81&MI_02,
 ; as a network adapter (NetAdapterCx, Ethernet frames to Windows). The
 ; driver joins one WPA2-PSK network named in the registry with its own
-; supplicant (docs/dev/aic8800.md); Windows' Wi-Fi UI does not see it yet
-; (that needs WiFiCx).
+; supplicant (docs/dev/aic8800.md); Windows' Wi-Fi UI does not see it.
+; aic8800wifi.inf is the same driver as a WiFiCx Wi-Fi adapter (Windows'
+; network list and supplicant, docs/dev/wificx.md); install one of the two.
 ;
 ; The ROM loader face of the chip (PID_8D80) is aic8800ldr.inf, the same
 ; binary under the service aic8800ldr. Install both. MI_00 and MI_01 of
 ; PID_8D81 are the Bluetooth HCI interface; the in-box BthUsb takes them.
 ;
 ; Target: Windows 11 on ARM64, 22H2/23H2 and later (KMDF 1.33,
-; NetAdapterCx 2.1). The firmware files are not part of this package; see
+; NetAdapterCx 2.2). The firmware files are not part of this package; see
 ; README.md and install-firmware.ps1. Stage (below) is 0: nothing is sent
 ; to the chip until it is raised.
 ;
@@ -56,6 +57,14 @@ BusType             = 15    ; PNPBus
 *DirectionType      = 0     ; NET_IF_DIRECTION_SENDRECEIVE
 *AccessType         = 2     ; NET_IF_ACCESS_BROADCAST
 *HardwareLoopback   = 0
+
+[AIC_Inst.NT.HW]
+AddReg = AIC_AddReg_Hw
+
+; Device Parameters. Mode 0: the Ethernet-style adapter. Written without
+; NOCLOBBER: the key outlives a switch from aic8800wifi.inf.
+[AIC_AddReg_Hw]
+HKR,,"Mode",0x00010001,0
 
 [AIC_AddReg_Ndi]
 HKR, Ndi,            Service,    0, aic8800usb

@@ -11,6 +11,13 @@
 #       it by the PMK the first time it uses it.
 #   aic-bringup.ps1 -Stage 3 -Ssid home
 #       a single stage, for the step-by-step board session
+#   aic-bringup.ps1 -Mode WiFiCx
+#       switch the WLAN interface to Windows' own Wi-Fi (aic8800wifi.inf):
+#       the other package (aic8800usb.inf) is removed from the device and
+#       the driver store, aic8800wifi.inf is staged, Stage is raised to 4;
+#       restart Windows, then connect from the taskbar. -Mode Ethernet goes
+#       back. Both INFs are taken from -PackageDir (default: the aic8800usb
+#       folder next to this script). docs/dev/wificx.md.
 #
 # Settings go to HKLM\SYSTEM\CurrentControlSet\Services\aic8800usb\Parameters,
 # read by both services (aic8800ldr and aic8800usb); -Connect also limits that
@@ -26,6 +33,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
 param(
+    [ValidateSet('WiFiCx', 'Ethernet')]
+    [string] $Mode = '',
+    [string] $PackageDir = '',
     [int] $Stage = -1,
     [string] $Ssid = '',
     [string] $Passphrase = '',
@@ -46,6 +56,30 @@ function Protect-Key([string] $Path) {
             'ContainerInherit,ObjectInherit', 'None', 'Allow')))
     }
     Set-Acl -Path $Path -AclObject $acl
+}
+
+if ($Mode -ne '') {
+    if ($PackageDir -eq '') { $PackageDir = Join-Path $PSScriptRoot 'aic8800usb' }
+    $want  = if ($Mode -eq 'WiFiCx') { 'aic8800wifi.inf' } else { 'aic8800usb.inf' }
+    $other = if ($Mode -eq 'WiFiCx') { 'aic8800usb.inf' } else { 'aic8800wifi.inf' }
+    $inf = Join-Path $PackageDir $want
+    if (-not (Test-Path $inf)) { throw "$inf not found (-PackageDir)" }
+    # Both bind USB\VID_A69C&PID_8D81&MI_02 at the same rank: only one may be
+    # in the driver store. Taking the other off the device leaves it without
+    # a driver until the wanted one is bound (now or at the restart).
+    foreach ($d in Get-WindowsDriver -Online | Where-Object { (Split-Path $_.OriginalFileName -Leaf) -eq $other }) {
+        Write-Host "removing $other ($($d.Driver))"
+        pnputil /delete-driver $d.Driver /uninstall /force | Out-Host
+    }
+    pnputil /add-driver $inf | Out-Host
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 259) { throw "pnputil /add-driver $want failed: $LASTEXITCODE" }
+    New-Item -Path $params -Force | Out-Null
+    $cur = (Get-ItemProperty -Path $params -Name Stage -ErrorAction SilentlyContinue).Stage
+    if ($Mode -eq 'WiFiCx' -and ($null -eq $cur -or $cur -lt 4)) {
+        Set-ItemProperty -Path $params -Name Stage -Type DWord -Value 4
+    }
+    Write-Host "Mode $Mode staged. Restart Windows; then -Status shows ActiveMode."
+    if ($Stage -lt 0 -and $Ssid -eq '' -and -not $Connect -and -not $Status) { exit 0 }
 }
 
 if ($Connect) {
@@ -102,6 +136,7 @@ if ($Status -or ($Stage -lt 0 -and $Ssid -eq '' -and -not $Connect)) {
                 if ($n -like 'PS*' -or $n -eq 'Pmk') { continue }
                 $val = $v.$n
                 if ($val -is [int] -or $val -is [long]) { $val = '{0} (0x{0:X})' -f $val }
+                if ($n -eq 'WdiTrace') { Write-Host ("   {0,-20} {1}" -f $n, $v.$n); continue }
                 if ($n -eq 'ScanResults') { Write-Host "   ScanResults:"; ($v.$n -split "`n") | ForEach-Object { if ($_) { Write-Host "      $_" } }; continue }
                 Write-Host ("   {0,-20} {1}" -f $n, $val)
             }
@@ -109,6 +144,11 @@ if ($Status -or ($Stage -lt 0 -and $Ssid -eq '' -and -not $Connect)) {
     }
     Write-Host ''
     $nic = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like 'AIC8800*' }
+    if ($nic) {
+        # WiFiCx mode: what Windows' WLAN service sees (no networks listed
+        # while location services are off: rtw89-win SCAN-7)
+        netsh wlan show interfaces 2>$null | Out-Host
+    }
     foreach ($n in $nic) {
         Write-Host ("Adapter: {0}  {1}  {2}  {3}" -f $n.Name, $n.Status, $n.MacAddress, $n.LinkSpeed)
         Get-NetIPAddress -InterfaceIndex $n.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |

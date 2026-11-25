@@ -74,7 +74,9 @@ jobs:
     # supplicant and data path are plain C (drivers/net/aic8800usb/aic_*.c).
     # tools/aictest runs them against a simulated chip and access point:
     # crypto test vectors, then the download, init, scan, the 4-way
-    # handshake, key install and data frames. Then the download again with
+    # handshake, key install and data frames; then the WiFiCx model, with
+    # the test playing Windows' supplicant over native 802.11 frames from
+    # what the driver reports (beacon bodies, association request). Then the download again with
     # the real firmware files install-firmware.ps1 fetches, at the same
     # pinned commit and hashes, and a compile-time check of every message
     # ID and parameter offset against AICSemi's own headers from that commit.
@@ -136,8 +138,9 @@ jobs:
 
   aic8800-package:
     name: AIC8800D80 Wi-Fi bring-up package, test-signed (aic8800usb)
-    # For a ROCK 4D board session: aic8800usb.sys with its two INFs (the
-    # loader, Class System, and the network adapter, Class Net), test-signed
+    # For a ROCK 4D board session: aic8800usb.sys with its three INFs (the
+    # loader, Class System; the network adapter, Class Net, as an
+    # Ethernet-style adapter or as a WiFiCx 1.0 Wi-Fi adapter), test-signed
     # with a certificate made for this run, with signer.cer,
     # install-firmware.ps1, the bring-up helper and the README, for pnputil
     # on an installed Windows (docs/dev/aic8800.md). Not put on the WinPE
@@ -178,7 +181,8 @@ jobs:
             Write-Host ("   {0,-14} {1}" -f $sig.Status, (Split-Path $sig.Path -Leaf))
             if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
           }
-          foreach ($f in 'aic8800usb.inf', 'aic8800usb.sys', 'aic8800usb.cat', 'aic8800ldr.inf', 'aic8800ldr.cat') {
+          foreach ($f in 'aic8800usb.inf', 'aic8800usb.sys', 'aic8800usb.cat', 'aic8800ldr.inf', 'aic8800ldr.cat',
+                         'aic8800wifi.inf', 'aic8800wifi.cat') {
             if (-not (Test-Path (Join-Path $d $f))) { throw "package: $f missing" }
           }
           Copy-Item drivers\net\aic8800usb\install-firmware.ps1, drivers\net\aic8800usb\aic-bringup.ps1, `

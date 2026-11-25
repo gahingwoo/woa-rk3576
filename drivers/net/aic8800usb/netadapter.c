@@ -19,6 +19,13 @@
  *
  * Frames move only from stage 4 on, and only while the link is up.
  *
+ * WiFiCx mode (Mode 1, wificx.cpp): the same queues, but Windows hands
+ * over and takes back native 802.11 data frames (aic_80211_to_eth on TX,
+ * aic_eth_to_80211 on RX), WiFiCx creates the adapter and reports the
+ * link itself, and frames move from association on (the EAPOL frames of
+ * Windows' 4-way handshake come first). RX frames that arrive before the
+ * association has been indicated to Windows wait in the FIFO (RxHold).
+ *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -50,7 +57,24 @@ static EVT_WDF_REQUEST_COMPLETION_ROUTINE AicTxDone;
 static BOOLEAN
 DataPathOpen(_In_ PAIC_DEVICE_CONTEXT Ctx)
 {
+    if (Ctx->Mode == AIC_MODE_WIFICX) {
+        return (Ctx->Aic.Link == AIC_LINK_ASSOCIATED || Ctx->Aic.Link == AIC_LINK_UP) && !Ctx->Stopping;
+    }
     return Ctx->Stage >= AIC_STAGE_ADAPTER && Ctx->Aic.Link == AIC_LINK_UP && !Ctx->Stopping;
+}
+
+/* No USB write in flight (before a pairwise key: message 4 must leave
+ * unencrypted, as wpa_supplicant waits for its TX status on Linux). */
+BOOLEAN
+AicNetTxIdle(_In_ PAIC_DEVICE_CONTEXT Ctx)
+{
+    KIRQL irql;
+    BOOLEAN idle;
+
+    KeAcquireSpinLock(&Ctx->DataLock, &irql);
+    idle = Ctx->TxFreeMask == 0xFFFFFFFFu;
+    KeReleaseSpinLock(&Ctx->DataLock, irql);
+    return idle;
 }
 
 /* ------------------------------------------------------------------ TX */
@@ -181,6 +205,17 @@ AicEvtTxAdvance(_In_ NETPACKETQUEUE Queue)
                 len += (ULONG)frag->ValidLength;
                 f = NetRingIncrementIndex(fr, f);
             }
+            if (fits && ctx->Mode == AIC_MODE_WIFICX) {
+                /* a native 802.11 data frame from Windows */
+                int n = aic_80211_to_eth(ctx->TxGather, len, ctx->TxEth, (u32)sizeof(ctx->TxEth));
+
+                if (n > 0) {
+                    RtlCopyMemory(ctx->TxGather, ctx->TxEth, (SIZE_T)n);
+                    len = (ULONG)n;
+                } else {
+                    len = 0;    /* not a frame to send: dropped below */
+                }
+            }
             if (fits && len >= 14) {
                 if (!TxSend(ctx, ctx->TxGather, len)) {
                     /* every slot in flight: ask to be called again */
@@ -305,7 +340,27 @@ AicNetRxFrame(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_reads_(Len) const UCHAR *Frame, 
     KeAcquireSpinLock(&Ctx->DataLock, &irql);
     if (Ctx->RxQueue == NULL || !aic_frameq_push(Ctx->RxQ, Frame, Len)) {
         Ctx->RxDrops++;
-    } else if (Ctx->RxNotify) {
+    } else if (Ctx->RxNotify && !Ctx->RxHold) {
+        notify = Ctx->RxQueue;
+        Ctx->RxNotify = FALSE;
+    }
+    KeReleaseSpinLock(&Ctx->DataLock, irql);
+    if (notify) {
+        NetRxQueueNotifyMoreReceivedPacketsAvailable(notify);
+    }
+}
+
+/* WiFiCx: the association is indicated; let the frames that waited go up. */
+VOID
+AicNetRxRelease(_In_ PAIC_DEVICE_CONTEXT Ctx)
+{
+    NETPACKETQUEUE notify = NULL;
+    KIRQL irql;
+    UINT32 len;
+
+    KeAcquireSpinLock(&Ctx->DataLock, &irql);
+    Ctx->RxHold = FALSE;
+    if (Ctx->RxNotify && Ctx->RxQueue && Ctx->RxQ && aic_frameq_peek(Ctx->RxQ, &len) != NULL) {
         notify = Ctx->RxQueue;
         Ctx->RxNotify = FALSE;
     }
@@ -325,7 +380,7 @@ AicEvtRxAdvance(_In_ NETPACKETQUEUE Queue)
     KIRQL irql;
 
     KeAcquireSpinLock(&ctx->DataLock, &irql);
-    while (pi != pr->EndIndex && fi != fr->EndIndex) {
+    while (pi != pr->EndIndex && fi != fr->EndIndex && !ctx->RxHold) {
         NET_PACKET *pkt;
         NET_FRAGMENT *frag;
         const UCHAR *data;
@@ -339,19 +394,36 @@ AicEvtRxAdvance(_In_ NETPACKETQUEUE Queue)
         pkt = NetRingGetPacketAtIndex(pr, pi);
         frag = NetRingGetFragmentAtIndex(fr, fi);
         va = (PUCHAR)NetExtensionGetFragmentVirtualAddress(&q->VirtualAddress, fi)->VirtualAddress;
-        if (len > frag->Capacity) {
+        if (ctx->Mode == AIC_MODE_WIFICX) {
+            /* to the native 802.11 data frame Windows wants */
+            int n = aic_eth_to_80211(ctx->Aic.Bssid, data, len, va, (u32)frag->Capacity);
+
             aic_frameq_pop(ctx->RxQ);
-            ctx->RxDrops++;
-            continue;
+            if (n <= 0) {
+                ctx->RxDrops++;
+                continue;
+            }
+            len = (UINT32)n;
+        } else {
+            if (len > frag->Capacity) {
+                aic_frameq_pop(ctx->RxQ);
+                ctx->RxDrops++;
+                continue;
+            }
+            RtlCopyMemory(va, data, len);
+            aic_frameq_pop(ctx->RxQ);
         }
-        RtlCopyMemory(va, data, len);
-        aic_frameq_pop(ctx->RxQ);
         frag->Offset = 0;
         frag->ValidLength = len;
         pkt->FragmentIndex = fi;
         pkt->FragmentCount = 1;
         RtlZeroMemory(&pkt->Layout, sizeof(pkt->Layout));
-        pkt->Layout.Layer2Type = NetPacketLayer2TypeEthernet;
+        if (ctx->Mode == AIC_MODE_WIFICX) {
+            pkt->Layout.Layer2Type = NetPacketLayer2TypeIeee80211;
+            pkt->Layout.Layer2HeaderLength = AIC_80211_HDR;
+        } else {
+            pkt->Layout.Layer2Type = NetPacketLayer2TypeEthernet;
+        }
         ctx->RxFrames++;
         pi = NetRingIncrementIndex(pr, pi);
         fi = NetRingIncrementIndex(fr, fi);
@@ -373,7 +445,7 @@ AicEvtRxNotify(_In_ NETPACKETQUEUE Queue, _In_ BOOLEAN Enabled)
 
     KeAcquireSpinLock(&ctx->DataLock, &irql);
     ctx->RxNotify = Enabled;
-    if (Enabled && ctx->RxQ && aic_frameq_peek(ctx->RxQ, &len) != NULL) {
+    if (Enabled && ctx->RxQ && !ctx->RxHold && aic_frameq_peek(ctx->RxQ, &len) != NULL) {
         ctx->RxNotify = FALSE;
         now = TRUE;
     }
@@ -446,28 +518,38 @@ AicEvtSetReceiveFilter(_In_ NETADAPTER Adapter, _In_ NETRECEIVEFILTER Filter)
 /* -------------------------------------------------------------- adapter */
 
 NTSTATUS
-AicNetCreateAdapter(_In_ PAIC_DEVICE_CONTEXT Ctx)
+AicNetCreateAdapter(_In_ PAIC_DEVICE_CONTEXT Ctx, _Inout_opt_ NETADAPTER_INIT *Init)
 {
-    NETADAPTER_INIT *init;
+    NETADAPTER_INIT *init = Init;
     NET_ADAPTER_DATAPATH_CALLBACKS cb;
     WDF_OBJECT_ATTRIBUTES attr;
+    NETADAPTER adapter;
     NTSTATUS status;
     ULONG i;
 
-    init = NetAdapterInitAllocate(Ctx->Device);
     if (init == NULL) {
-        return STATUS_INSUFFICIENT_RESOURCES;
+        init = NetAdapterInitAllocate(Ctx->Device);
+        if (init == NULL) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
     }
     NET_ADAPTER_DATAPATH_CALLBACKS_INIT(&cb, AicEvtCreateTxQueue, AicEvtCreateRxQueue);
     NetAdapterInitSetDatapathCallbacks(init, &cb);
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attr, AIC_ADAPTER_CONTEXT);
-    status = NetAdapterCreate(init, &attr, &Ctx->Adapter);
-    NetAdapterInitFree(init);
+    status = NetAdapterCreate(init, &attr, &adapter);
+    if (Init == NULL) {
+        NetAdapterInitFree(init);
+    }
     if (!NT_SUCCESS(status)) {
         return status;
     }
-    *AicAdapterGetDevice(Ctx->Adapter) = Ctx->Device;
+    *AicAdapterGetDevice(adapter) = Ctx->Device;
+    Ctx->Adapter = adapter;
 
+    /* once per device: WiFiCx may ask for the adapter again after a stop */
+    if (Ctx->RxQ != NULL) {
+        return STATUS_SUCCESS;
+    }
     Ctx->RxQ = (aic_frameq *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(aic_frameq), AIC_POOL_TAG);
     if (Ctx->RxQ == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -524,7 +606,8 @@ AicNetStart(_In_ PAIC_DEVICE_CONTEXT Ctx)
     NetAdapterSetLinkLayerMtuSize(Ctx->Adapter, 1500);
 
     NET_ADAPTER_TX_CAPABILITIES_INIT(&tx, 1);
-    NET_ADAPTER_RX_CAPABILITIES_INIT_SYSTEM_MANAGED(&rx, 1536, 1);
+    /* an 802.11 frame is AIC_80211_OVERHEAD longer than its Ethernet frame */
+    NET_ADAPTER_RX_CAPABILITIES_INIT_SYSTEM_MANAGED(&rx, Ctx->Mode == AIC_MODE_WIFICX ? 2048 : 1536, 1);
     NetAdapterSetDataPathCapabilities(Ctx->Adapter, &tx, &rx);
 
     /* As dwc_eqos notes, tcpip does not reliably bind unless everything is
@@ -535,9 +618,12 @@ AicNetStart(_In_ PAIC_DEVICE_CONTEXT Ctx)
                                     NetPacketFilterFlagBroadcast | NetPacketFilterFlagPromiscuous;
     NetAdapterSetReceiveFilterCapabilities(Ctx->Adapter, &filter);
 
-    NET_ADAPTER_LINK_STATE_INIT_DISCONNECTED(&state);
-    NetAdapterSetLinkState(Ctx->Adapter, &state);
     Ctx->LinkReported = FALSE;
+    if (Ctx->Mode != AIC_MODE_WIFICX) {
+        /* WiFiCx reports the link from the association indications */
+        NET_ADAPTER_LINK_STATE_INIT_DISCONNECTED(&state);
+        NetAdapterSetLinkState(Ctx->Adapter, &state);
+    }
     return NetAdapterStart(Ctx->Adapter);
 }
 
@@ -548,7 +634,7 @@ AicNetUpdateLink(_In_ PAIC_DEVICE_CONTEXT Ctx)
     NET_ADAPTER_LINK_STATE state;
     BOOLEAN up = DataPathOpen(Ctx);
 
-    if (Ctx->Adapter == NULL || up == Ctx->LinkReported) {
+    if (Ctx->Adapter == NULL || up == Ctx->LinkReported || Ctx->Mode == AIC_MODE_WIFICX) {
         return;
     }
     if (up) {
