@@ -591,6 +591,10 @@ jobs:
               Where-Object { $_.FullName -match 'arm64' } |
               ForEach-Object { Write-Host ("{0,-22} {1}" -f $l, $_.FullName) }
           }
+          Write-Host "--- SerCx libraries (arm64), whatever their name ---"
+          Get-ChildItem "$kits\Lib" -Recurse -Filter '*sercx*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'arm64' } |
+            ForEach-Object { Write-Host $_.FullName }
           Write-Host "--- WDK VS build targets ---"
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           Write-Host "VS: $vs"
