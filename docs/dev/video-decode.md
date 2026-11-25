@@ -52,6 +52,19 @@ serves avc1 to a browser that asks for it. HEVC next (mainline has
 `rkvdec-vdpu383-hevc.c`), then VP9 and AV1 (MPP only; not in mainline for
 VDPU383).
 
+## 2026-11-24: the first player milestone (V3a)
+
+The board passed V1 and V2 on 2026-11-24 (conformance MATCH, also
+`--dxva-only`). The next step is written, not run: wddm-mali-g52 branch
+`video-decode` (its `docs/VIDEO-DECODE.md` has the design and the board
+test) gives the D3D11.1 interface and `ID3D11VideoDevice` with H.264 to
+the player processes its `UmdVideo` names, and decodes in the player's
+process through this driver's bring-up interface, with the register
+builder copied unchanged. For that, vdpu383.sys on branch
+`vdpu383-d3d11va` gains `UserAccess` (driver README): off by default,
+1 lets users open the device. Decoding through maliwddm with the
+decoder's IOMMU on (V3b) replaces it later.
+
 ## 2026-11-25: HEVC Main register builder (not run on the board)
 
 Branch `vdpu383-hevc`: `lib/vdpu383_hevc.c` (from MPP's VDPU383 HEVC HAL,

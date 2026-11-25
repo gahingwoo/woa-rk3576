@@ -87,6 +87,19 @@ Settings, DWORDs in the same key, read at each start of the device:
 |---|---|---|
 | `WarmupAtD0` | 0 | 1: run the vendor kernel's warm-up decode at every D0 entry, as the vendor kernel does at probe and resume |
 | `Iommu` | 1 | 1: buffers are any pages, mapped through the decoder's IOMMU, and `dma` is an IO address. 0: the old path, physically contiguous buffers below 4 GiB, paging off. Takes effect at the next start of the device (disable/enable or reboot) |
+| `UserAccess` | 0 | 0: SYSTEM and administrators only, one handle at a time (vdpu383test). 1: every user may open `\\.\VDPU383`, many handles at once, so that a video player's process reaches it through the display driver's user-mode part (wddm-mali-g52 `video-decode`, D3D11 video decode milestone V3a); 2: low-integrity processes too (a browser's GPU process). With 1 or 2 `VDPU383_RUN_NO_ADDR_CHECK` is ignored, and each handle may hold at most 384 MiB of decoder buffers. Read when the device starts: set it, then restart the device or the board |
+
+Security note on `UserAccess`: the bring-up interface lets the caller write
+the decoder's registers. The driver checks that every address register of
+a run points into a buffer that handle allocated (or the SRAM), but not
+that the decoder stays inside it. With `Iommu` 0 the decoder's IOMMU is
+off, so a process that can open the device can make the decoder read or
+write memory past the end of its own buffers. With `Iommu` 1 (the default)
+the decoder reaches only what is mapped in its IOMMU, but that is every open
+handle's buffers, the SRAM and the warm-up buffer, so one process can still
+reach another's buffers. That is why `UserAccess` is 0 by default and meant
+for a test board only; the product path is the decode node inside maliwddm
+(docs/dev/video-decode.md, V3b).
 
 ## Test plan
 
