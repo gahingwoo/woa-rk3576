@@ -26,6 +26,20 @@ So it needs [rk3xgpio](../../gpio/rk3xgpio). The firmware muxes the UART6
 pins (GPIO2 PD2 to PD5) and sets the UART clock to 24 MHz; with an older
 firmware there is no `RKCP4345` device at all.
 
+### CM5-IO: `ACPI\RKCP4362`
+
+The ArmSoM CM5 module's BW3752-50B1 carries a BCM43752; Linux's btbcm names
+its Bluetooth core BCM4362A2. The CM5-IO firmware (edk2-rk3576 branch
+`cm5io-parity`, not on a board yet) declares it as `\_SB.BTH0` with HID
+`RKCP4362` and the same four resources in the same order: UART4
+(`0x2ad70000`, `Interrupt { 112 }`), BT_REG_ON GPIO1 PC7 and BT_WAKE GPIO1
+PD4, the GPIOs the TaishanPi 3M uses (ArmSoM-CM5-1V1 schematic, page 17).
+The firmware muxes UART4 M1 (GPIO1 PC2 to PC5) and sets its clock to 24 MHz.
+The INF binds it to the same driver with `FirmwarePath` set to
+`BCM4362A2.hcd`; install that with `install-firmware.ps1 -Chip 4362a2`.
+Not tried on the board: the 1500000 baud switch, and whether this module
+has its own BD_ADDR (the driver replaces only the BCM4345C5's placeholder).
+
 ## How it works
 
 ```
@@ -84,6 +98,11 @@ from a pinned commit, and checks its SHA-256:
 
 Neither is in linux-firmware. Both use the module's 37.4 MHz crystal, which
 is the one on this board (SX1B37.400F1210F30 in the schematic).
+
+For the CM5-IO, `-Chip 4362a2` fetches `BCM4362A2.hcd` (80602 bytes, 508
+records, "BCM43752A2 UART 37.4MHz Ampak AP6398 sLNA iLNA CL1", from
+armbian/firmware `db8cc456`; no licence given). It is Ampak's build, not
+one for the CM5's module, whose crystal the schematic does not show.
 
 It goes to `%SystemRoot%\System32\drivers\brcm\BCM4345C5.hcd`; the
 `FirmwarePath` registry value (an NT path) moves it.
