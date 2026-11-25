@@ -1,0 +1,241 @@
+{
+ "comment": "TaishanPi 3M running another board's firmware build; -Stress aborted by the 90 C guard",
+ "args": [
+  "-Stress",
+  "-Board",
+  "tspi3m"
+ ],
+ "facts": {
+  "smbios": {
+   "manufacturer": "LCKFB",
+   "product": "TaishanPi 3M",
+   "baseboard": "TaishanPi 3M",
+   "biosVersion": "rk3576-CM5IO-v0.4.1-12-gabcdef0",
+   "biosDate": "2026-11-25",
+   "windows": "Microsoft Windows 11 Pro 10.0.22631 build 22631",
+   "computer": "RK3576"
+  },
+  "acpi": {
+   "oemId": "RKCP",
+   "oemTableId": "RK3576",
+   "revision": "0"
+  },
+  "cpu": {
+   "count": 8,
+   "registryMHz": [
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608
+   ],
+   "currentMHz": [
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608
+   ]
+  },
+  "pnpProblems": [],
+  "gpu": {
+   "present": true,
+   "instanceId": "ACPI\\RKCP7402\\0",
+   "name": "Mali-G52",
+   "status": "OK",
+   "problem": 0,
+   "service": "maliwddm",
+   "gpuClkHz": 702000000
+  },
+  "gpuCounters": {
+   "WDDM version": 20,
+   "Clock (MHz)": 702,
+   "Temperature (C)": 45.5,
+   "Throttled": 0,
+   "Throttled reason": 0,
+   "WDDM fallback reason": 0
+  },
+  "display": {
+   "current": "2560x1440@60",
+   "modes": [
+    "1920x1080@60",
+    "2560x1440@60",
+    "2560x1440@59",
+    "3840x2160@30",
+    "1280x720@60"
+   ]
+  },
+  "audio": [
+   {
+    "name": "Rockchip HDMI (Rockchip I2S Audio)",
+    "status": "OK"
+   },
+   {
+    "name": "Rockchip Headphones (Rockchip I2S Audio)",
+    "status": "OK"
+   }
+  ],
+  "network": [
+   {
+    "name": "Ethernet",
+    "description": "Rockchip GMAC",
+    "pnp": "ACPI\\RKCP6543\\0",
+    "status": "Up",
+    "media": "802.3",
+    "speed": "1 Gbps",
+    "ipv4": [
+     "192.168.1.50"
+    ],
+    "gateway": [
+     "192.168.1.1"
+    ]
+   }
+  ],
+  "ping": {
+   "replies": 3,
+   "ms": 0.6
+  },
+  "bluetooth": {
+   "present": true,
+   "instanceId": "ACPI\\RKCP4345\\0",
+   "status": "OK",
+   "problem": 0,
+   "service": "bcm4345bt",
+   "radios": 2
+  },
+  "usb": {
+   "controllers": 2,
+   "controllersOk": 2,
+   "devices": [],
+   "hubs": 0
+  },
+  "disks": [
+   {
+    "kind": "emmc",
+    "index": 0,
+    "model": "SD/MMC Disk",
+    "sizeGB": 62.0,
+    "health": "Healthy",
+    "status": "Online",
+    "system": true
+   }
+  ],
+  "storageRw": {
+   "ok": true,
+   "mib": 64,
+   "writeMs": 4000,
+   "error": ""
+  },
+  "npuDevice": {
+   "present": true,
+   "instanceId": "ACPI\\RKCP3576\\0",
+   "status": "OK",
+   "problem": 0,
+   "service": "rknpu"
+  },
+  "vdecDevice": {
+   "present": true,
+   "instanceId": "ACPI\\RKCP0383\\0",
+   "status": "OK",
+   "problem": 0,
+   "service": "vdpu383"
+  },
+  "thermal": [
+   {
+    "name": "\\_TZ.TZ00",
+    "c": 44.1
+   },
+   {
+    "name": "\\_TZ.TZ01",
+    "c": 45.0
+   },
+   {
+    "name": "\\_TZ.TZ02",
+    "c": 43.2
+   }
+  ],
+  "time": {
+   "now": "2026-11-25T12:00:00",
+   "year": 2026,
+   "offsetS": 0.02,
+   "rtcPresent": true,
+   "rtcStatus": "OK"
+  },
+  "tdrEvents": [],
+  "stress": {
+   "ran": true,
+   "aborted": true,
+   "maxC": 90.4,
+   "score": "",
+   "error": ""
+  },
+  "gpuAfterStress": {
+   "present": true,
+   "status": "OK",
+   "service": "maliwddm"
+  }
+ },
+ "tools": {
+  "rknputest info": {
+   "exit": 0,
+   "output": "rknputest info: all checks passed\n"
+  },
+  "rknputest m3": {
+   "exit": 0,
+   "output": "m3: 4 shapes x 2 cores, all exact\n"
+  },
+  "vdpu383test warmup": {
+   "exit": 0,
+   "output": "warm-up ran, frame ready\n"
+  },
+  "vdpu383test decode BA1_Sony_D": {
+   "exit": 0,
+   "output": "pictures 17, frames out 17, hardware errors 0, 12.0 ms in the decoder calls\noutput md5 114d1cf94a2fcaffda0cf1b49964bf3d\n"
+  },
+  "vdpu383test decode CABA1_SVA_B": {
+   "exit": 0,
+   "output": "pictures 17, frames out 17, hardware errors 0, 12.0 ms in the decoder calls\noutput md5 2f5cabd5bb4954c0386cafd8a9aa782a\n"
+  },
+  "vdpu383test decode CABA3_SVA_B": {
+   "exit": 0,
+   "output": "pictures 33, frames out 33, hardware errors 0, 12.0 ms in the decoder calls\noutput md5 63a0f8fdcbb87b0dff330acdd10905c0\n"
+  },
+  "vdpu383test decode FRExt1_Panasonic": {
+   "exit": 0,
+   "output": "pictures 8, frames out 8, hardware errors 0, 12.0 ms in the decoder calls\noutput md5 f7023a3a93cc98c0c8d83c1deaf11048\n"
+  },
+  "vdpu383test decode AMVP_A_MTK_4": {
+   "exit": 0,
+   "output": "pictures 30, frames out 30, hardware errors 0, 12.0 ms in the decoder calls\noutput md5 5dd1b1099391ad659225fbf94965a6c7\n"
+  },
+  "vdpu383test decode MERGE_A_TI_3": {
+   "exit": 0,
+   "output": "pictures 8, frames out 8, hardware errors 0, 12.0 ms in the decoder calls\noutput md5 3a15886a0158ef1aaf557869b2e9c522\n"
+  },
+  "vdpu383test decode POC_A_Bossen_3": {
+   "exit": 0,
+   "output": "pictures 5, frames out 5, hardware errors 0, 12.0 ms in the decoder calls\noutput md5 faf33bec64d3e58c426ed2772903a0bf\n"
+  },
+  "vdpu383test decode RPS_A_docomo_4": {
+   "exit": 0,
+   "output": "pictures 44, frames out 44, hardware errors 0, 12.0 ms in the decoder calls\noutput md5 7f4ad6c6b3de54558b0db59629b87db9\n"
+  },
+  "vdpu383test decode SAO_A_MediaTek_4": {
+   "exit": 0,
+   "output": "pictures 60, frames out 60, hardware errors 0, 12.0 ms in the decoder calls\noutput md5 272e694a2262a2b34f6248f787a4431d\n"
+  }
+ },
+ "expect": {
+  "fw.banner": "FAIL",
+  "board.smbios": "PASS",
+  "stress.furmark": "FAIL",
+  "stress.gpu-after": "PASS"
+ },
+ "exitCode": 1
+}

@@ -509,6 +509,66 @@ jobs:
           path: ${{ env.NULLPKG }}
           if-no-files-found: error
 
+  regress-linux:
+    name: regression suite (shellcheck, regress.sh on made-up boards, dry runs under pwsh)
+    # tools/regress: no board is reachable from CI, so the Linux suite runs
+    # against /sys and /proc trees the test builds (REGRESS_ROOT) and the
+    # Windows suite against recorded facts (-DryRun -Mock).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Board manifests are JSON
+        run: for f in tools/regress/boards/*.json tools/regress/tests/*.json; do python3 -m json.tool "$f" > /dev/null || { echo "::error file=$f::not JSON"; exit 1; }; done
+      - name: shellcheck
+        run: shellcheck -S warning tools/regress/*.sh tools/regress/tests/*.sh
+      - name: regress.sh and run-remote.sh against made-up boards
+        run: bash tools/regress/tests/test-regress-sh.sh
+      - name: regress.ps1 dry runs (PowerShell 7)
+        shell: pwsh
+        run: |
+          & tools/regress/tests/run-dryrun.ps1
+          if ($LASTEXITCODE -ne 0) { throw "run-dryrun.ps1 failed" }
+
+  regress-windows:
+    name: regression suite (Windows PowerShell 5.1 parse, dry runs, live smoke run)
+    # The boards run Windows PowerShell 5.1, so the suite is parsed and
+    # dry-run there, then run live once on the runner (an x64 VM, not a
+    # board): most rows FAIL or SKIP, but every collector, the C# helper
+    # (PDH counters, ACPI table read) included, has to run to the end.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and dry-run (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\regress\tests\run-dryrun.ps1
+          if ($LASTEXITCODE -ne 0) { throw "run-dryrun.ps1 failed" }
+      - name: Live smoke run on the runner (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'regress-live'
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\regress\regress.ps1 -Board tspi3m -Quick -Out $out
+          $code = $LASTEXITCODE
+          Get-Content (Join-Path $out 'results.md')
+          if ($code -ne 0 -and $code -ne 1) { throw "regress.ps1 exited $code" }
+          $r = Get-Content -Raw (Join-Path $out 'results.json') | ConvertFrom-Json
+          $ids = @($r.results | ForEach-Object { $_.id })
+          foreach ($want in 'fw.banner', 'fw.acpi', 'cpu.count', 'devmgr', 'gpu.driver', 'display.mode', 'net.ethernet',
+                            'usb.controllers', 'storage.rw', 'thermal.zones', 'time.clock', 'stress.furmark', 'display.tdr') {
+            if ($ids -notcontains $want) { throw "no row ${want}: the run stopped early" }
+          }
+          $row = { param($i) $r.results | Where-Object { $_.id -eq $i } | Select-Object -First 1 }
+          # the C# helper compiled and read the runner's own DSDT header
+          if (-not (& $row 'fw.acpi').value) { throw 'fw.acpi read nothing: the native helper did not work' }
+          if ([int](& $row 'cpu.count').value -lt 1) { throw 'cpu.count read nothing' }
+          if ((& $row 'storage.rw').status -ne 'PASS') { throw "storage.rw: $((& $row 'storage.rw').reason)" }
+          # it cleaned up after itself
+          if (Get-ChildItem $env:SystemDrive\ -Filter 'rk3576-regress-*.bin' -ErrorAction SilentlyContinue) { throw 'the storage check left its file' }
+          if (Get-ScheduledTask -TaskName 'RK3576-regress-*' -ErrorAction SilentlyContinue) { throw 'a session task was left behind' }
+          # the suite's own exit code (1: rows FAIL on a VM) is not this step's
+          exit 0
+
   solution:
     name: WDK build (build/RockchipDrivers.sln)
     # The drivers imported from worproject/Rockchip-Windows-Drivers build as one

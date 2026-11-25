@@ -1,0 +1,28 @@
+{
+  "id": "rock4d",
+  "name": "Radxa ROCK 4D",
+  "source": "edk2-rk3576 docs/BOARD-FEATURES.md (branch rock4d-parity, 95205eb): ACPI exists on rock4d-parity only; Platform/Radxa/ROCK4D/ROCK4D.dsc",
+  "smbios": { "manufacturer": "Radxa", "product": "ROCK 4D", "platformName": "ROCK4D" },
+  "dtCompatible": "radxa,rock-4d",
+  "cpu": { "count": 8, "minMHz": 1600, "note": "CPU Maximum Frequency setup option: 1608 MHz default" },
+  "devmgrAllow": [
+    { "id": "USB\\VID_A69C", "why": "AIC8800D80 USB Wi-Fi/Bluetooth module: no driver runs on 23H2" }
+  ],
+  "gpu": { "clockMHz": 594, "wddmVersion": 20, "tempMaxC": 90, "note": "775 mV raise not ported: 594 MHz" },
+  "display": { "refreshHz": 60 },
+  "audio": { "hdmi": true, "analog": true },
+  "network": { "ethernet": true, "wifi": false, "bluetooth": false },
+  "usb": { "controllers": 2, "hub": false },
+  "storage": { "emmc": false, "sd": "optional", "nvme": "optional" },
+  "npu": true,
+  "vdec": true,
+  "thermal": { "zones": 3, "maxC": 90 },
+  "rtc": { "battery": true },
+  "linux": {
+    "ethernet": true, "usbControllers": 2, "usbHub": false,
+    "emmc": false, "sd": "optional", "nvme": "optional",
+    "hdmi": true, "gpu": true, "thermalZones": 6, "fan": "optional", "rtc": "hym8563",
+    "npu": "optional", "vdec": "optional",
+    "dmesgIgnore": []
+  }
+}

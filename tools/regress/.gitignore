@@ -1,0 +1,8 @@
+# downloaded by fetch-streams.sh / regress.ps1 -FetchStreams
+streams/
+# run-remote.sh's copies of the results
+results/
+# written into the copy run-remote.sh sends
+VERSION
+# tools copied next to the suite by hand (vdpu383test.exe, rknputest.exe)
+bin/
