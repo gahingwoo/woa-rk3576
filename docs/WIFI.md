@@ -172,6 +172,64 @@ Board test (full Windows on the eMMC, firmware from W1 with the option on):
    not answer under Windows although it did in W1 (clock, pins or the REG_ON
    cycle); `CmdErrors` > 0 gives `LastErrorRintsts` and `LastCmd`.
 
+#### First board run, 2026-11-25: bugcheck 0xD1 in sdport
+
+TaishanPi 3M, Windows 11 22631, firmware `ec96848` with the option on. The
+firmware probe passed (CMD5 R4 `0x30FFFF00`, 3 functions, CCCR rev `0x43`).
+With `dwcmshc` from `cm5io-wifi-bt` and `bcmwlsdio` at Stage 0 staged,
+Windows stopped at boot: `DRIVER_IRQL_NOT_LESS_OR_EQUAL`, `sdport.sys`
+10.0.22621.608, a read of address 8 at IRQL 2. No dump.
+
+Where it faulted, from `sdport.sys` 10.0.22621.608 and its public PDB (the
+fault address ends in `B94`, and sections are page aligned, so the RVA ends
+in `B94` too; the only load of `[xN, #8]` at such an RVA is this one):
+
+    SdhostCompleteRequest+0x8c   ldr x0, [x10, #8]
+
+`SdhostCompleteRequest` runs in the completion DPC that `SdPortCompleteRequest`
+queues. For a request completed with an error it takes the slot from
+`Request+0xb8`, a field sdport keeps past the public `SDPORT_REQUEST`, and
+reads the slot's FDO extension (`slot+8`), which every real slot has. It was
+NULL: the request given to sdport was not one sdport owns, or no longer was.
+
+What in `dwcmshc` can do that (branch `dwcmshc-sdio-d1` closes each):
+
+- its own local requests (CMD12 in the data reset, CMD13, tuning) live on
+  the stack. After an error or a timeout `OutstandingRequest` kept pointing
+  at the dead frame, and `LocalRequestDpc` (queued from the ISR, possibly
+  running after the local command ended) and the busy work item both
+  completed whatever `OutstandingRequest` was, to sdport once
+  `LocalRequestPending` had dropped;
+- the busy work item completed `OutstandingRequest` at the time it ran, not
+  the request it was queued for;
+- nothing stopped a request being completed to sdport twice;
+- `MshcSdioDiagKick` queued a work item from `ToggleEvents`, which sdport
+  calls at DIRQL (its ISR masks the card interrupt through it, and
+  `SdhostDisableEvents` goes through `KeSynchronizeExecution`).
+  `IoQueueWorkItem` is DISPATCH_LEVEL at most.
+
+Which of these fired on the board is not known yet: the first three need
+the breadcrumbs below, the last is a plain IRQL violation that Driver
+Verifier would have caught. The fix: only the request sdport handed to
+`IssueRequest` is ever given to `SdPortCompleteRequest`, once, behind a
+compare-exchange; a local request is retired before its frame goes away and
+the local DPC only touches the local request still on the bus; the busy work
+item carries its own request; breadcrumb updates are never queued above
+DISPATCH_LEVEL. `.github/scripts/check-sdport-miniport.py` (CI, `checks`)
+fails the build if a DIRQL callback reaches a DISPATCH-only routine or a
+second `SdPortCompleteRequest` call appears.
+
+`SdioDiag` version 2 adds `RefusedCompletions`, `LastRefusedCmd`,
+`LastRefusedStatus` (a completion the guard refused: the old code would have
+given it to sdport), `LocalTimeouts`, `StaleLocalDpcs` and `DeferredKicks`.
+
+Two packages, one service: an older `dwcmshc` package that binds only the SD
+slot (`ACPI\RKCPFE2C`) shares the service name. Only one `dwcmshc.sys` image
+is loaded for both controllers, so if the SD slot starts first on the old
+package's image, the SDIO controller runs old code that knows nothing about
+it. Remove the old package before testing, and check with `sc qc dwcmshc`
+that the image path is the new package's DriverStore folder.
+
 ### W3 and later
 
 Moved to [docs/dev/wifi.md](dev/wifi.md#stages). The stages there are W3

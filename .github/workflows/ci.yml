@@ -33,6 +33,8 @@ jobs:
         run: bash .github/scripts/check-structure.sh
       - name: Markdown relative links
         run: bash .github/scripts/check-links.sh
+      - name: dwcmshc sdport miniport (IRQL, request ownership)
+        run: python3 .github/scripts/check-sdport-miniport.py
 
   hcd:
     name: bcm4345bt patchram walker (Linux, gcc)

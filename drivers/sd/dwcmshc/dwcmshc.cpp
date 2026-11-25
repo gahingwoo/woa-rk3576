@@ -923,7 +923,13 @@ MshcSlotInterrupt(
               (*SdioInterrupt == TRUE) ||
               (*Tuning == TRUE);
 
-    if (Handled && !gCrashdumpMode) {
+    //
+    // Only request events go to the local DPC.  A card change or an SDIO card
+    // interrupt is sdport's business whether or not a local command is on the
+    // bus, and queueing the local DPC for one only gives it another chance to
+    // run after the local request has ended.
+    //
+    if (Handled && !gCrashdumpMode && ((*Events != 0) || (*Errors != 0))) {
         if (InterlockedCompareExchange(&MshcExtension->LocalRequestPending, 0, 0)) {
             //
             // We may not get a DPC from sdport when issuing local requests.
@@ -1003,6 +1009,15 @@ MshcSlotIssueRequest(
             InterlockedIncrement(&MshcExtension->Diag.Cmd53Count);
             break;
         }
+    }
+
+    //
+    // A request that is not the miniport's own local one came from sdport:
+    // it is the one SdPortCompleteRequest may be given back.
+    //
+    if (Request != MshcExtension->LocalRequest) {
+        InterlockedExchangePointer(
+            (PVOID volatile *)&MshcExtension->SdportRequest, Request);
     }
 
     //
@@ -1165,11 +1180,15 @@ MshcSlotToggleEvents(
         Intsts &= ~MSHC_INT_CD;
     }
 
+    //
+    // sdport calls ToggleEvents at DIRQL (from its ISR, and through
+    // KeSynchronizeExecution), so only count here; no breadcrumb update,
+    // which queues a work item.
+    //
     if (MshcExtension->IsSdio && (EventMask & SDPORT_EVENT_CARD_INTERRUPT)) {
         Intsts |= MSHC_INT_SDIO_RK;
         InterlockedIncrement(Enable ? &MshcExtension->Diag.CardIntEnables
                                     : &MshcExtension->Diag.CardIntDisables);
-        MshcSdioDiagKick(MshcExtension);
     }
 
     if (Enable) {
@@ -1439,6 +1458,13 @@ MshcResetHost(
     if (Request != NULL) {
         MSHC_LOG_WARN(MshcExtension->LogHandle, MshcExtension, "Aborted outstanding request.");
     }
+
+    //
+    // sdport resets the host after a failed or timed-out request, and it may
+    // have ended that request itself (its own timer).  Whatever was on the
+    // bus is not to be completed to sdport after this.
+    //
+    InterlockedExchangePointer((PVOID volatile *)&MshcExtension->SdportRequest, NULL);
 
     //
     // Better reset everything no matter the requested type, just in case.
@@ -2653,14 +2679,24 @@ MshcCompleteRequest(
          (Request->Command.ResponseType == SdResponseTypeR5B) ||
          (Request->Command.TransferDirection == SdTransferDirectionWrite))) {
         if (MshcIsDataBusy(MshcExtension)) {
-            if ((MshcExtension->CompleteRequestBusyWorkItem != NULL) && (KeGetCurrentIrql() == DISPATCH_LEVEL)) {
+            //
+            // The work item takes the request it was queued for, not
+            // whatever OutstandingRequest is by the time it runs.  A local
+            // request waits here instead: it lives on a stack that may be
+            // gone before a work item gets to it.
+            //
+            if ((MshcExtension->CompleteRequestBusyWorkItem != NULL) &&
+                (KeGetCurrentIrql() == DISPATCH_LEVEL) &&
+                (Request != MshcExtension->LocalRequest) &&
+                (InterlockedCompareExchangePointer(
+                    (PVOID volatile *)&MshcExtension->BusyRequest, Request, NULL) == NULL)) {
                 IoQueueWorkItem(
                     MshcExtension->CompleteRequestBusyWorkItem,
                     MshcCompleteRequestBusyWorker,
                     CriticalWorkQueue,
                     MshcExtension);
             } else {
-                MshcCompleteRequestBusyWorker(NULL, MshcExtension);
+                MshcCompleteRequestAfterBusy(MshcExtension, Request);
             }
             return;
         }
@@ -2718,12 +2754,37 @@ MshcCompleteRequest(
             "Card removed - failing outstanding request!");
     }
 
-    LONG LocalRequestPending =
-        InterlockedCompareExchange(&MshcExtension->LocalRequestPending, 0, 1);
-
-    if (!LocalRequestPending) {
-        SdPortCompleteRequest(Request, Request->Status);
+    //
+    // A local request ends here: MshcIssueRequestSynchronously is polling
+    // for LocalRequestPending to drop.
+    //
+    if (Request == MshcExtension->LocalRequest) {
+        InterlockedExchange(&MshcExtension->LocalRequestPending, 0);
+        return;
     }
+
+    //
+    // Anything else goes back to sdport only if it is the request sdport
+    // gave us and has not had back.  sdport finds the slot through a field
+    // past the public SDPORT_REQUEST and completes the request in a DPC, so
+    // a pointer it does not own, or one it owns but already had back, ends
+    // in a read through a bogus slot (0xD1 in SdhostCompleteRequest).
+    //
+    if ((Request != NULL) &&
+        (InterlockedCompareExchangePointer(
+            (PVOID volatile *)&MshcExtension->SdportRequest, NULL, Request) == Request)) {
+        SdPortCompleteRequest(Request, Request->Status);
+        return;
+    }
+
+    InterlockedIncrement(&MshcExtension->Diag.RefusedCompletions);
+    MshcExtension->Diag.LastRefusedCmd = (Request != NULL) ? Request->Command.Index : 0xFFFFFFFF;
+    MshcExtension->Diag.LastRefusedStatus = (Request != NULL) ? (ULONG)Request->Status : 0;
+    MSHC_LOG_ERROR(
+        MshcExtension->LogHandle,
+        MshcExtension,
+        "Refusing to complete request 0x%p to sdport: not the one it issued",
+        Request);
 }
 
 _Use_decl_annotations_
@@ -2736,16 +2797,39 @@ MshcCompleteRequestBusyWorker(
     UNREFERENCED_PARAMETER(DeviceObject);
 
     PMSHC_EXTENSION MshcExtension;
-    NTSTATUS Status;
+    PSDPORT_REQUEST Request;
 
     MshcExtension = (PMSHC_EXTENSION)Context;
 
+    Request = (PSDPORT_REQUEST)InterlockedExchangePointer(
+        (PVOID volatile *)&MshcExtension->BusyRequest, NULL);
+    if (Request == NULL) {
+        return;
+    }
+
+    MshcCompleteRequestAfterBusy(MshcExtension, Request);
+}
+
+_Use_decl_annotations_
+VOID
+MshcCompleteRequestAfterBusy(
+    PMSHC_EXTENSION MshcExtension,
+    PSDPORT_REQUEST Request
+    )
+{
+    NTSTATUS Status;
+
     Status = MshcWaitDataIdle(MshcExtension);
 
-    MshcCompleteRequest(
-        MshcExtension,
-        MshcExtension->OutstandingRequest,
-        Status);
+    //
+    // Busy is over (or timed out), so this cannot loop back here: either
+    // the status is now an error or the data line reads idle.
+    //
+    if (NT_SUCCESS(Status) && MshcIsDataBusy(MshcExtension)) {
+        Status = STATUS_IO_TIMEOUT;
+    }
+
+    MshcCompleteRequest(MshcExtension, Request, Status);
 }
 
 _Use_decl_annotations_
@@ -2843,6 +2927,39 @@ MshcCreateIdmacDescriptorTable(
     return STATUS_SUCCESS;
 }
 
+//
+// Retire a local request before the stack frame it lives in goes away:
+// nothing may refer to it after this returns.  OutstandingRequest is kept on
+// an error completion (for ResetHost) and on a timeout nothing completed it
+// at all, so drop it here if it is still this request; then wait for any
+// LocalRequestDpc that already picked it up.
+//
+static
+VOID
+MshcEndLocalRequest(
+    _In_ PMSHC_EXTENSION MshcExtension,
+    _In_ PSDPORT_REQUEST Request
+    )
+{
+    ULONG Waits;
+
+    InterlockedExchange(&MshcExtension->LocalRequestPending, 0);
+    InterlockedExchangePointer((PVOID volatile *)&MshcExtension->LocalRequest, NULL);
+    InterlockedCompareExchangePointer(
+        (PVOID volatile *)&MshcExtension->OutstandingRequest, NULL, Request);
+
+    if (!gCrashdumpMode) {
+        (VOID)KeRemoveQueueDpc(&MshcExtension->LocalRequestDpc);
+
+        for (Waits = 0; Waits < 100000; Waits++) {
+            if (InterlockedCompareExchange(&MshcExtension->LocalDpcActive, 0, 0) == 0) {
+                break;
+            }
+            SdPortWait(1);
+        }
+    }
+}
+
 _Use_decl_annotations_
 NTSTATUS
 MshcIssueRequestSynchronously(
@@ -2857,10 +2974,17 @@ MshcIssueRequestSynchronously(
 
     const ULONG PollWaitUs = 10;
 
+    //
+    // Mark the request as local before it can complete, so that
+    // MshcCompleteRequest ends it here and never hands it to sdport.
+    //
+    InterlockedExchangePointer((PVOID volatile *)&MshcExtension->LocalRequest, Request);
     InterlockedExchange(&MshcExtension->LocalRequestPending, 1);
 
     Status = MshcSlotIssueRequest(MshcExtension, Request);
     if (Status != STATUS_PENDING) {
+        Request->Status = Status;
+        MshcEndLocalRequest(MshcExtension, Request);
         return Status;
     }
 
@@ -2897,12 +3021,17 @@ MshcIssueRequestSynchronously(
         SdPortWait(PollWaitUs);
     }
 
-    InterlockedExchange(&MshcExtension->LocalRequestPending, 0);
-
     if ((TimeoutUs != 0) && (Retry == 0)) {
         MSHC_LOG_ERROR(MshcExtension->LogHandle, MshcExtension, "Timeout");
         Request->Status = STATUS_IO_TIMEOUT;
+        InterlockedIncrement(&MshcExtension->Diag.LocalTimeouts);
     }
+
+    //
+    // The request ends now whatever state it is in.  The error recovery
+    // below issues local commands of its own, so it comes after this.
+    //
+    MshcEndLocalRequest(MshcExtension, Request);
 
     if (ErrorRecovery && !NT_SUCCESS(Request->Status)) {
         SDPORT_BUS_OPERATION BusOperation;
@@ -2940,15 +3069,35 @@ MshcLocalRequestDpc(
 
     PMSHC_EXTENSION MshcExtension = (PMSHC_EXTENSION)DeferredContext;
 
+    //
+    // Count this run before looking at the local request, so that
+    // MshcEndLocalRequest, which clears the pointer first and then waits for
+    // the count, cannot return while the request is in use here.
+    //
+    InterlockedIncrement(&MshcExtension->LocalDpcActive);
+
     Request = (PSDPORT_REQUEST)InterlockedCompareExchangePointer(
-        (PVOID volatile*)&MshcExtension->OutstandingRequest, NULL, NULL);
+        (PVOID volatile*)&MshcExtension->LocalRequest, NULL, NULL);
 
-    Events = InterlockedCompareExchange((PLONG)&MshcExtension->CurrentEvents, 0, 0);
-    Errors = InterlockedCompareExchange((PLONG)&MshcExtension->CurrentErrors, 0, 0);
+    //
+    // Only the local request on the bus.  This DPC is queued from the ISR
+    // while a local command is pending, and can run after it has ended,
+    // when OutstandingRequest is gone or belongs to sdport again.
+    //
+    if ((Request != NULL) &&
+        InterlockedCompareExchange(&MshcExtension->LocalRequestPending, 0, 0) &&
+        (InterlockedCompareExchangePointer(
+            (PVOID volatile*)&MshcExtension->OutstandingRequest, NULL, NULL) == Request)) {
 
-    if (Request != NULL) {
+        Events = InterlockedCompareExchange((PLONG)&MshcExtension->CurrentEvents, 0, 0);
+        Errors = InterlockedCompareExchange((PLONG)&MshcExtension->CurrentErrors, 0, 0);
+
         MshcRequestDpc(DeferredContext, Request, Events, Errors);
+    } else {
+        InterlockedIncrement(&MshcExtension->Diag.StaleLocalDpcs);
     }
+
+    InterlockedDecrement(&MshcExtension->LocalDpcActive);
 }
 
 //

@@ -15,7 +15,8 @@ Abstract:
     Only the RK3576 SDIO controller (sdio: mmc@2a320000) records them; the SD
     slot never calls in here.  The counters are updated from the request,
     response, interrupt and bus-operation paths, at any IRQL up to DIRQL for
-    the interlocked ones.  A work item copies them to
+    the interlocked ones.  Updates are queued only at DISPATCH_LEVEL or
+    below (MshcSdioDiagKick refuses above it).  A work item copies them to
 
         HKLM\SYSTEM\CurrentControlSet\Services\dwcmshc\SdioDiag
 
@@ -42,7 +43,7 @@ Environment:
 // Bumped whenever the set of values changes, so a reading can be matched to
 // the build that wrote it.
 //
-#define SDIO_DIAG_VERSION   1
+#define SDIO_DIAG_VERSION   2
 
 static
 VOID
@@ -105,6 +106,12 @@ SdioDiagWrite(
     SdioDiagSetDword(Key, L"ClockKhz", MshcExtension->Diag.ClockKhz);
     SdioDiagSetDword(Key, L"BusWidth", MshcExtension->Diag.BusWidth);
     SdioDiagSetDword(Key, L"CardClockHz", MshcExtension->RkCardClockHz);
+    SdioDiagSetDword(Key, L"RefusedCompletions", (ULONG)MshcExtension->Diag.RefusedCompletions);
+    SdioDiagSetDword(Key, L"LastRefusedCmd", MshcExtension->Diag.LastRefusedCmd);
+    SdioDiagSetDword(Key, L"LastRefusedStatus", MshcExtension->Diag.LastRefusedStatus);
+    SdioDiagSetDword(Key, L"LocalTimeouts", (ULONG)MshcExtension->Diag.LocalTimeouts);
+    SdioDiagSetDword(Key, L"StaleLocalDpcs", (ULONG)MshcExtension->Diag.StaleLocalDpcs);
+    SdioDiagSetDword(Key, L"DeferredKicks", (ULONG)MshcExtension->Diag.DeferredKicks);
 
     (VOID)ZwFlushKey(Key);
     ZwClose(Key);
@@ -177,6 +184,17 @@ MshcSdioDiagKick(
     )
 {
     if (gCrashdumpMode || (MshcExtension->Diag.WorkItem == NULL)) {
+        return;
+    }
+
+    //
+    // IoQueueWorkItem is DISPATCH_LEVEL at most.  sdport calls some
+    // miniport callbacks (ToggleEvents, from its ISR and through
+    // KeSynchronizeExecution) at DIRQL; the counters they bump are written
+    // by the next update from a lower IRQL.
+    //
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL) {
+        InterlockedIncrement(&MshcExtension->Diag.DeferredKicks);
         return;
     }
 

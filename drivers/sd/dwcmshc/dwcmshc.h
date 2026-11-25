@@ -614,12 +614,34 @@ struct _MSHC_EXTENSION {
         ULONG LastBusOpType;
         ULONG ClockKhz;
         ULONG BusWidth;
+
+        //
+        // Version 2 (branch dwcmshc-sdio-d1): the request ownership guard
+        // and the IRQL guard below.
+        //
+        volatile LONG RefusedCompletions;   // request sdport does not own now
+        volatile LONG LocalTimeouts;        // local command never completed
+        volatile LONG StaleLocalDpcs;       // local DPC after its request ended
+        volatile LONG DeferredKicks;        // breadcrumb update above DISPATCH
+        ULONG LastRefusedCmd;
+        ULONG LastRefusedStatus;
     } Diag;
 
     //
     // Current request state
     //
     PSDPORT_REQUEST OutstandingRequest;
+
+    //
+    // The request sdport handed to MshcSlotIssueRequest and has not had back
+    // yet.  Only this pointer is ever passed to SdPortCompleteRequest, and it
+    // is cleared as it is passed, so a request is completed to sdport once
+    // and a request sdport does not own (a miniport-local one on the stack)
+    // never reaches it.  sdport takes its slot from a private field past the
+    // public SDPORT_REQUEST, and a stack request has garbage there.
+    //
+    PSDPORT_REQUEST SdportRequest;
+
     ULONG CurrentEvents;
     ULONG CurrentErrors;
     ULONG CurrentTransferRemainingLength;
@@ -629,6 +651,21 @@ struct _MSHC_EXTENSION {
     //
     KDPC LocalRequestDpc;
     LONG LocalRequestPending;
+
+    //
+    // The local request being issued by MshcIssueRequestSynchronously (it
+    // lives on that function's stack), NULL otherwise, and the number of
+    // LocalRequestDpc runs looking at it.  MshcIssueRequestSynchronously
+    // clears the pointer and waits for the count to drop before it returns,
+    // so nothing touches the stack request after its frame is gone.
+    //
+    PSDPORT_REQUEST volatile LocalRequest;
+    volatile LONG LocalDpcActive;
+
+    //
+    // The sdport request whose completion waits in the busy work item.
+    //
+    PSDPORT_REQUEST volatile BusyRequest;
 
     //
     // FIFO configuration for the current transfer
@@ -875,6 +912,13 @@ VOID
 MshcCompleteRequestBusyWorker(
     _In_opt_ PDEVICE_OBJECT DeviceObject,
     _In_ PVOID Context
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID
+MshcCompleteRequestAfterBusy(
+    _In_ PMSHC_EXTENSION MshcExtension,
+    _In_ PSDPORT_REQUEST Request
     );
 
 _IRQL_requires_(DISPATCH_LEVEL)
