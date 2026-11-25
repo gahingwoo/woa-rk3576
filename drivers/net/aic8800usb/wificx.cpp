@@ -579,7 +579,15 @@ Leave(_In_ PAIC_WIFI W, _In_ WDI_ASSOC_STATUS Reason)
 
     W->Ctx->RxHold = TRUE;
     if (d->Link != AIC_LINK_DOWN) {
+        ULONG i;
+
         (VOID)aic_disconnect(d);
+        /* the firmware answers with SM_DISCONNECT_IND too: take it now, or
+         * it would end the next connection when it comes */
+        for (i = 0; i < 10 && !(d->Events & AIC_EV_DISCONNECT) && !W->Ctx->Stopping; i++) {
+            AicUsbOps.wait(W->Ctx, 20);
+        }
+        d->Link = AIC_LINK_DOWN;
     }
     d->Events &= (u8)~(AIC_EV_ASSOC | AIC_EV_DISCONNECT);
     IndicateDisassociation(W, Reason);
@@ -745,7 +753,7 @@ ConnEvents(_In_ PAIC_WIFI W)
         }
     }
     if (W->Conn.Active && NowMs() - W->Conn.StartMs > W->ConnTimeoutMs) {
-        (VOID)aic_disconnect(d);
+        Leave(W, WDI_ASSOC_STATUS_ASSOC_EXCHANGE_FAILURE);
         IndicateAssociation(W, FALSE, W->ConnBssid);
         ConnectFinish(W, NDIS_STATUS_FAILURE);
     }
@@ -927,8 +935,7 @@ AbortTask(_In_ PAIC_WIFI W, _In_ WIFIREQUEST Request, _In_ const WDI_MESSAGE_HEA
         ScanFinish(W, NDIS_STATUS_REQUEST_ABORTED);
     } else if (W->Conn.Active && tid == W->Conn.Tid &&
                (oid == WDI_TASK_CONNECT || oid == WDI_DEFINE_OID(WDI_TASK_CONNECT))) {
-        (VOID)aic_disconnect(&W->Ctx->Aic);
-        W->Ctx->RxHold = TRUE;
+        Leave(W, WDI_ASSOC_STATUS_ABORTED);     /* not connected yet: no DISASSOCIATION */
         ConnectFinish(W, NDIS_STATUS_REQUEST_ABORTED);
     }
 }
