@@ -1,0 +1,20 @@
+# The decode set: FFmpeg fate-suite copies of ITU-T conformance streams,
+# small enough to run in seconds. Not stored in git: fetch-streams.sh (host)
+# or regress.ps1 -FetchStreams (board) downloads them into streams\ and
+# checks each file's SHA-256 before use.
+#
+# codec name fate-path sha256-of-the-stream frames md5-of-the-I420-output
+#
+# md5: H.264 = the md5 of the conformance package's own _ref.yuv (equal to
+# FFmpeg's yuv420p output); HEVC = tools/vdpu383test/hevc-conformance.txt
+# (FFmpeg 6.1.1, -flags unaligned). Every stream here matched on a
+# TaishanPi 3M (H.264 2026-11-24, HEVC 2026-11-25).
+h264 BA1_Sony_D h264-conformance/BA1_Sony_D.jsv 90c84dee7e57151b80918e4b81910d33885fba2ce131fa119e1753c1892086fc 17 114d1cf94a2fcaffda0cf1b49964bf3d
+h264 CABA1_SVA_B h264-conformance/CABA1_SVA_B.264 2c1319be664863d68bf22c26ccfff417b7eeca1d8d6360f1862b5b3aa4c24c0a 17 2f5cabd5bb4954c0386cafd8a9aa782a
+h264 CABA3_SVA_B h264-conformance/CABA3_SVA_B.264 dd84719d9049ba58dd168c523d9636cc3334268c291a75978630b652b3a3bf30 33 63a0f8fdcbb87b0dff330acdd10905c0
+h264 FRExt1_Panasonic h264-conformance/FRext/FRExt1_Panasonic.avc 13a40fa31692f5c2a96a7dfcd5786df1a1c41e3234268a017e9d53364e21c5fc 8 f7023a3a93cc98c0c8d83c1deaf11048
+hevc AMVP_A_MTK_4 hevc-conformance/AMVP_A_MTK_4.bit dcbc3c321e66f8d4b06481ffbdb2e02214d83f60db5868823938715cfd275371 30 5dd1b1099391ad659225fbf94965a6c7
+hevc MERGE_A_TI_3 hevc-conformance/MERGE_A_TI_3.bit 0a84103e548cf8944851cc33c7826ea5213245fd94517fd1071895740abce749 8 3a15886a0158ef1aaf557869b2e9c522
+hevc POC_A_Bossen_3 hevc-conformance/POC_A_Bossen_3.bit 0830773b2c3f6ef85ec973f09a08dfd0f1e7a36e05936d4b1fc0b6c014a3a639 5 faf33bec64d3e58c426ed2772903a0bf
+hevc RPS_A_docomo_4 hevc-conformance/RPS_A_docomo_4.bit e7a90335952dc5718d931adb461d90049eb558b4d08c90ff1706612f8bca4439 44 7f4ad6c6b3de54558b0db59629b87db9
+hevc SAO_A_MediaTek_4 hevc-conformance/SAO_A_MediaTek_4.bit 88f693ac4aec4dea03cb4bc0cb9d8c98a4023a015905369bb62688064fb58944 60 272e694a2262a2b34f6248f787a4431d

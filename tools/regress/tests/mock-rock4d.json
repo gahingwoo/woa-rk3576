@@ -1,0 +1,209 @@
+{
+ "comment": "ROCK 4D, -Quick, board auto-detected; RK3576 tools not installed (no counters); nobody signed in",
+ "args": [
+  "-Quick"
+ ],
+ "board": "auto",
+ "facts": {
+  "smbios": {
+   "manufacturer": "Radxa",
+   "product": "ROCK 4D",
+   "baseboard": "ROCK 4D",
+   "biosVersion": "rk3576-ROCK4D-v0.4.1-12-gabcdef0",
+   "biosDate": "2026-11-25",
+   "windows": "Microsoft Windows 11 Pro 10.0.22631 build 22631",
+   "computer": "RK3576"
+  },
+  "acpi": {
+   "oemId": "RKCP",
+   "oemTableId": "RK3576",
+   "revision": "0"
+  },
+  "cpu": {
+   "count": 8,
+   "registryMHz": [
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608
+   ],
+   "currentMHz": [
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608,
+    1608
+   ]
+  },
+  "pnpProblems": [
+   {
+    "instanceId": "USB\\VID_A69C&PID_8D80\\0123",
+    "name": "AIC Wlan",
+    "code": 28
+   }
+  ],
+  "gpu": {
+   "present": true,
+   "instanceId": "ACPI\\RKCP7402\\0",
+   "name": "Mali-G52",
+   "status": "OK",
+   "problem": 0,
+   "service": "maliwddm",
+   "gpuClkHz": 594000000
+  },
+  "gpuCounters": {
+   "error": "counter not found (PDH 0xC0000BB8)"
+  },
+  "display": {
+   "error": "nobody is signed in on the desktop (autologon off?)",
+   "current": "1920x1080@60",
+   "modes": []
+  },
+  "audio": [
+   {
+    "name": "Rockchip HDMI (Rockchip I2S Audio)",
+    "status": "OK"
+   },
+   {
+    "name": "Rockchip Headphones (Rockchip I2S Audio)",
+    "status": "OK"
+   }
+  ],
+  "network": [
+   {
+    "name": "Ethernet",
+    "description": "Rockchip GMAC",
+    "pnp": "ACPI\\RKCP6543\\0",
+    "status": "Up",
+    "media": "802.3",
+    "speed": "1 Gbps",
+    "ipv4": [
+     "192.168.1.50"
+    ],
+    "gateway": [
+     "192.168.1.1"
+    ]
+   }
+  ],
+  "ping": {
+   "replies": 3,
+   "ms": 0.6
+  },
+  "bluetooth": {
+   "present": false,
+   "instanceId": "ACPI\\RKCP4345\\0",
+   "status": "OK",
+   "problem": 0,
+   "service": "bcm4345bt",
+   "radios": 0
+  },
+  "usb": {
+   "controllers": 2,
+   "controllersOk": 2,
+   "devices": [],
+   "hubs": 0
+  },
+  "disks": [
+   {
+    "kind": "sd",
+    "index": 0,
+    "model": "SD Card",
+    "sizeGB": 63.9,
+    "health": "Healthy",
+    "status": "Online",
+    "system": true
+   }
+  ],
+  "storageRw": {
+   "ok": true,
+   "mib": 64,
+   "writeMs": 4000,
+   "error": ""
+  },
+  "npuDevice": {
+   "present": true,
+   "instanceId": "ACPI\\RKCP3576\\0",
+   "status": "OK",
+   "problem": 0,
+   "service": "rknpu"
+  },
+  "vdecDevice": {
+   "present": true,
+   "instanceId": "ACPI\\RKCP0383\\0",
+   "status": "OK",
+   "problem": 0,
+   "service": "vdpu383"
+  },
+  "thermal": [
+   {
+    "name": "\\_TZ.TZ00",
+    "c": 44.1
+   },
+   {
+    "name": "\\_TZ.TZ01",
+    "c": 45.0
+   },
+   {
+    "name": "\\_TZ.TZ02",
+    "c": 43.2
+   }
+  ],
+  "time": {
+   "now": "2026-11-25T12:00:00",
+   "year": 2026,
+   "offsetS": 0.02,
+   "rtcPresent": true,
+   "rtcStatus": "OK"
+  },
+  "tdrEvents": [],
+  "stress": {
+   "ran": true,
+   "aborted": false,
+   "maxC": 71.5,
+   "score": "Score: 1830 points (FPS: 30)",
+   "error": ""
+  },
+  "gpuAfterStress": {
+   "present": true,
+   "status": "OK",
+   "service": "maliwddm"
+  }
+ },
+ "tools": {
+  "rknputest info": {
+   "exit": 0,
+   "output": "rknputest info: all checks passed\n"
+  },
+  "rknputest m3": {
+   "exit": 0,
+   "output": "m3: 4 shapes x 2 cores, all exact\n"
+  },
+  "vdpu383test warmup": {
+   "exit": 0,
+   "output": "warm-up ran, frame ready\n"
+  }
+ },
+ "expect": {
+  "board.smbios": "PASS",
+  "devmgr": "PASS",
+  "gpu.wddm": "FAIL",
+  "gpu.clock": "PASS",
+  "gpu.temp": "FAIL",
+  "display.mode": "SKIP",
+  "storage.emmc": "N-A",
+  "storage.sd": "PASS",
+  "storage.nvme": "SKIP",
+  "net.wifi": "N-A",
+  "vdec.warmup": "PASS",
+  "vdec.streams": "SKIP",
+  "stress.furmark": "SKIP"
+ },
+ "exitCode": 1
+}

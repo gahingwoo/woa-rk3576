@@ -1,0 +1,28 @@
+{
+  "id": "tspi3m",
+  "name": "LCKFB TaishanPi 3M",
+  "source": "edk2-rk3576 docs/BOARD-FEATURES.md (branch rock4d-parity, 95205eb, 2026-11-25) and Platform/LCKFB/TaishanPi3M/TaishanPi3M.dsc",
+  "smbios": { "manufacturer": "LCKFB", "product": "TaishanPi 3M", "platformName": "TaishanPi3M" },
+  "dtCompatible": "lckfb,tspi-3m-rk3576",
+  "cpu": { "count": 8, "minMHz": 1600, "note": "CPU Maximum Frequency setup option: 1608 MHz default, about 2200 with Max" },
+  "devmgrAllow": [
+    { "id": "USB\\VID_2C7C&PID_0125&MI_04", "why": "Quectel EC20 interface 4 has no driver (Maskrom Studio self-test whitelist)" }
+  ],
+  "gpu": { "clockMHz": 702, "wddmVersion": 20, "tempMaxC": 90, "note": "702 MHz needs the 775 mV GPU rail, approved for this board only" },
+  "display": { "refreshHz": 60 },
+  "audio": { "hdmi": true, "analog": true },
+  "network": { "ethernet": true, "wifi": "optional", "bluetooth": true },
+  "usb": { "controllers": 2, "hub": false },
+  "storage": { "emmc": true, "sd": "optional", "nvme": "optional" },
+  "npu": true,
+  "vdec": true,
+  "thermal": { "zones": 3, "maxC": 90 },
+  "rtc": { "battery": false, "note": "no RTC battery fitted: time comes from network sync" },
+  "linux": {
+    "ethernet": true, "usbControllers": 2, "usbHub": false,
+    "emmc": true, "sd": "optional", "nvme": "optional",
+    "hdmi": true, "gpu": "optional", "thermalZones": 6, "fan": "optional", "rtc": "hym8563",
+    "npu": "optional", "vdec": "optional",
+    "dmesgIgnore": []
+  }
+}
