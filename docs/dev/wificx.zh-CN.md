@@ -215,7 +215,7 @@ ROCK 4D，Windows 11 23H2，开测试签名，用网线访问，CI 产物 `aic88
 
 ## 下一步：bcmwlsdio
 
-同一个前端也适用于 `bcmwlsdio`（泰山派 3M 上的 BCM43456、CM5-IO 上的 BCM43752；分支 `tspi3m-wifi-driver` 和 `cm5io-wifi-bt`），只要它的内核提供同样那几个调用；WDI 那一半（`wificx.cpp`）几乎可以原样搬过去，只是改一下内核调用的名字。Broadcom 内核需要的（和它其余部分一样参照 OpenBSD bwfm）：
+同一个前端也适用于 `bcmwlsdio`（泰山派 3M 上的 BCM43456、CM5-IO 上的 BCM43752；分支 `tspi3m-wifi-driver` 和 `cm5io-wifi-bt`），只要它的内核提供同样那几个调用。现在还没有：那个驱动只做到固件下载和读版本（它的阶段 2），没有扫描、加入、事件和数据通路，所以不管走哪种模型，这些都得先做。之后WDI 那一半（`wificx.cpp`）几乎可以原样搬过去，只是改一下内核调用的名字。Broadcom 内核需要的（和它其余部分一样参照 OpenBSD bwfm）：
 
 - 扫描：`escan` 结果里有带元素的 `wl_bss_info`；用它给 Windows 拼帧体（8 个字节的零作 Timestamp、beacon 间隔、能力，然后是元素）；
 - 连接：WPA2-PSK 设 `wsec`/`wpa_auth`，`sup_wpa` 设 0 让固件把握手交给主机（FullMAC 固件也可以在 `sup_wpa` 为 1 时拿 PMK 自己做，WiFiCx 用不上），然后 `join`；关联元素从 `assoc_req_ies`/`assoc_resp_ies` 取；

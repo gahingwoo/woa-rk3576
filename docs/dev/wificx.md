@@ -418,8 +418,10 @@ traffic does not flow, suspect the message 4 race (the AP log shows message
 
 The same front end fits `bcmwlsdio` (BCM43456 on the TaishanPi 3M, BCM43752
 on the CM5-IO; branches `tspi3m-wifi-driver` and `cm5io-wifi-bt`) once its
-core offers the same few calls; the WDI half (`wificx.cpp`) would move
-almost as it is, with the core calls renamed. What the Broadcom core needs
+core offers the same few calls. It does not yet: that driver stops at the
+firmware download and version (its stage 2), with no scan, join, event or
+data path, so those come first, under either model. Then the WDI half
+(`wificx.cpp`) would move almost as it is, with the core calls renamed. What the Broadcom core needs
 (following OpenBSD bwfm, as the rest of it does):
 
 - scan: `escan` results carry a `wl_bss_info` with the elements; build the
