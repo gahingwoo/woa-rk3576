@@ -21,6 +21,17 @@
 所以它依赖 [rk3xgpio](../../gpio/rk3xgpio)。固件负责 UART6 引脚（GPIO2 PD2 到 PD5）的复用，并把 UART 时钟设为 24 MHz；
 旧固件里根本没有 `RKCP4345` 这个设备。
 
+### CM5-IO：`ACPI\RKCP4362`
+
+ArmSoM CM5 模组上的 BW3752-50B1 是一颗 BCM43752，Linux 的 btbcm 把它的蓝牙内核叫作 BCM4362A2。
+CM5-IO 的固件（edk2-rk3576 的 `cm5io-parity` 分支，还没上板）把它声明为 `\_SB.BTH0`，HID 为
+`RKCP4362`，四项资源和顺序都一样：UART4（`0x2ad70000`，`Interrupt { 112 }`）、BT_REG_ON 为
+GPIO1 PC7、BT_WAKE 为 GPIO1 PD4，和泰山派 3M 用的 GPIO 相同（ArmSoM-CM5-1V1 原理图第 17 页）。
+固件把 UART4 M1（GPIO1 PC2 到 PC5）切好复用，时钟设为 24 MHz。INF 把它绑到同一个驱动，
+`FirmwarePath` 设为 `BCM4362A2.hcd`；用 `install-firmware.ps1 -Chip 4362a2` 安装这个文件
+（80602 字节，armbian/firmware `db8cc456`，Ampak 的版本，没有给出许可）。还没在板子上试过：
+切到 1500000 波特率，以及这块模组有没有自己的蓝牙地址（驱动只替换 BCM4345C5 的占位地址）。
+
 ## 工作方式
 
 ```

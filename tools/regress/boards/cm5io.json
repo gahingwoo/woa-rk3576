@@ -1,0 +1,26 @@
+{
+  "id": "cm5io",
+  "name": "ArmSoM CM5-IO",
+  "source": "edk2-rk3576 docs/BOARD-FEATURES.md (rock4d-parity 95205eb) and docs/boards/cm5io.md (cm5io-parity 0bc3190); Platform/ArmSoM/CM5IO/CM5IO.dsc",
+  "smbios": { "manufacturer": "ArmSoM", "product": "CM5-IO", "platformName": "CM5IO" },
+  "dtCompatible": "armsom,cm5-io",
+  "cpu": { "count": 8, "minMHz": 1600, "note": "1608 MHz; CPU Maximum Frequency is added by branch cm5io-parity" },
+  "devmgrAllow": [],
+  "gpu": { "clockMHz": 594, "wddmVersion": 20, "tempMaxC": 90, "note": "no 775 mV raise on this board: 594 MHz" },
+  "display": { "refreshHz": 60 },
+  "audio": { "hdmi": true, "analog": "optional" },
+  "network": { "ethernet": true, "wifi": false, "bluetooth": false },
+  "usb": { "controllers": 2, "hub": true },
+  "storage": { "emmc": true, "sd": "optional", "nvme": true },
+  "npu": "optional",
+  "vdec": true,
+  "thermal": { "zones": 3, "maxC": 90 },
+  "rtc": { "battery": true },
+  "linux": {
+    "ethernet": true, "usbControllers": 2, "usbHub": true,
+    "emmc": true, "sd": "optional", "nvme": true,
+    "hdmi": true, "gpu": true, "thermalZones": 6, "fan": "optional", "rtc": "hym8563",
+    "npu": "optional", "vdec": "optional",
+    "dmesgIgnore": []
+  }
+}
