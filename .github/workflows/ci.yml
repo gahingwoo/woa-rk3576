@@ -509,6 +509,37 @@ jobs:
           path: ${{ env.NULLPKG }}
           if-no-files-found: error
 
+  pin40-scripts:
+    name: 40-pin PowerShell samples (Windows PowerShell 5.1)
+    # The scripts in tools/pin40 load WinRT types (Windows.Devices.Gpio, .I2c,
+    # .Spi, .Enumeration) the way they will on the board. The runner has no
+    # RhProxy, so each script must get as far as asking for a controller and
+    # stop there with its own message: a parse error or "Unable to find
+    # type" fails the job.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and load
+        shell: powershell
+        run: |
+          $fail = $false
+          foreach ($f in Get-ChildItem tools\pin40 -Filter *.ps1) {
+            $tok = $null; $err = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tok, [ref]$err)
+            if ($err) { $err | Out-Host; $fail = $true }
+          }
+          if ($fail) { throw 'parse errors' }
+          $cases = @(
+            @{ Script = 'tools\pin40\gpio-blink.ps1'; Args = @('-List') },
+            @{ Script = 'tools\pin40\i2c-scan.ps1';   Args = @() }
+          )
+          foreach ($c in $cases) {
+            $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $c.Script @($c.Args) 2>&1 | Out-String
+            Write-Host "== $($c.Script)"; Write-Host $out
+            if ($out -match 'Unable to find type|ParserError|TypeNotFound') { throw "$($c.Script): WinRT types did not load" }
+            if ($out -notmatch 'No GPIO controller|No I2C bus|I2C buses:') { throw "$($c.Script): did not reach the controller query" }
+          }
+
   solution:
     name: WDK build (build/RockchipDrivers.sln)
     # The drivers imported from worproject/Rockchip-Windows-Drivers build as one

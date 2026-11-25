@@ -47,6 +47,7 @@ edk2-rk3576 newer than 0.4.1 (its `ci` build until the next release).
 | USB-C | USB 2.0 | works for a device attached at power-on (ci firmware) | inbox usbxhci |
 | Ethernet | works, DHCP | works, 1 Gbps | dwc_eqos |
 | GPIO, I2C, SPI, DMA | start | start | rk3xgpio, rk3xi2c, rk3xspi, pl330dma |
+| 40-pin header: UARTs as COM ports, GPIO/I2C/SPI for apps | firmware on its board branch; not tried | not tried (setup options, off by default) | rk3xuart, inbox rhproxy ([40-pin header](docs/pin40.md)) |
 | Display | firmware framebuffer, one mode | GPU desktop with [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52); otherwise the framebuffer | inbox BasicDisplay, or wddm-mali-g52 |
 | Touch (DSI screen) | not tried | works, 10 points (ci firmware) | gt9271 |
 | Headphone jack and microphone | no jack on the carrier | works (ci firmware) | rk3xi2sbus, csaudiork3x, es8323 |
