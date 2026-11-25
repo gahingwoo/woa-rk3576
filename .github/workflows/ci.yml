@@ -542,6 +542,8 @@ jobs:
             if ($out -match 'Unable to find type|ParserError|TypeNotFound') { throw "$($c.Script): WinRT types did not load" }
             if ($out -notmatch 'No GPIO controller|No I2C bus|I2C buses:') { throw "$($c.Script): did not reach the controller query" }
           }
+          # both scripts exit 1 here by design (no RhProxy on the runner)
+          $global:LASTEXITCODE = 0
 
   solution:
     name: WDK build (build/RockchipDrivers.sln)
