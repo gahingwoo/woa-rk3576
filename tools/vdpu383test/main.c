@@ -199,6 +199,9 @@ static int cmd_info(void)
                "%u IOMMU faults, paging programmed %u times, %u failed allocations\n",
                in.iommu ? "IO addresses, IOMMU paging on" : "physical, contiguous", in.iommu_setting,
                in.iommu_dt_dma, in.iova_pages, in.mmu_faults, in.mmu_enables, in.alloc_failures);
+    if (in.interface_version >= 3)
+        printf("imports             %u made or refreshed, %u taken back by the display driver, %u failed\n",
+               in.imports, in.revokes, in.import_failures);
     printf("warm-up at D0 entry: ran %u timed_out %u irq 0x%08x status 0x%08x (", in.warmup.ran,
            in.warmup.timed_out, in.warmup.irq, in.warmup.status);
     print_status_bits(in.warmup.status & 0xFFFF);

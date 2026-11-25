@@ -13,6 +13,7 @@
 #include <intrin.h>
 
 #include "vdpu383_ioctl.h"
+#include "vdpu383_import.h"
 
 #define V383_LOG(fmt, ...) \
     DbgPrintEx(DPFLTR_IHVVIDEO_ID, DPFLTR_ERROR_LEVEL, "vdpu383: " fmt "\n", __VA_ARGS__)
@@ -69,6 +70,13 @@ typedef struct _V383_ALLOC {
     SIZE_T          Size;
     PMDL            Mdl;
     PVOID           UserVa;
+    /* IOCTL_VDPU383_IMPORT: another driver's pages at Dma (Iova TRUE, no
+     * Mdl, no UserVa, no Process). Dead: the exporter took them back (or
+     * they were never entered), the entries are clear, the IO addresses
+     * stay reserved for a refresh. Token: the export the pages are from. */
+    BOOLEAN         Import;
+    BOOLEAN         Dead;
+    ULONG64         Token;
 } V383_ALLOC, *PV383_ALLOC;
 
 /* Contiguous memory one open handle may hold (V383Alloc). */
@@ -135,6 +143,14 @@ typedef struct _DEVICE_CONTEXT {
     ULONG           RunFaultStatus;
     volatile LONG   MmuFaults;      /* all of them */
     ULONG           AllocFailures;
+
+    /* The decode gate: held across a decode (address check to completion),
+     * an import and a revoke, so the exporter's revoke returns only once
+     * the decoder no longer uses the pages. A synchronization event, not a
+     * mutex: the registry breadcrumbs of a run need PASSIVE_LEVEL. Taken
+     * before AllocLock and MmuLock. */
+    KEVENT          RunGate;
+    ULONG           Imports, Revokes, ImportFailures;
 
     /* DMA buffers handed to user mode */
     WDFWAITLOCK     AllocLock;

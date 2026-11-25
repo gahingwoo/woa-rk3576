@@ -85,6 +85,21 @@ stops Windows):
 | `IommuSetting`, `IommuOn`, `MmuDte0`, `MmuEnableStatus0/1` | `Iommu` value read, whether paging came on, directory register, status after enable (bit 0 = paging) |
 | `LastMmuFaultAddr` | IO address of the last IOMMU fault |
 
+## Zero copy (interface 3)
+
+`IOCTL_VDPU383_IMPORT` maps the pages of a maliwddm allocation (a D3D11
+decoder output texture) at decoder IO addresses, so the decoder writes the
+picture into the texture and the UMD copies nothing (wddm-mali-g52
+docs/VIDEO-DECODE.md, section 8). The caller passes a token from maliwddm's
+escape; vdpu383.sys gets the pages from maliwddm kernel to kernel
+(`\Callback\MaliwddmVdecExport`, `vdpu383_import.h`), which checks the token
+and the process. IOMMU on only. When the pages go away (eviction,
+destruction), maliwddm revokes the import first: a running decode finishes,
+the mapping is cleared, and a later decode naming it returns
+`VDPU383_RUN_REVOKED` before starting; the UMD refreshes the import at the
+same IO addresses and runs again. `vdpu383test info` prints import counts.
+Status: CI only.
+
 ## Install
 
 Firmware: enable *ACPI / Device Tree* > *Video Decoder (VDPU383, experimental)*
