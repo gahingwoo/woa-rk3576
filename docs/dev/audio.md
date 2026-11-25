@@ -160,6 +160,29 @@ writes what it used as `ActiveOutputRoute`, `ActiveInputSelect`, and
 | CM5-IO | LOUT1/ROUT1 to the 3-pin header CN3 (HPR, HPL, HP_GND); LOUT2/ROUT2 (AUD_LINEOUT_L/R) only to test pads T36/T37, not to the 40-pin header; microphone pads T34/T35 (MIC2P/MIC2N, biased through R56/R57/R58) on LIN2/RIN2, marked "Differential routing". HP_DET_L is tied low by R411, so no detect | 3 | 4 |
 | ROCK 4D | LOUT1/ROUT1 to the jack J18; LOUT2/ROUT2 only to the speaker amplifier, not fitted; headset microphone MIC_INP_PHONE on LIN1, RIN1 to HP_GND, LIN2/RIN2 open | 1 | 1 |
 
+## ROCK 4D: the jack on an ADC input
+
+The ROCK 4D has no detect switch on J18. Its microphone contact is biased
+from VCCA3V3_CODEC through 100R + 2.2K and halved by 100K/100K into
+`SARADC_VIN3_HP_HOOK` (schematic V1.12 page 16): about 1.63 V with nothing
+plugged, near 0 V with a 3-pole plug (the contact lands on the sleeve), and
+about 0.5 to 1.2 V with a headset. So the jack is read by the SARADC driver
+([rk3xsaradc](../../drivers/adc/rk3xsaradc/README.md)), with hysteresis
+(plugged below 1.45 V, unplugged above 1.52 V) and 150 ms of debounce, and
+es8323 follows it when its `_DSD` has
+
+| Property | Value |
+|---|---|
+| `rockchip,hp-det-saradc` | 1: the jack state comes from rk3xsaradc, not from a GPIO |
+
+(firmware: `BOARD_CODEC_HPDET_SARADC` next to `BOARD_CODEC_NO_HPDET`). es8323
+registers on `\Callback\Rk3xSaradcJack`, asks for the current state, and
+from then on handles every change the way it handles a GPIO edge: the amplifier
+gate and `CSAudioEndpointJackState` to csaudiork3x. Until the SARADC driver
+answers, or when it is not installed, the endpoint stays plugged. It writes
+`JackSaradc` (1 when following rk3xsaradc) and `JackSaradcStates` next to the
+other `Jack*` values. `JackDetect` = 0 turns this off too. Not run on a board.
+
 ## What is not done
 
 - Jack detection is written (above) and not yet run on the board.
