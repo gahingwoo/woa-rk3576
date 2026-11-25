@@ -35,7 +35,9 @@ in CI; the parser and the register builder also run on Linux with no decoder
 | [lib/vdpu383_vp9_probs.c](lib/vdpu383_vp9_probs.c), [lib/v383_dxva_vp9.h](lib/v383_dxva_vp9.h) | the VP9 default and key-frame probabilities (mainline v4l2-vp9.c, GPL-2.0); the DXVA VP9 structures, dxva.h's layout |
 | [driver.c](driver.c), [warmup.c](warmup.c) | the KMDF driver for `ACPI\RKCP0383` |
 | [vdpu383_ioctl.h](vdpu383_ioctl.h) | the driver's interface (`\\.\VDPU383`) |
-| [../../../tools/vdpu383test](../../../tools/vdpu383test) | the test program and its H.264, HEVC and VP9 (IVF) parsers |
+| [lib/vdpu383_av1.c](lib/vdpu383_av1.c) | AV1 Main (8 and 10 bit 4:2:0): DXVA_PicParams_AV1 to registers and the 672-byte global record, ported from MPP's hal_av1d_vdpu383.c and hal_av1d_com.c (MIT), byte for byte equal to MPP's packer. The decoder parses the frame's OBUs and keeps the CDFs itself (per-surface CDF and segment map buffers); the builder keeps per surface what DXVA does not say about the reference slots (V383_Av1State) and can wrap DXVA tile data in OBUs. Not run on the board |
+| [lib/vdpu383_av1_cdf.c](lib/vdpu383_av1_cdf.c), [lib/v383_dxva_av1.h](lib/v383_dxva_av1.h) | the decoder's default AV1 CDF tables (MPP, MIT); the DXVA AV1 structures, dxva.h's layout |
+| [../../../tools/vdpu383test](../../../tools/vdpu383test) | the test program and its H.264, HEVC, VP9 and AV1 (IVF) parsers |
 | [../../../tools/vdpu383-capture](../../../tools/vdpu383-capture) | what mainline Linux does with the same clips, and a register diff |
 
 The firmware side is edk2-rk3576 branch `vdpu383-acpi-v2` (the old
@@ -377,6 +379,50 @@ is the one expected to tell them apart.
 Send back on failure: `vp9-results\vp9-results.txt`, the first failing
 stream's `NAME.txt`, then `vdpu383test decode NAME.ivf --frame-md5 --regs -n 4 > win.txt`
 and `vdpu383test info`. FFmpeg's per-frame MD5s are in the kit's
+`framemd5\NAME.framemd5`.
+
+### 8. AV1 Main conformance (branch `vdpu383-av1`)
+
+Streams: the 17 IVF files of FFmpeg's fate-suite `av1-test-vectors/` and
+`av1/` (8 and 10 bit, film grain, SVC, frame size changes, switch frame,
+non-uniform tiles, short reference signalling) and 7 made with libaom and
+SVT-AV1 (segmentation, delta q, 4 x 2 tiles, loop restoration with
+quantizer matrices, sb64, 10 bit, SVT film grain), listed in
+[av1-conformance.txt](../../../tools/vdpu383test/av1-conformance.txt)
+with dav1d's MD5 through FFmpeg 6.1.1, with and without film grain. Off the
+board, on Linux with `--null`, for every stream and in all three stream
+modes (the file's OBUs; DXVA only, tiles in an OBU_TILE_GROUP; DXVA only,
+in an OBU_FRAME): dav1d's frame count; the frame header parser equal to
+FFmpeg's trace_headers on 23009 values over 529 frames, and the global
+motion parameters re-derived from the trace's coded values equal on 16464;
+every address register inside the tool's buffers; ASan and UBSan clean;
+the global record byte for byte what MPP's vdpu38x_av1d_uncomp_hdr()
+writes for the same frame (checked off-board against MPP's code, in both
+the parser and the DXVA-only mode; `selftest` keeps an MD5). CI runs the 17
+fate-suite streams. Nothing of it has run on the decoder.
+
+vdpu383test with AV1: CI artifact `rk3576-woa-vdpu383test-arm64` of branch
+`vdpu383-av1`; vdpu383.sys unchanged. As administrator:
+
+```
+vdpu383test decode D:\av1\streams\av1-1-b8-02-allintra.ivf --frame-md5 -n 2
+powershell -ExecutionPolicy Bypass -File av1-conformance.ps1 -Dir D:\av1\streams
+powershell -ExecutionPolicy Bypass -File av1-conformance.ps1 -Dir D:\av1\streams -DxvaOnly -Out .\av1-dxva
+powershell -ExecutionPolicy Bypass -File av1-conformance.ps1 -Dir D:\av1\streams -DxvaOnly -Synth 1 -Out .\av1-dxva-frame
+```
+
+In that order: allintra (key frames only), cdfupdate and mv (inter, CDFs
+carried between frames), mfmv (motion field projection), then the rest.
+`GRAIN-OFF` means the frames equal dav1d's without film grain: the decoder
+did not apply the grain (or not like dav1d). The first run is the one MPP
+makes (the file's OBUs, frame header size given); the two `-DxvaOnly` runs
+tell whether a D3D11 driver, which has only the tile data, can feed the
+decoder at all, and which wrapping it takes. If neither does, the D3D11 path
+for AV1 needs the frame header bits, which DXVA does not carry.
+
+Send back on failure: `av1-results\av1-results.txt`, the first failing
+stream's `NAME.txt`, `vdpu383test decode NAME.ivf --frame-md5 --regs -n 3 > win.txt`
+and `vdpu383test info`; dav1d's per-frame MD5s are in the kit's
 `framemd5\NAME.framemd5`.
 
 ### Linux reference capture

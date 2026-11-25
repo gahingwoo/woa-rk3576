@@ -89,9 +89,9 @@ jobs:
           L=drivers/video/vdpu383/lib
           T=tools/vdpu383test
           gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Werror \
-              -o vdpu383test $T/main.c $T/h264parse.c $T/hevcparse.c $T/vp9parse.c $T/dev.c $T/md5.c $T/dxva_check.c \
-              $L/vdpu383_h264.c $L/vdpu383_cabac.c $L/vdpu383_hevc.c $L/vdpu383_hevc_cabac.c \
-              $L/vdpu383_vp9.c $L/vdpu383_vp9_probs.c
+              -o vdpu383test $T/main.c $T/h264parse.c $T/hevcparse.c $T/vp9parse.c $T/av1parse.c $T/dev.c $T/md5.c \
+              $T/dxva_check.c $L/vdpu383_h264.c $L/vdpu383_cabac.c $L/vdpu383_hevc.c $L/vdpu383_hevc_cabac.c \
+              $L/vdpu383_vp9.c $L/vdpu383_vp9_probs.c $L/vdpu383_av1.c $L/vdpu383_av1_cdf.c
           ./vdpu383test selftest
           # the library alone, freestanding: no libc headers, no floats
           gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -mgeneral-regs-only -Wall -Wextra -Werror \
@@ -103,6 +103,9 @@ jobs:
           gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -mgeneral-regs-only -Wall -Wextra -Werror \
               -c $L/vdpu383_vp9.c -o /dev/null
           gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -c $L/vdpu383_vp9_probs.c -o /dev/null
+          gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -mgeneral-regs-only -Wall -Wextra -Werror \
+              -c $L/vdpu383_av1.c -o /dev/null
+          gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -c $L/vdpu383_av1_cdf.c -o /dev/null
       - name: HEVC conformance streams through the parser and the register builder (no device)
         run: |
           # FFmpeg's fate-suite copies of the JCT-VC conformance streams. Each
@@ -177,6 +180,43 @@ jobs:
           vp90-2-trac3849 10
           vp90-2-trac4359 4
           vp92-2-20-10bit-yuv420 10
+          LIST
+          exit $fail
+      - name: AV1 test vectors through the parser and the register builder (no device)
+        run: |
+          # FFmpeg's fate-suite AV1 vectors (av1-test-vectors/ and av1/), IVF.
+          # Frame counts are dav1d's; every frame's address registers must
+          # point into the tool's buffers, with the frame's OBUs and with the
+          # tile data wrapped as a D3D11 driver would have to (both ways).
+          set -eu
+          mkdir -p av1 && cd av1
+          fail=0
+          while read -r dir name frames; do
+            curl -sfL --retry 3 -o "$name.ivf" "https://fate-suite.ffmpeg.org/$dir/$name.ivf"
+            for mode in "" --dxva-only "--dxva-only --av1-synth 1"; do
+              out=$(../vdpu383test --null decode "$name.ivf" $mode) || { echo "$name: exit $?"; fail=1; }
+              echo "$out" | grep -E '^(av1|address check)' | sed "s/^/$name ${mode:-parser}: /"
+              echo "$out" | grep -q "frames out $frames," || { echo "$name: expected $frames frames"; fail=1; }
+              echo "$out" | grep -q "address check: 0 frames" || fail=1
+            done
+          done <<'LIST'
+          av1-test-vectors av1-1-b8-02-allintra 39
+          av1-test-vectors av1-1-b8-03-sizedown 20
+          av1-test-vectors av1-1-b8-03-sizeup 20
+          av1-test-vectors av1-1-b8-04-cdfupdate 2
+          av1-test-vectors av1-1-b8-05-mv 4
+          av1-test-vectors av1-1-b8-06-mfmv 4
+          av1-test-vectors av1-1-b8-22-svc-L1T2 8
+          av1-test-vectors av1-1-b8-22-svc-L2T1 8
+          av1-test-vectors av1-1-b8-22-svc-L2T2 8
+          av1-test-vectors av1-1-b8-23-film_grain-50 10
+          av1-test-vectors av1-1-b10-23-film_grain-50 10
+          av1 decode_model 24
+          av1 film_grain 10
+          av1 frames_refs_short_signaling 50
+          av1 non_uniform_tiling 24
+          av1 seq_hdr_op_param_info 64
+          av1 switch_frame 32
           LIST
           exit $fail
 

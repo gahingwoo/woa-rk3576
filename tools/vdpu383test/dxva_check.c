@@ -15,6 +15,7 @@
 #include "../../drivers/video/vdpu383/lib/v383_dxva.h"
 #include "../../drivers/video/vdpu383/lib/v383_dxva_hevc.h"
 #include "../../drivers/video/vdpu383/lib/v383_dxva_vp9.h"
+#include "../../drivers/video/vdpu383/lib/v383_dxva_av1.h"
 
 #define CAT2(a, b) a##b
 #define CAT(a, b) CAT2(a, b)
@@ -113,6 +114,61 @@ SAME_OFF_VP9(uncompressed_header_size_byte_aligned);
 SAME_OFF_VP9(first_partition_size);
 SAME_OFF_VP9(StatusReportFeedbackNumber);
 
+#define SAME_OFF_AV1(f) typedef char CAT(aoff_check_, __LINE__)[ \
+    (offsetof(DXVA_PicParams_AV1, f) == offsetof(V383_DXVA_PicParams_AV1, f)) ? 1 : -1]
+
+SAME_SIZE(DXVA_PicParams_AV1, V383_DXVA_PicParams_AV1);
+SAME_SIZE(DXVA_PicEntry_AV1, V383_DXVA_PicEntry_AV1);
+SAME_SIZE(DXVA_Tile_AV1, V383_DXVA_Tile_AV1);
+SAME_OFF_AV1(max_width);
+SAME_OFF_AV1(CurrPicTextureIndex);
+SAME_OFF_AV1(seq_profile);
+SAME_OFF_AV1(tiles);
+typedef char av1_coding_off[(offsetof(DXVA_PicParams_AV1, coding) ==
+                             offsetof(V383_DXVA_PicParams_AV1, CodingParamToolFlags)) ? 1 : -1];
+typedef char av1_format_off[(offsetof(DXVA_PicParams_AV1, format) ==
+                             offsetof(V383_DXVA_PicParams_AV1, FormatAndPictureInfoFlags)) ? 1 : -1];
+SAME_OFF_AV1(primary_ref_frame);
+SAME_OFF_AV1(order_hint_bits);
+SAME_OFF_AV1(frame_refs);
+SAME_OFF_AV1(RefFrameMapTextureIndex);
+SAME_OFF_AV1(loop_filter);
+SAME_OFF_AV1(quantization);
+SAME_OFF_AV1(cdef);
+SAME_OFF_AV1(interp_filter);
+SAME_OFF_AV1(segmentation);
+SAME_OFF_AV1(film_grain);
+SAME_OFF_AV1(StatusReportFeedbackNumber);
+typedef char av1_lf_off[(offsetof(DXVA_PicParams_AV1, loop_filter.log2_restoration_unit_size) ==
+                         offsetof(V383_DXVA_PicParams_AV1, loop_filter.log2_restoration_unit_size)) ? 1 : -1];
+typedef char av1_seg_off[(offsetof(DXVA_PicParams_AV1, segmentation.feature_data) ==
+                          offsetof(V383_DXVA_PicParams_AV1, segmentation.feature_data)) ? 1 : -1];
+typedef char av1_fg_off[(offsetof(DXVA_PicParams_AV1, film_grain.cr_offset) ==
+                         offsetof(V383_DXVA_PicParams_AV1, film_grain.cr_offset)) ? 1 : -1];
+
+/* the bit order of the AV1 flag words */
+static int v383_dxva_av1_bit_order_check(void)
+{
+    DXVA_PicParams_AV1 pp;
+    memset(&pp, 0, sizeof(pp));
+    pp.coding.tx_mode = 2;
+    pp.coding.reference_frame_update = 1;
+    pp.format.frame_type = 3;
+    pp.format.mono_chrome = 1;
+    pp.film_grain.grain_scale_shift = 2;
+    pp.film_grain.matrix_coeff_is_identity = 1;
+    pp.frame_refs[3].wmtype = 2;
+    pp.cdef.y_strengths[1].secondary = 3;
+    return V383_AV1_TX_MODE((V383_DXVA_PicParams_AV1 *)&pp) == 2 &&
+           V383_AV1_REF_FRAME_UPDATE((V383_DXVA_PicParams_AV1 *)&pp) &&
+           V383_AV1_FRAME_TYPE((V383_DXVA_PicParams_AV1 *)&pp) == 3 &&
+           V383_AV1_MONO_CHROME((V383_DXVA_PicParams_AV1 *)&pp) &&
+           V383_AV1_FG_GRAIN_SCALE_SHIFT((V383_DXVA_PicParams_AV1 *)&pp) == 2 &&
+           V383_AV1_FG_MATRIX_IDENTITY((V383_DXVA_PicParams_AV1 *)&pp) &&
+           V383_AV1_WM_TYPE(((V383_DXVA_PicParams_AV1 *)&pp)->frame_refs[3]) == 2 &&
+           V383_AV1_CDEF_SEC(((V383_DXVA_PicParams_AV1 *)&pp)->cdef.y_strengths[1]) == 3;
+}
+
 /* the bit order of the VP9 flag bytes and words */
 static int v383_dxva_vp9_bit_order_check(void)
 {
@@ -145,7 +201,8 @@ static int v383_dxva_bit_order_check(void)
 
 int v383_dxva_check(void)
 {
-    return v383_dxva_bit_order_check() && v383_dxva_hevc_bit_order_check() && v383_dxva_vp9_bit_order_check();
+    return v383_dxva_bit_order_check() && v383_dxva_hevc_bit_order_check() && v383_dxva_vp9_bit_order_check() &&
+           v383_dxva_av1_bit_order_check();
 }
 #else
 typedef int v383_dxva_check_not_on_this_platform;
