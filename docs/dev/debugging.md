@@ -76,3 +76,9 @@ The descriptors in these binary lists are 20 bytes, not the 16 the struct
 suggests. `reg query` prints each value on one line, so pick it by line number,
 and strip to hex only after removing the value name: `BootConfig` and
 `REG_RESOURCE_LIST` contain hex letters too.
+
+## Crash dumps
+
+A bugcheck only leaves a dump if the eMMC driver's crash dump copy works.
+How it works on these boards, what to check, and the one-shot test:
+[crashdump.md](crashdump.md).

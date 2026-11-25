@@ -129,6 +129,7 @@ Environment:
 //
 
 #define DWCMSHC_CARD_IS_EMMC                         (1 << 0)
+#define DWCMSHC_EMMC_RST_N                           (1 << 2)
 
 //
 // Bits defined in DWCMSHC_EMMC_DLL_STRBIN
@@ -1433,8 +1434,39 @@ typedef struct _SDHC_EXTENSION {
     //
 
     BOOLEAN CrashdumpMode;
-      
+
+    //
+    // CCLK_SRC_EMMC, mapped. The running driver maps it itself; the crash
+    // dump instance borrows the running driver's mapping (see
+    // SdhcCrashdumpBorrowCru). NULL when neither is available, and then the
+    // card clock stays at whatever rate the CRU holds.
+    //
+
+    volatile ULONG *CruClkSel;
+
 } SDHC_EXTENSION, *PSDHC_EXTENSION;
+
+//
+// What the running driver leaves for its crash dump copy.
+//
+// Windows writes a crash dump through a second copy of this driver
+// (dump_dwcsdhc.sys), started at bugcheck time at HIGH_LEVEL, where nothing
+// can be mapped. dumpsdport then identifies the card again from CMD0 and
+// asks for 400 kHz, which only the CRU can deliver. So the running driver
+// publishes its CRU mapping in this structure, and the dump copy finds it
+// through the running FDO's driver object and the image both copies share.
+//
+
+#define DWCSDHC_CRASHDUMP_SHARE_MAGIC   0x504D4443  // 'CDMP'
+#define DWCSDHC_CRASHDUMP_SHARE_VERSION 1
+
+typedef struct _DWCSDHC_CRASHDUMP_SHARE {
+    volatile ULONG Magic;
+    ULONG Version;
+    ULONGLONG CruPhysical;
+    volatile ULONG *CruClkSel;
+    const struct _DWCSDHC_CRASHDUMP_SHARE *Self;
+} DWCSDHC_CRASHDUMP_SHARE, *PDWCSDHC_CRASHDUMP_SHARE;
 
 // ---------------------------------------------------------------------------
 // PCI Config definitions
