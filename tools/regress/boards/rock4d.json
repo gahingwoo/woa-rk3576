@@ -10,10 +10,15 @@
   ],
   "gpu": { "clockMHz": 594, "wddmVersion": 20, "tempMaxC": 90, "note": "775 mV raise not ported: 594 MHz" },
   "display": { "refreshHz": 60 },
-  "audio": { "hdmi": true, "analog": true },
+  "audio": {
+    "hdmi": true, "analog": true,
+    "hdmiEndpoint": { "filter": "\\\\topologyhdmi", "name": "HDMI|Digital Output", "adapter": "Rockchip I2S Audio" },
+    "analogEndpoint": { "filter": "\\\\topologyheadphones", "name": "Headphone", "adapter": "Rockchip I2S Audio" }
+  },
   "network": { "ethernet": true, "wifi": false, "bluetooth": false },
   "usb": { "controllers": 2, "hub": false },
   "storage": { "emmc": false, "sd": "optional", "nvme": "optional" },
+  "npuCores": 2,
   "npu": true,
   "vdec": true,
   "thermal": { "zones": 3, "maxC": 90 },

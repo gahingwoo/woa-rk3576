@@ -8,10 +8,16 @@
   "devmgrAllow": [],
   "gpu": { "clockMHz": 594, "wddmVersion": 20, "tempMaxC": 90, "note": "no 775 mV raise on this board: 594 MHz" },
   "display": { "refreshHz": 60 },
-  "audio": { "hdmi": true, "analog": "optional" },
+  "audio": {
+    "hdmi": true, "analog": "optional",
+    "hdmiSai": "ACPI\\RKCP3004\\6",
+    "hdmiEndpoint": { "filter": "\\\\topologyhdmi", "name": "HDMI|Digital Output", "adapter": "Rockchip I2S Audio" },
+    "analogEndpoint": { "filter": "\\\\topologyheadphones", "name": "Headphone", "adapter": "Rockchip I2S Audio" }
+  },
   "network": { "ethernet": true, "wifi": false, "bluetooth": false },
   "usb": { "controllers": 2, "hub": true },
   "storage": { "emmc": true, "sd": "optional", "nvme": true },
+  "npuCores": 2,
   "npu": "optional",
   "vdec": true,
   "thermal": { "zones": 3, "maxC": 90 },

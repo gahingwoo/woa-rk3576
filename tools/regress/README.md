@@ -58,7 +58,7 @@ sudo ./regress.sh [--board auto|tspi3m|cm5io|rock4d] [--quick] [--out DIR]
 | `-ToolsDir DIR` | where `rknputest.exe` and `vdpu383test.exe` are; also searched: `bin\` next to the script, `%ProgramFiles%\RK3576`, `%ProgramFiles%\RK3576\npu` (the RK3576 tools bundle), `PATH` |
 | `-User NAME` | the desktop user for the session checks (default: the signed-in user) |
 | `-ExpectFirmware REGEX` | also require the firmware version string to match, for example a release tag |
-| `-Require nvme,sd,...` | treat optional parts as required for this run: `nvme`, `sd`, `emmc`, `wifi`, `bluetooth`, `npu`, `vdec`, `analog`, `hdmiaudio` |
+| `-Require nvme,sd,...` | treat optional parts as required for this run: `nvme`, `sd`, `emmc`, `wifi`, `bluetooth`, `npu`, `vdec`, `analog`, `hdmiaudio`, and `jack` (the headphone endpoint must be active: plug something into the jack) |
 | `-FetchStreams` | download missing decode streams on the board itself |
 | `-DryRun -Mock FILE` | evaluate the checks against recorded facts (see Tests) |
 
@@ -86,13 +86,13 @@ enabled) or `false` (N-A). Edit the manifest when a board changes.
 | `gpu.temp` | `\RK3576 GPU(*)\Temperature (C)` between 10 and 90 C | |
 | `display.mode` | in the user's session (`EnumDisplaySettings`): the current mode is the largest one offered at 59 or 60 Hz, and runs at 59 or 60 Hz | |
 | `display.tdr` | no Display event 4101 (driver reset) in the System log since the run started; evaluated last | |
-| `audio.hdmi`, `audio.analog` | an audio endpoint named HDMI / Headphone with status OK. The HDMI endpoint needs a monitor with speakers | csaudiork3x endpoint names |
+| `audio.hdmi`, `audio.analog` | endpoints in every state through the MMDevice API (PnP's present endpoints when that fails). HDMI: an active render endpoint of the csaudiork3x device on the manifest's `hdmiSai` (`ACPI\RKCP3004\6`), found by its KS filter (`topologyhdmi`) or its name (`HDMI` or `Digital Output`); it needs a monitor with speakers. Analog, on a board with `analogCodec`: the codec (`ACPI\RKCP8388`) and the csaudiork3x device on `analogSai` started; an empty jack hides the headphone endpoint, so it is only reported unless `-Require jack`. Without `analogCodec`: an active headphone endpoint | manifest `audio.*Endpoint`, `hdmiSai`, `analogSai`, `analogCodec` |
 | `net.ethernet`, `net.gateway` | the adapter on `ACPI\RKCP6543` is Up with an IPv4 address; the default gateway answers a ping | |
 | `net.wifi`, `net.bluetooth` | TaishanPi 3M only: an 802.11 adapter (optional: its driver is on a branch); `RKCP4345` OK and a Bluetooth device OK | |
 | `usb.controllers`, `usb.devices` | at least two `ACPI\PNP0D10` xHCI controllers OK; the USB devices are listed, and on the CM5-IO the onboard hub must be there | |
 | `storage.emmc`, `storage.sd`, `storage.nvme` | a disk behind `ACPI\RKCP0D40` (eMMC), `ACPI\RKCPFE2C` (SD), on PCIe (NVMe); Healthy | |
 | `storage.rw` | 64 MiB (16 with `-Quick`) written to the system disk with write-through, read back, SHA-256 compared, deleted | Maskrom Studio's self-test |
-| `npu.info`, `npu.m3` | when `ACPI\RKCP3576` is there (the NPU setup option is on): bound to `rknpu`, `rknputest info` exits 0, `rknputest m3 --core both --iters 1` exits 0 (bit-exact) | woa-rk3576-npu `tools/rknputest` |
+| `npu.info`, `npu.m3` | when `ACPI\RKCP3576` is there (the NPU setup option is on): bound to `rknpu`, `rknputest info` exits 0 and reports the manifest's `npuCores` (2), `rknputest m3 --core both --iters 1` exits 0 (bit-exact) | woa-rk3576-npu `tools/rknputest` |
 | `vdec.warmup`, `vdec.<codec>.<stream>` | when `ACPI\RKCP0383` is there: bound to `vdpu383`, `vdpu383test warmup` exits 0, then every stream of [`streams.txt`](streams.txt) through `vdpu383test decode` with frame count, hardware errors 0 and the MD5 of the output | `tools/vdpu383test/hevc-conformance.ps1` |
 | `thermal.zones` | at least three ACPI thermal zones, each between 0 and 90 C | rk-monitor's counter |
 | `time.clock`, `time.rtc` | the year is 2026..2040 and the clock is within 120 s of `time.windows.com` (`w32tm /stripchart`, which reads only); `HYMB0001` OK | |
