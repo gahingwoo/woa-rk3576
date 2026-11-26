@@ -444,6 +444,7 @@ typedef struct _MSHC_IDMAC_DESCRIPTOR {
 #define SDCMD_GO_IDLE_STATE             0
 #define SDCMD_SEND_RELATIVE_ADDR        3
 #define SDCMD_IO_SEND_OP_COND           5
+#define SDCMD_SELECT_CARD               7
 #define SDCMD_VOLTAGE_SWITCH            11
 #define SDCMD_STOP_TRANSMISSION         12
 #define SDCMD_SEND_STATUS               13
@@ -452,6 +453,13 @@ typedef struct _MSHC_IDMAC_DESCRIPTOR {
 #define SDCMD_EMMC_SEND_TUNING_BLOCK    21
 
 typedef struct _MSHC_EXTENSION MSHC_EXTENSION, *PMSHC_EXTENSION;
+
+//
+// Interrupt time (100 ns units, any IRQL) for the SdioDiag timings.
+//
+#define MSHC_DIAG_NOW()             ((LONG64)KeQueryInterruptTime())
+#define MSHC_DIAG_MS(_Time)         ((ULONG)((ULONG64)(_Time) / 10000ULL))
+#define MSHC_DIAG_US(_Delta)        ((ULONG64)(_Delta) / 10ULL)
 
 //
 // Platform-specific abstractions (callbacks and info)
@@ -641,6 +649,42 @@ struct _MSHC_EXTENSION {
         volatile LONG DeferredKicks;        // breadcrumb update above DISPATCH
         ULONG LastRefusedCmd;
         ULONG LastRefusedStatus;
+
+        //
+        // Version 3 (branch sdio-boot-time): where the boot time goes.
+        // Times are milliseconds since boot (interrupt time), durations
+        // microseconds.  All of it is cheap enough for the ISR: plain
+        // stores and interlocked adds.
+        //
+        ULONG InitMs;                       // MshcSlotInitialize
+        ULONG FirstCmdMs;                   // first command sdport issued
+        ULONG LastCmdMs;
+        ULONG Cmd7Ms;                       // first CMD7: sdbus selected the card
+        ULONG Bus4BitMs;                    // first switch to a 4-bit bus
+        volatile LONG IorxReads;            // CMD52 reads of CCCR 0x03 (IORx)
+        ULONG IorxFirstMs;
+        ULONG IorxLastMs;
+        volatile LONG IoexWrites;           // CMD52 writes of CCCR 0x02 (IOEx)
+        ULONG IoexLastMs;
+        ULONG LastIoexValue;
+        volatile LONG CmdTimeouts;          // RINTSTS.RTO
+        volatile LONG DataTimeouts;         // RINTSTS.DRTO
+        volatile LONG ResetsAll;            // SdResetHost by type: sdport
+        volatile LONG ResetsCmd;            // resets after a failed or
+        volatile LONG ResetsDat;            // timed-out request
+        volatile LONG AbandonedCmds;        // reset with an sdport request on the bus
+        ULONG MaxAbandonedMs;               // how long that request had been there
+        volatile LONG64 CmdIssueTime;       // the sdport request on the bus (100 ns)
+        volatile LONG64 TotalCmdUs;         // issue to completion, summed
+        ULONG MaxCmdUs;
+        ULONG MaxCmdIndex;
+        volatile LONG SlowCmds;             // completions after 100 ms or more
+        ULONG LastSlowCmd;
+        volatile LONG64 LocalWaitUs;        // MshcIssueRequestSynchronously
+        volatile LONG64 BusyWaitUs;         // MshcWaitDataIdle when DAT0 was busy
+        volatile LONG Writes;               // registry snapshots
+        volatile LONG Flushes;              // of which flushed to disk
+        LONG64 LastFlushTime;
     } Diag;
 
     //
@@ -922,6 +966,13 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 MshcSdioDiagCleanup(
     _In_ PMSHC_EXTENSION MshcExtension
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID
+MshcDiagRequestDone(
+    _In_ PMSHC_EXTENSION MshcExtension,
+    _In_ PSDPORT_REQUEST Request
     );
 
 _IRQL_requires_max_(DISPATCH_LEVEL)

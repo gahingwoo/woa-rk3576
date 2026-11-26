@@ -333,6 +333,7 @@ MshcSlotInitialize(
 
         // SDIO controller only: registry breadcrumbs for the Wi-Fi bring-up.
         if (MshcExtension->IsSdio) {
+            MshcExtension->Diag.InitMs = MSHC_DIAG_MS(MSHC_DIAG_NOW());
             MshcSdioDiagInit(MshcExtension, MiniportFdo);
         }
 
@@ -603,6 +604,24 @@ MshcSlotIssueBusOperation(
         MshcExtension->Diag.LastBusOpType = (ULONG)BusOperation->Type;
         if (BusOperation->Type == SdSetBusWidth) {
             MshcExtension->Diag.BusWidth = (ULONG)BusOperation->Parameters.BusWidth;
+            if ((BusOperation->Parameters.BusWidth == SdBusWidth4Bit) &&
+                (MshcExtension->Diag.Bus4BitMs == 0)) {
+                MshcExtension->Diag.Bus4BitMs = MSHC_DIAG_MS(MSHC_DIAG_NOW());
+            }
+        } else if (BusOperation->Type == SdResetHost) {
+            switch (BusOperation->Parameters.ResetType) {
+            case SdResetTypeAll:
+                InterlockedIncrement(&MshcExtension->Diag.ResetsAll);
+                break;
+            case SdResetTypeCmd:
+                InterlockedIncrement(&MshcExtension->Diag.ResetsCmd);
+                break;
+            case SdResetTypeDat:
+                InterlockedIncrement(&MshcExtension->Diag.ResetsDat);
+                break;
+            default:
+                break;
+            }
         }
         MshcSdioDiagKick(MshcExtension);
     }
@@ -983,6 +1002,12 @@ MshcSlotInterrupt(
         if (Rintsts & MSHC_INT_DATA_ERROR) {
             InterlockedIncrement(&MshcExtension->Diag.DataErrors);
         }
+        if (Rintsts & MSHC_INT_RTO) {
+            InterlockedIncrement(&MshcExtension->Diag.CmdTimeouts);
+        }
+        if (Rintsts & MSHC_INT_DRTO) {
+            InterlockedIncrement(&MshcExtension->Diag.DataTimeouts);
+        }
     }
 
     MshcConvertIntStatusToStandardEvents(Rintsts, Idsts, Events, Errors);
@@ -1069,15 +1094,58 @@ MshcSlotIssueRequest(
     if (MshcExtension->IsSdio &&
         ((Request->Type == SdRequestTypeCommandNoTransfer) ||
          (Request->Type == SdRequestTypeCommandWithTransfer))) {
+        LONG64 Now = MSHC_DIAG_NOW();
+        ULONG NowMs = MSHC_DIAG_MS(Now);
+        ULONG Arg = Request->Command.Argument;
+
         InterlockedIncrement(&MshcExtension->Diag.Commands);
         MshcExtension->Diag.LastCmd = Request->Command.Index;
-        MshcExtension->Diag.LastArg = Request->Command.Argument;
+        MshcExtension->Diag.LastArg = Arg;
+        if (MshcExtension->Diag.FirstCmdMs == 0) {
+            MshcExtension->Diag.FirstCmdMs = NowMs;
+        }
+        MshcExtension->Diag.LastCmdMs = NowMs;
+
+        //
+        // Time the requests sdport issues, from here to MshcCompleteRequest
+        // handing them back (or to the reset that abandons them).
+        //
+        if (Request != MshcExtension->LocalRequest) {
+            InterlockedExchange64(&MshcExtension->Diag.CmdIssueTime, Now);
+        }
+
         switch (Request->Command.Index) {
         case SDCMD_IO_SEND_OP_COND:
             InterlockedIncrement(&MshcExtension->Diag.Cmd5Count);
             break;
+        case SDCMD_SELECT_CARD:
+            if (MshcExtension->Diag.Cmd7Ms == 0) {
+                MshcExtension->Diag.Cmd7Ms = NowMs;
+            }
+            break;
         case SDCMD_IO_RW_DIRECT:
             InterlockedIncrement(&MshcExtension->Diag.Cmd52Count);
+
+            //
+            // Function 0, CCCR 0x03 read: IORx, what sdbus polls (up to
+            // 2000 times, a 1 ms timer apart) after it sets a function's
+            // IOEx bit at PDO start.  CCCR 0x02 write: IOEx itself.
+            //
+            if (((Arg >> 28) & 0x7) == 0) {
+                ULONG Address = (Arg >> 9) & 0x1FFFF;
+                BOOLEAN Write = (Arg & 0x80000000UL) != 0;
+
+                if ((Address == 0x03) && !Write) {
+                    if (InterlockedIncrement(&MshcExtension->Diag.IorxReads) == 1) {
+                        MshcExtension->Diag.IorxFirstMs = NowMs;
+                    }
+                    MshcExtension->Diag.IorxLastMs = NowMs;
+                } else if ((Address == 0x02) && Write) {
+                    InterlockedIncrement(&MshcExtension->Diag.IoexWrites);
+                    MshcExtension->Diag.IoexLastMs = NowMs;
+                    MshcExtension->Diag.LastIoexValue = Arg & 0xFF;
+                }
+            }
             break;
         case SDCMD_IO_RW_EXTENDED:
             InterlockedIncrement(&MshcExtension->Diag.Cmd53Count);
@@ -1603,6 +1671,19 @@ MshcResetHost(
     // bus is not to be completed to sdport after this.
     //
     InterlockedExchangePointer((PVOID volatile *)&MshcExtension->SdportRequest, NULL);
+
+    if (MshcExtension->IsSdio) {
+        LONG64 Issued = InterlockedExchange64(&MshcExtension->Diag.CmdIssueTime, 0);
+
+        if (Issued != 0) {
+            ULONG AgeMs = MSHC_DIAG_MS(MSHC_DIAG_NOW() - Issued);
+
+            InterlockedIncrement(&MshcExtension->Diag.AbandonedCmds);
+            if (AgeMs > MshcExtension->Diag.MaxAbandonedMs) {
+                MshcExtension->Diag.MaxAbandonedMs = AgeMs;
+            }
+        }
+    }
 
     //
     // Better reset everything no matter the requested type, just in case.
@@ -2909,6 +2990,15 @@ MshcCompleteRequest(
     // a pointer it does not own, or one it owns but already had back, ends
     // in a read through a bogus slot (0xD1 in SdhostCompleteRequest).
     //
+    // SdioDiag first: how long the request sdport issued was on the bus.
+    // Only a reading; the compare-exchange below still decides.
+    //
+    if (MshcExtension->IsSdio && (Request != NULL) &&
+        (InterlockedCompareExchangePointer(
+            (PVOID volatile *)&MshcExtension->SdportRequest, NULL, NULL) == Request)) {
+        MshcDiagRequestDone(MshcExtension, Request);
+    }
+
     if ((Request != NULL) &&
         (InterlockedCompareExchangePointer(
             (PVOID volatile *)&MshcExtension->SdportRequest, NULL, Request) == Request)) {
@@ -3114,6 +3204,7 @@ MshcIssueRequestSynchronously(
 {
     NTSTATUS Status;
     ULONG Retry;
+    LONG64 Started;
 
     const ULONG PollWaitUs = 10;
 
@@ -3123,6 +3214,8 @@ MshcIssueRequestSynchronously(
     //
     InterlockedExchangePointer((PVOID volatile *)&MshcExtension->LocalRequest, Request);
     InterlockedExchange(&MshcExtension->LocalRequestPending, 1);
+
+    Started = MSHC_DIAG_NOW();
 
     Status = MshcSlotIssueRequest(MshcExtension, Request);
     if (Status != STATUS_PENDING) {
@@ -3175,6 +3268,12 @@ MshcIssueRequestSynchronously(
     // below issues local commands of its own, so it comes after this.
     //
     MshcEndLocalRequest(MshcExtension, Request);
+
+    if (MshcExtension->IsSdio) {
+        InterlockedAdd64(
+            &MshcExtension->Diag.LocalWaitUs,
+            (LONG64)MSHC_DIAG_US(MSHC_DIAG_NOW() - Started));
+    }
 
     if (ErrorRecovery && !NT_SUCCESS(Request->Status)) {
         SDPORT_BUS_OPERATION BusOperation;
@@ -3484,13 +3583,34 @@ MshcWaitDataIdle(
 {
     ULONG Status;
     ULONG Retry;
+    LONG64 Started;
+
+    Status = MshcReadRegister(MshcExtension, MSHC_STATUS);
+    if ((Status & MSHC_STATUS_DATA_BUSY) == 0) {
+        return STATUS_SUCCESS;
+    }
+
+    //
+    // Busy: count how long, on the SDIO controller.
+    //
+    Started = MSHC_DIAG_NOW();
 
     for (Retry = 100000; Retry > 0; Retry--) {
         Status = MshcReadRegister(MshcExtension, MSHC_STATUS);
         if ((Status & MSHC_STATUS_DATA_BUSY) == 0) {
-            return STATUS_SUCCESS;
+            break;
         }
         SdPortWait(1);
+    }
+
+    if (MshcExtension->IsSdio) {
+        InterlockedAdd64(
+            &MshcExtension->Diag.BusyWaitUs,
+            (LONG64)MSHC_DIAG_US(MSHC_DIAG_NOW() - Started));
+    }
+
+    if (Retry > 0) {
+        return STATUS_SUCCESS;
     }
 
     MSHC_LOG_ERROR(MshcExtension->LogHandle, MshcExtension, "Timeout (STATUS:%lx)", Status);

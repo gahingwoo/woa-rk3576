@@ -20,9 +20,13 @@ Abstract:
 
         HKLM\SYSTEM\CurrentControlSet\Services\dwcmshc\SdioDiag
 
-    and flushes the key, so the values survive a hang or a bugcheck on a full
-    Windows install.  At most one work item is in flight, and it waits 200 ms
-    before taking its snapshot, so a burst of commands costs one write.
+    At most one work item is in flight, and it waits a second before taking
+    its snapshot, so a burst of commands costs one write.  The key is flushed
+    to disk on the first write, at cleanup, and otherwise at most once every
+    ten seconds: during boot the registry's lazy flush is held off, so every
+    ZwFlushKey writes the SYSTEM hive out and blocks other writers to it
+    (PnP, starting devices) while it does.  Version 2 flushed up to five
+    times a second for as long as the card was busy.
 
 Environment:
 
@@ -43,7 +47,14 @@ Environment:
 // Bumped whenever the set of values changes, so a reading can be matched to
 // the build that wrote it.
 //
-#define SDIO_DIAG_VERSION   2
+#define SDIO_DIAG_VERSION   3
+
+//
+// Coalescing delay of the update work item, and the shortest interval
+// between two flushes of the key (100 ns units).
+//
+#define SDIO_DIAG_COALESCE_MS       1000
+#define SDIO_DIAG_FLUSH_INTERVAL    (10LL * 1000LL * 10000LL)
 
 static
 VOID
@@ -61,10 +72,27 @@ SdioDiagSetDword(
 
 static
 VOID
-SdioDiagWrite(
-    _In_ PMSHC_EXTENSION MshcExtension
+SdioDiagSetUs(
+    _In_ HANDLE Key,
+    _In_ PCWSTR Name,
+    _In_ LONG64 Microseconds
     )
 {
+    //
+    // A DWORD of microseconds runs out after 71 minutes; past that, say so.
+    //
+    SdioDiagSetDword(Key, Name, (Microseconds > 0xFFFFFFFFLL) ? 0xFFFFFFFFUL : (ULONG)Microseconds);
+}
+
+static
+VOID
+SdioDiagWrite(
+    _In_ PMSHC_EXTENSION MshcExtension,
+    _In_ BOOLEAN Flush
+    )
+{
+    LONG64 Now = MSHC_DIAG_NOW();
+
     UNICODE_STRING KeyPath = RTL_CONSTANT_STRING(SDIO_DIAG_KEY_PATH);
     OBJECT_ATTRIBUTES Attributes;
     HANDLE Key = NULL;
@@ -113,7 +141,43 @@ SdioDiagWrite(
     SdioDiagSetDword(Key, L"StaleLocalDpcs", (ULONG)MshcExtension->Diag.StaleLocalDpcs);
     SdioDiagSetDword(Key, L"DeferredKicks", (ULONG)MshcExtension->Diag.DeferredKicks);
 
-    (VOID)ZwFlushKey(Key);
+    //
+    // Version 3: timings (ms since boot) and the waits behind them.
+    //
+    SdioDiagSetDword(Key, L"SnapshotMs", MSHC_DIAG_MS(Now));
+    SdioDiagSetDword(Key, L"InitMs", MshcExtension->Diag.InitMs);
+    SdioDiagSetDword(Key, L"FirstCmdMs", MshcExtension->Diag.FirstCmdMs);
+    SdioDiagSetDword(Key, L"LastCmdMs", MshcExtension->Diag.LastCmdMs);
+    SdioDiagSetDword(Key, L"Cmd7Ms", MshcExtension->Diag.Cmd7Ms);
+    SdioDiagSetDword(Key, L"Bus4BitMs", MshcExtension->Diag.Bus4BitMs);
+    SdioDiagSetDword(Key, L"IorxReads", (ULONG)MshcExtension->Diag.IorxReads);
+    SdioDiagSetDword(Key, L"IorxFirstMs", MshcExtension->Diag.IorxFirstMs);
+    SdioDiagSetDword(Key, L"IorxLastMs", MshcExtension->Diag.IorxLastMs);
+    SdioDiagSetDword(Key, L"IoexWrites", (ULONG)MshcExtension->Diag.IoexWrites);
+    SdioDiagSetDword(Key, L"IoexLastMs", MshcExtension->Diag.IoexLastMs);
+    SdioDiagSetDword(Key, L"LastIoexValue", MshcExtension->Diag.LastIoexValue);
+    SdioDiagSetDword(Key, L"CmdTimeouts", (ULONG)MshcExtension->Diag.CmdTimeouts);
+    SdioDiagSetDword(Key, L"DataTimeouts", (ULONG)MshcExtension->Diag.DataTimeouts);
+    SdioDiagSetDword(Key, L"ResetsAll", (ULONG)MshcExtension->Diag.ResetsAll);
+    SdioDiagSetDword(Key, L"ResetsCmd", (ULONG)MshcExtension->Diag.ResetsCmd);
+    SdioDiagSetDword(Key, L"ResetsDat", (ULONG)MshcExtension->Diag.ResetsDat);
+    SdioDiagSetDword(Key, L"AbandonedCmds", (ULONG)MshcExtension->Diag.AbandonedCmds);
+    SdioDiagSetDword(Key, L"MaxAbandonedMs", MshcExtension->Diag.MaxAbandonedMs);
+    SdioDiagSetUs(Key, L"TotalCmdUs", MshcExtension->Diag.TotalCmdUs);
+    SdioDiagSetDword(Key, L"MaxCmdUs", MshcExtension->Diag.MaxCmdUs);
+    SdioDiagSetDword(Key, L"MaxCmdIndex", MshcExtension->Diag.MaxCmdIndex);
+    SdioDiagSetDword(Key, L"SlowCmds", (ULONG)MshcExtension->Diag.SlowCmds);
+    SdioDiagSetDword(Key, L"LastSlowCmd", MshcExtension->Diag.LastSlowCmd);
+    SdioDiagSetUs(Key, L"LocalWaitUs", MshcExtension->Diag.LocalWaitUs);
+    SdioDiagSetUs(Key, L"BusyWaitUs", MshcExtension->Diag.BusyWaitUs);
+    SdioDiagSetDword(Key, L"Writes", (ULONG)InterlockedIncrement(&MshcExtension->Diag.Writes));
+
+    if (Flush || (Now - MshcExtension->Diag.LastFlushTime >= SDIO_DIAG_FLUSH_INTERVAL)) {
+        MshcExtension->Diag.LastFlushTime = Now;
+        SdioDiagSetDword(Key, L"Flushes", (ULONG)InterlockedIncrement(&MshcExtension->Diag.Flushes));
+        (VOID)ZwFlushKey(Key);
+    }
+
     ZwClose(Key);
 }
 
@@ -136,9 +200,9 @@ SdioDiagWorker(
     }
 
     //
-    // Coalesce: whatever happens in the next 200 ms goes into this write.
+    // Coalesce: whatever happens in the next second goes into this write.
     //
-    Delay.QuadPart = -200LL * 10000LL;
+    Delay.QuadPart = -(LONG64)SDIO_DIAG_COALESCE_MS * 10000LL;
     (VOID)KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 
     //
@@ -147,7 +211,7 @@ SdioDiagWorker(
     //
     InterlockedExchange(&MshcExtension->Diag.FlushPending, 0);
 
-    SdioDiagWrite(MshcExtension);
+    SdioDiagWrite(MshcExtension, FALSE);
 
     //
     // Last touch of the extension: cleanup waits for this before it frees
@@ -174,7 +238,7 @@ MshcSdioDiagInit(
     // First write straight away: the key existing at all says the driver
     // bound the SDIO controller.
     //
-    SdioDiagWrite(MshcExtension);
+    SdioDiagWrite(MshcExtension, TRUE);
 }
 
 _Use_decl_annotations_
@@ -227,22 +291,57 @@ MshcSdioDiagCleanup(
 
     //
     // Stop new work items (sdport has stopped calling the miniport by now),
-    // then wait for one already queued to finish: it sleeps 200 ms, so two
-    // seconds is plenty.  If it somehow has not, leak the work item rather
+    // then wait for one already queued to finish: it sleeps a second, so
+    // three seconds is plenty.  If it somehow has not, leak the work item rather
     // than free it under a running worker.
     //
     MshcExtension->Diag.WorkItem = NULL;
     Delay.QuadPart = -50LL * 10000LL;
-    for (Waits = 0; Waits < 40; Waits++) {
+    for (Waits = 0; Waits < 60; Waits++) {
         if (InterlockedCompareExchange(&MshcExtension->Diag.WorkersActive, 0, 0) == 0) {
             break;
         }
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &Delay);
     }
 
-    SdioDiagWrite(MshcExtension);
+    SdioDiagWrite(MshcExtension, TRUE);
 
     if (InterlockedCompareExchange(&MshcExtension->Diag.WorkersActive, 0, 0) == 0) {
         IoFreeWorkItem(WorkItem);
+    }
+}
+
+_Use_decl_annotations_
+VOID
+MshcDiagRequestDone(
+    PMSHC_EXTENSION MshcExtension,
+    PSDPORT_REQUEST Request
+    )
+{
+    LONG64 Issued;
+    ULONG64 Us;
+
+    //
+    // Called just before an sdport request goes back to sdport: issue to
+    // completion, from the time MshcSlotIssueRequest stored.  A data
+    // request's transfer phase comes back here too, after the command phase
+    // took the time, and finds none.
+    //
+    Issued = InterlockedExchange64(&MshcExtension->Diag.CmdIssueTime, 0);
+    if (Issued == 0) {
+        return;
+    }
+
+    Us = MSHC_DIAG_US(MSHC_DIAG_NOW() - Issued);
+    InterlockedAdd64(&MshcExtension->Diag.TotalCmdUs, (LONG64)Us);
+
+    if (Us > MshcExtension->Diag.MaxCmdUs) {
+        MshcExtension->Diag.MaxCmdUs = (Us > 0xFFFFFFFFULL) ? 0xFFFFFFFFUL : (ULONG)Us;
+        MshcExtension->Diag.MaxCmdIndex = Request->Command.Index;
+    }
+
+    if (Us >= 100000) {
+        InterlockedIncrement(&MshcExtension->Diag.SlowCmds);
+        MshcExtension->Diag.LastSlowCmd = Request->Command.Index;
     }
 }
