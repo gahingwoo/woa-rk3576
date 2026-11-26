@@ -69,6 +69,56 @@ test_nvram(void)
     CHECK_EQ(BwlNvramConvert((const u8 *)"#only\n\n", 7, out, sizeof(out)), BWL_E_FORMAT);
 }
 
+/*
+ * The driver allocates exactly SrcLen + BWL_NVRAM_SLACK bytes for the
+ * converted NVRAM (driver.c). Do the same here, on the heap, for every
+ * shape of input up to 24 bytes over a small alphabet, so that ASan sees a
+ * write one byte past it. The worst case is a single line with no newline
+ * whose kept length + 1 is a multiple of 4 ("abc"): SrcLen + 9 bytes.
+ */
+static void
+test_nvram_exact(void)
+{
+    static const char alpha[] = { 'a', '=', '\n', '#', ' ', '\r' };
+    unsigned len, iter, worst = 0;
+    unsigned x = 1;
+
+    for (len = 1; len <= 24; len++) {
+        for (iter = 0; iter < 400; iter++) {
+            unsigned char *src = malloc(len), *dst = malloc(len + BWL_NVRAM_SLACK);
+            unsigned i;
+            int n;
+
+            for (i = 0; i < len; i++) {
+                x = x * 1103515245u + 12345u;
+                /* mostly plain bytes, so that long kept lines come up often */
+                src[i] = (unsigned char)((x >> 16) % 4 ? 'a' + (x >> 20) % 26 : alpha[(x >> 20) % sizeof(alpha)]);
+            }
+            if (iter == 0) {
+                memset(src, 'a', len);  /* one line, every byte kept, no newline */
+            }
+            n = BwlNvramConvert(src, len, dst, len + BWL_NVRAM_SLACK);
+            if (n > 0) {
+                CHECK((unsigned)n <= len + BWL_NVRAM_SLACK);
+                CHECK_EQ(n % 4, 0);
+                if (n > (int)(len + worst)) worst = (unsigned)n - len;
+            } else {
+                CHECK_EQ(n, BWL_E_FORMAT);  /* only comments and blanks */
+            }
+            free(src);
+            free(dst);
+        }
+    }
+    CHECK_EQ(worst, 9);
+    {
+        unsigned char *dst = malloc(3 + BWL_NVRAM_SLACK);
+
+        CHECK_EQ(BwlNvramConvert((const u8 *)"abc", 3, dst, 3 + BWL_NVRAM_SLACK), 12);
+        CHECK_EQ(BwlNvramConvert((const u8 *)"abc", 3, dst, 3 + 9 - 1), BWL_E_SPACE);
+        free(dst);
+    }
+}
+
 static void
 test_versions(void)
 {
@@ -268,13 +318,23 @@ test_bcdc_event(void)
 
 /* ------------------------------------------------------------ bring-up */
 
-static unsigned char bounce[64 * 1024] __attribute__((aligned(64)));
+/*
+ * The bounce buffer on the heap and exactly BWL_BOUNCE_MIN bytes, as the
+ * driver allocates it (pool.c): ASan's redzone sits right behind it.
+ */
+static unsigned char *bounce;
 
 static void
 dev_init(bwl_dev *d, fake_chip *f)
 {
-    BwlInit(d, &FakeOps, f, bounce, sizeof(bounce));
+    if (bounce == NULL) {
+        bounce = malloc(BWL_BOUNCE_MIN);
+    }
+    BwlInit(d, &FakeOps, f, bounce, BWL_BOUNCE_MIN);
 }
+
+/* Like driver.c: RecordConsole's buffer is PUT_MAX + 1 bytes, "ver" goes into 255, the MAC into 6. */
+#define DRV_PUT_MAX 2048u
 
 static void
 test_xfer_split(void)
@@ -424,6 +484,20 @@ bringup(int model, const unsigned char *fw, unsigned fwlen, const unsigned char 
     CHECK(BwlConsoleRead(&d, console, sizeof(console)) > 0);
     CHECK(strstr(console, "fake RTE") != NULL);
 
+    /* the same calls with buffers of the driver's exact sizes, on the heap */
+    {
+        unsigned char *mac = malloc(6), *text = malloc(255);
+        char *cons = malloc(DRV_PUT_MAX + 1);
+
+        CHECK_EQ(BwlGetVar(&d, "cur_etheraddr", mac, 6, &outlen, &fws), 0);
+        CHECK_EQ(mac[5], 0x38);
+        CHECK_EQ(BwlGetVar(&d, "ver", text, 255, &outlen, &fws), 0);
+        CHECK(BwlConsoleRead(&d, cons, DRV_PUT_MAX + 1) > 0);
+        free(mac);
+        free(text);
+        free(cons);
+    }
+
     CHECK_EQ(f.Cmd53F2Block, 0);                        /* F2 byte mode only */
     CHECK_EQ(f.Violations, 0);
     if (f.Violations) {
@@ -523,6 +597,57 @@ test_faults(void)
     free(clm);
 }
 
+/*
+ * A firmware that sends more than was asked for: every control reply
+ * carries 4000 extra bytes and claims them in its length, and the console
+ * ring is the largest the driver reads (32 KB). Everything lands in
+ * buffers of the driver's exact sizes, on the heap, under ASan.
+ */
+static void
+test_hostile_firmware(void)
+{
+    unsigned char *fw, *nv, *clm, *conv, *mac, *text;
+    unsigned fwlen, nvlen, clmlen, outlen = 0, v = 0;
+    char *cons;
+    fake_chip f;
+    bwl_dev d;
+    int n, fws = 0;
+
+    synthetic_files(&fw, &fwlen, &nv, &nvlen, &clm, &clmlen);
+    conv = malloc(nvlen + BWL_NVRAM_SLACK);
+    n = BwlNvramConvert(nv, nvlen, conv, nvlen + BWL_NVRAM_SLACK);
+    CHECK(n > 0);
+    FakeInit(&f);
+    f.ConsoleBufSize = 0x8000;
+    dev_init(&d, &f);
+    CHECK_EQ(BwlAttach(&d), 0);
+    CHECK_EQ(BwlDownload(&d, fw, fwlen, conv, (unsigned)n, 1), 0);
+    CHECK_EQ(BwlStart(&d, 100), 0);
+    f.ReplyExtra = 4000;
+
+    mac = malloc(6);
+    text = malloc(255);
+    cons = malloc(DRV_PUT_MAX + 1);
+    CHECK_EQ(BwlGetInt(&d, C_GET_VERSION, &v, &fws), 0);
+    CHECK_EQ(v, 2);
+    CHECK_EQ(BwlGetVar(&d, "cur_etheraddr", mac, 6, &outlen, &fws), 0);
+    CHECK_EQ(outlen, 4000 + 14);        /* the reply's claim, reported; only 6 copied */
+    CHECK_EQ(mac[0], 0x00);
+    CHECK_EQ(BwlGetVar(&d, "ver", text, 255, &outlen, &fws), 0);
+    CHECK_EQ(BwlReadShared(&d), 0);
+    CHECK_EQ(BwlConsoleRead(&d, cons, DRV_PUT_MAX + 1), DRV_PUT_MAX);
+    CHECK_EQ(cons[DRV_PUT_MAX], 0);
+    CHECK_EQ(f.Violations, 0);
+    free(mac);
+    free(text);
+    free(cons);
+    FakeFree(&f);
+    free(conv);
+    free(fw);
+    free(nv);
+    free(clm);
+}
+
 static unsigned char *
 slurp(const char *dir, const char *name, unsigned *len)
 {
@@ -598,6 +723,7 @@ main(int argc, char **argv)
         free(clm);
     } else {
         test_nvram();
+        test_nvram_exact();
         test_versions();
         test_chip_table();
         test_clm_chunks();
@@ -605,6 +731,7 @@ main(int argc, char **argv)
         test_bcdc_event();
         test_xfer_split();
         test_faults();
+        test_hostile_firmware();
         synthetic_files(&fw, &fwlen, &nv, &nvlen, &clm, &clmlen);
         printf("bring-up with synthetic files\n");
         bringup(FAKE_4345, fw, fwlen, nv, nvlen, clm, clmlen, "7.45.96.0", 6);
@@ -619,6 +746,7 @@ main(int argc, char **argv)
         free(nv);
         free(clm);
     }
+    free(bounce);
     printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }

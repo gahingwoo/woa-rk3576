@@ -92,6 +92,10 @@ typedef struct fake_chip {
     unsigned FlipRamAt;     /* corrupt this RAM offset on write, ~0 = never */
     unsigned DcmdSeen;
     unsigned EventsQueued;
+
+    /* a firmware that misbehaves, for the buffer-bound tests */
+    unsigned ReplyExtra;    /* bytes appended to every control reply, and claimed in its length */
+    unsigned ConsoleBufSize;/* console ring size, 0 = 0x100 */
 } fake_chip;
 
 extern const bwl_bus_ops FakeOps;
