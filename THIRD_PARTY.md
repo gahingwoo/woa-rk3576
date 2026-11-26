@@ -88,7 +88,7 @@ checks their SHA-256; docs/dev/wifi.md has the details.
 
 ## Not imported
 
-- `drivers/storage_fix/*.sys` and `drivers/usb/usbehci_nointerlocked`: patched
+- worproject's `drivers/storage_fix/*.sys` and `drivers/usb/usbehci_nointerlocked`: patched
   Microsoft system binaries (`storahci.sys`, `stornvme.sys`, `usbehci.sys`).
   Modified Windows binaries are not redistributable. Neither is needed here:
   NVMe works with the inbox `stornvme.sys`, and the firmware does not publish

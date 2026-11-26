@@ -189,7 +189,7 @@ Board steps: see [Board session for W2 and W3](#board-session-for-w2-and-w3).
 - `C_UP`, `mpc` 0, country (`country`), and `escan` with its
   `E_ESCAN_RESULT` stream parsed into BSS records (SSID, BSSID, channel,
   RSSI, IEs).
-- A small user-mode tool (`tools/bwlctl`) talking to a device interface of
+- A small user-mode tool (`bwlctl`, not in this repository) talking to a device interface of
   the driver: run a scan, print the results, read counters, dump the
   firmware console. It is the test bench for W5.
 

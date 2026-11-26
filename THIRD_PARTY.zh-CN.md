@@ -58,6 +58,6 @@ Ampak 为 AP6256 做的版本（armbian/firmware）没有写明许可证；Raspb
 
 ## 未导入的部分
 
-- `drivers/storage_fix/*.sys` 和 `drivers/usb/usbehci_nointerlocked`：打过补丁的 Microsoft 系统二进制文件
+- worproject 的 `drivers/storage_fix/*.sys` 和 `drivers/usb/usbehci_nointerlocked`：打过补丁的 Microsoft 系统二进制文件
   （`storahci.sys`、`stornvme.sys`、`usbehci.sys`）。修改过的 Windows 二进制文件不能再分发。这里也都用不到：
   NVMe 用系统自带的 `stornvme.sys` 就能工作，固件也不公开 EHCI 控制器。`storage_fix` 的 readme 和注册表文件保留下来作参考。
