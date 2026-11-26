@@ -7,9 +7,9 @@
 #             board ids (tspi3m, cm5io, rock4d), or "-"
 #   optional  boards it is installed on only on request (install.cmd /optional,
 #             Maskrom Studio: never), or "-"
-#   from      where assemble.py takes it: woa (this repository's WinPE build,
-#             woa-drivers\), audio (woa-audio\), gpu (wddm-mali-g52), npu
-#             (woa-rk3576-npu)
+#   from      where it comes from: woa (built from this repository by
+#             build-woa.ps1 in the same drivers.yml run), gpu (wddm-mali-g52),
+#             npu (woa-rk3576-npu)
 #   what      what it is, for the manifest and the lists
 #
 # A driver for hardware a board does not have binds nothing, because each INF
@@ -33,9 +33,10 @@ rkled        all            -         woa    Board LEDs
 rkeeprom     rock4d         -         woa    HAT EEPROM (ROCK 4D)
 gt9271       tspi3m         -         woa    Touch screen (GT9271)
 bcm4345bt    tspi3m         cm5io     woa    Bluetooth (BCM4345C5; CM5-IO BCM4362A2 untested)
-rk3xi2sbus   all            -         audio  Audio: SAI bus
-csaudiork3x  all            -         audio  Audio: HDMI and codec endpoints
-es8323       all            -         audio  Audio: ES8388 codec
+rk3xi2sbus   all            -         woa    Audio: SAI bus
+csaudiork3x  all            -         woa    Audio: HDMI and codec endpoints
+es8323       all            -         woa    Audio: ES8388 codec
+rk3576-null  all            -         woa    No-driver devices (RK806, pin controller, RTC, UART2, PCIe DBI), named
 maliwddm     all            -         gpu    GPU (Mali-G52, maliwddm, with the D3D and OpenGL user-mode drivers)
 malivop      all            -         gpu    Display controller name (VOP2, null driver)
 rknpu        all            -         npu    NPU (rknpu)

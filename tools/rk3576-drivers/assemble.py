@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # assemble.py - put the RK3576 Windows driver package together.
 #
-#   assemble.py --table drivers.tsv --woa DIR --gpu DIR --npu ZIP
+#   assemble.py --table drivers.tsv --install install.cmd --script F ...
+#               --woa DIR --gpu DIR --npu ZIP
 #               --version V --source KEY=TEXT ... --out DIR
 #
-# --woa  the WinPE workflow's woa-drivers-signed-arm64 artifact: woa-drivers\
-#        (and woa-audio\ when the run carried it)
+# --woa  build-woa.ps1's output: woa-drivers\<dir>\ and woa-drivers\signer.cer
 # --gpu  wddm-mali-g52's wddm-mali-g52-driver-arm64 artifact (driver\, *.cer)
 # --npu  woa-rk3576-npu's rknpu-windows-arm64.zip
 #
@@ -26,10 +26,10 @@ import sys
 import zipfile
 
 BOARDS = ('tspi3m', 'cm5io', 'rock4d')
-FROM = ('woa', 'audio', 'gpu', 'npu')
+FROM = ('woa', 'gpu', 'npu')
 # Files a driver folder may carry; symbols and documentation stay out.
 DRIVER_FILES = ('.inf', '.cat', '.sys', '.dll', '.man')
-NULL_DRIVERS = ('malivop',)
+NULL_DRIVERS = ('malivop', 'rk3576-null')
 
 
 def boards(field, line):
@@ -89,14 +89,14 @@ def main():
     ap.add_argument('--table', required=True)
     ap.add_argument('--install', required=True, help='install.cmd')
     ap.add_argument('--readme', action='append', default=[])
+    ap.add_argument('--script', action='append', default=[],
+                    help='a file for the package root next to install.cmd (install-online.ps1, mark-reinstall.ps1)')
     ap.add_argument('--woa', required=True)
     ap.add_argument('--gpu', required=True)
     ap.add_argument('--npu', required=True)
     ap.add_argument('--version', required=True)
     ap.add_argument('--source', action='append', default=[], help='key=text, into manifest.json')
     ap.add_argument('--out', required=True)
-    ap.add_argument('--without-audio', action='store_true',
-                    help='leave the audio drivers out when --woa has no woa-audio (a WinPE run older than the artifact change)')
     a = ap.parse_args()
 
     rows = read_table(a.table)
@@ -109,7 +109,6 @@ def main():
     os.makedirs(certs)
 
     woa = os.path.join(a.woa, 'woa-drivers')
-    audio = os.path.join(a.woa, 'woa-audio')
     gpu = os.path.join(a.gpu, 'driver')
     npu_tmp = os.path.join(a.out, '.npu')
     if os.path.exists(npu_tmp):
@@ -122,17 +121,11 @@ def main():
         z.extractall(npu_tmp)
     npu = os.path.join(npu_tmp, 'rknpu')
 
-    if a.without_audio and not os.path.isdir(audio):
-        print(f'::warning::{audio} is missing: the package goes without the audio drivers')
-        rows = [r for r in rows if r['from'] != 'audio']
-
     problems = []
     for r in rows:
         d, dst = r['dir'], os.path.join(drv, r['dir'])
         if r['from'] == 'woa':
             src = os.path.join(woa, d)
-        elif r['from'] == 'audio':
-            src = os.path.join(audio, d)
         elif r['from'] == 'npu':
             src = npu
         else:
@@ -189,7 +182,7 @@ def main():
     with open(os.path.join(root, 'VERSION.txt'), 'w', newline='\r\n') as f:
         f.write(a.version + '\n')
     shutil.copy2(a.install, os.path.join(root, 'install.cmd'))
-    for rd in a.readme:
+    for rd in a.readme + a.script:
         shutil.copy2(rd, os.path.join(root, os.path.basename(rd)))
     shutil.rmtree(npu_tmp)
 

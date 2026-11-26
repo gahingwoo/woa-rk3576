@@ -5,7 +5,11 @@ rem   install.cmd W:\ <board> [/optional]       into a Windows that is not
 rem                                             running (applied from WinPE,
 rem                                             or a mounted install.wim): DISM
 rem   install.cmd /online <board> [/optional]   into this running Windows:
-rem                                             trusts certs\*.cer, then pnputil
+rem                                             install-online.ps1 trusts
+rem                                             certs\*.cer, stages the drivers
+rem                                             (pnputil /add-driver, never
+rem                                             /install) and marks the devices
+rem                                             to take them at the next boot
 rem
 rem <board> is tspi3m, cm5io or rock4d. boards\<board>.txt lists the driver
 rem folders installed by default, boards\<board>-optional.txt the ones added
@@ -60,25 +64,10 @@ net session >nul 2>&1 || (
   echo Run this from an administrator command prompt.
   exit /b 2
 )
-for %%c in ("%HERE%certs\*.cer") do (
-  certutil -f -addstore Root "%%~c" >nul || echo Could not trust %%~nxc.
-  certutil -f -addstore TrustedPublisher "%%~c" >nul || echo Could not trust %%~nxc.
-)
-set E=0
-for %%L in (%LISTS%) do (
-  for /f "usebackq eol=# delims=" %%d in (%%L) do (
-    echo Installing %%d.
-    pnputil /add-driver "%HERE%drivers\%%d\*.inf" /install >nul
-    rem 259: nothing to bind (no such device, or its firmware option is off); 3010: restart
-    if errorlevel 1 if not errorlevel 259 (
-      echo pnputil could not install %%d ^(exit !errorlevel!^).
-      set E=1
-    )
-  )
-)
-if not "%E%"=="0" exit /b 1
-echo RK3576 drivers %VER% installed. Restart Windows.
-exit /b 0
+set OPT=
+if /i "%~3"=="/optional" set OPT=-Optional
+powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%install-online.ps1" -Board %B% %OPT%
+exit /b %errorlevel%
 
 :usage
 echo Usage: install.cmd W:\ ^<board^> [/optional]

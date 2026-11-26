@@ -5,12 +5,10 @@ name: Driver package
 # a manifest saying which board gets which driver (tools/rk3576-drivers).
 # Maskrom Studio installs the board's list from it.
 #
-# Nothing is built here: the package is put together from the test-signed
-# packages the other builds made, so what it carries is what those builds
-# checked.
-#   this repository   woa-drivers-signed-arm64 of the latest successful
-#                     WinPE (ARM64) run of main: the same driver packages
-#                     the WinPE image carries, and woa-audio\
+#   woa-rk3576        built here from this commit by build-woa.ps1 (every
+#                     "woa" line of drivers.tsv: the storage, bus, audio,
+#                     input and null drivers), test-signed with a
+#                     certificate made for this run
 #   wddm-mali-g52     wddm-mali-g52-driver-arm64 of its latest successful CI
 #                     run of main (maliwddm with its UMD, malivop)
 #   woa-rk3576-npu    rknpu-windows-arm64 of its latest successful CI run of
@@ -26,17 +24,17 @@ name: Driver package
 # SHA256SUMS.txt (ci-release.sh keeps the other workflows' assets).
 
 on:
-  workflow_run:
-    workflows: ['WinPE (ARM64)']
-    types: [completed]
-    branches: [main]
   push:
     branches: [main]
     paths:
+      - 'drivers/**'
+      - 'build/**'
       - 'tools/rk3576-drivers/**'
       - '.github/workflows/drivers.yml'
   pull_request:
     paths:
+      - 'drivers/**'
+      - 'build/**'
       - 'tools/rk3576-drivers/**'
       - '.github/workflows/drivers.yml'
   # The GPU and NPU drivers live in other repositories: pick up their new
@@ -49,13 +47,43 @@ permissions:
   contents: read
   actions: read
 
+env:
+  # Same pin as ci.yml and winpe.yml.
+  WDK_VERSION: '10.0.26100.0'
+
 jobs:
+  woa:
+    name: Build and sign the woa-rk3576 drivers (ARM64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build, catalog, sign
+        shell: pwsh
+        run: |
+          # The run number goes into DriverVer: a later package outranks
+          # an earlier one at the reinstall install.cmd /online asks for.
+          ./tools/rk3576-drivers/build-woa.ps1 -Table tools/rk3576-drivers/drivers.tsv `
+            -Out "$env:RUNNER_TEMP\woa" -Build ${{ github.run_number }} -Wdk $env:WDK_VERSION
+      - uses: actions/upload-artifact@v4
+        with:
+          name: woa-rk3576-drivers-signed
+          path: ${{ runner.temp }}/woa/
+          retention-days: 7
+          if-no-files-found: error
+
   package:
     name: rk3576-drivers-arm64.zip
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    needs: woa
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Test assemble.py
+        run: python3 -I tools/rk3576-drivers/test_assemble.py
 
       - name: Find the builds to take the drivers from
         id: runs
@@ -67,24 +95,26 @@ jobs:
             gh run list -R "$1" -w "$2" -b main -s success -L 1 --json databaseId,headSha \
               -q '.[0] | "\(.databaseId) \(.headSha)"'
           }
-          read -r woa_run woa_sha < <(latest "$GITHUB_REPOSITORY" winpe.yml)
           read -r gpu_run gpu_sha < <(latest gahingwoo/wddm-mali-g52 ci.yml)
           read -r npu_run npu_sha < <(latest gahingwoo/woa-rk3576-npu ci.yml)
-          for v in woa_run gpu_run npu_run; do
+          for v in gpu_run npu_run; do
             [ -n "${!v}" ] || { echo "::error::no successful run for $v"; exit 1; }
           done
           {
-            echo "woa_run=$woa_run"; echo "woa_sha=$woa_sha"
             echo "gpu_run=$gpu_run"; echo "gpu_sha=$gpu_sha"
             echo "npu_run=$npu_run"; echo "npu_sha=$npu_sha"
           } | tee -a "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: woa-rk3576-drivers-signed
+          path: in/woa
 
       - name: Download them
         env:
           GH_TOKEN: ${{ secrets.DRIVER_SOURCES_TOKEN || github.token }}
         run: |
           set -euo pipefail
-          gh run download ${{ steps.runs.outputs.woa_run }} -R "$GITHUB_REPOSITORY" -n woa-drivers-signed-arm64 -D in/woa
           gh run download ${{ steps.runs.outputs.gpu_run }} -R gahingwoo/wddm-mali-g52 -n wddm-mali-g52-driver-arm64 -D in/gpu
           gh run download ${{ steps.runs.outputs.npu_run }} -R gahingwoo/woa-rk3576-npu -n rknpu-windows-arm64 -D in/npu
           (cd in/npu && sha256sum -c rknpu-windows-arm64.zip.sha256)
@@ -92,8 +122,6 @@ jobs:
 
       - name: Assemble
         env:
-          WOA_RUN: ${{ steps.runs.outputs.woa_run }}
-          WOA_SHA: ${{ steps.runs.outputs.woa_sha }}
           GPU_RUN: ${{ steps.runs.outputs.gpu_run }}
           GPU_SHA: ${{ steps.runs.outputs.gpu_sha }}
           NPU_RUN: ${{ steps.runs.outputs.npu_run }}
@@ -102,22 +130,21 @@ jobs:
           set -euo pipefail
           # ci-<this commit>; a release attaches the package under its own version.
           version="ci-${GITHUB_SHA::7}"
-          extra=()
-          # A WinPE run from before woa-audio went into its artifact.
-          [ -d in/woa/woa-audio ] || extra+=(--without-audio)
           gpuin=$(find in/gpu -name driver -type d -printf '%h\n' | head -1)
           python3 -I tools/rk3576-drivers/assemble.py \
             --table tools/rk3576-drivers/drivers.tsv \
             --install tools/rk3576-drivers/install.cmd \
+            --script tools/rk3576-drivers/install-online.ps1 \
+            --script tools/rk3576-drivers/mark-reinstall.ps1 \
             --readme tools/rk3576-drivers/README.md \
             --readme tools/rk3576-drivers/README.zh-CN.md \
             --woa in/woa --gpu "$gpuin" --npu in/npu/rknpu-windows-arm64.zip \
             --version "$version" \
             --source "package=$GITHUB_REPOSITORY@$GITHUB_SHA run $GITHUB_RUN_ID" \
-            --source "woa-rk3576=$GITHUB_REPOSITORY@$WOA_SHA WinPE run $WOA_RUN" \
+            --source "woa-rk3576=$GITHUB_REPOSITORY@$GITHUB_SHA built in run $GITHUB_RUN_ID" \
             --source "wddm-mali-g52=gahingwoo/wddm-mali-g52@$GPU_SHA CI run $GPU_RUN" \
             --source "woa-rk3576-npu=gahingwoo/woa-rk3576-npu@$NPU_SHA CI run $NPU_RUN, rknpu-windows-arm64.zip $(cut -d' ' -f1 in/npu/rknpu-windows-arm64.zip.sha256)" \
-            "${extra[@]}" --out out
+            --out out
           unzip -l out/rk3576-drivers-arm64.zip
           sha256sum out/rk3576-drivers-arm64.zip
 
@@ -137,8 +164,10 @@ jobs:
               assert want == got, (b, want, got)
               for d in want:
                   assert os.listdir(f'drivers/{d}'), d
-              # every board boots from its storage with these
-              for core in ('dwcsdhc', 'dwcmshc', 'maliwddm', 'vdpu383'):
+              # every board boots from its storage with these, and has
+              # audio and the no-driver devices
+              for core in ('dwcsdhc', 'dwcmshc', 'maliwddm', 'vdpu383', 'rk3xi2sbus',
+                           'csaudiork3x', 'es8323', 'rk3576-null'):
                   assert core in want, (b, core)
           print('manifest and board lists agree')
           PY
@@ -149,9 +178,55 @@ jobs:
           path: out/rk3576-drivers-arm64.zip
           if-no-files-found: error
 
+  online-plan:
+    name: install.cmd /online, planned on a Windows runner
+    # install-online.ps1 -Plan on the real package: parses every INF the
+    # board would stage, matches the runner's devices, changes nothing.
+    # The INF parser has to find the IDs the board run depends on.
+    needs: package
+    runs-on: windows-2022
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rk3576-drivers-arm64
+          path: pkg
+      - name: Parse under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          Expand-Archive pkg\rk3576-drivers-arm64.zip -DestinationPath pkg
+          foreach ($f in 'install-online.ps1', 'mark-reinstall.ps1') {
+            $tok = $null; $err = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "pkg\rk3576-drivers\$f"), [ref]$tok, [ref]$err)
+            if ($err) { $err | Out-Host; throw "$f does not parse" }
+          }
+      - name: Plan each board (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $want = @{
+            'rk3xi2sbus'  = 'ACPI\RKCP3004'
+            'es8323'      = 'ACPI\RKCP8388'
+            'csaudiork3x' = 'CSAUDIO\RK&CLTR'
+            'rk3576-null' = 'ACPI\AMZN0001'
+            'dwcmshc'     = 'ACPI\RKCPFE2C'
+          }
+          foreach ($b in 'tspi3m', 'cm5io', 'rock4d') {
+            $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board $b -Plan
+            $rc = $LASTEXITCODE
+            $o | Out-Host
+            if ($rc -ne 0) { throw "$b plan: exit $rc" }
+            foreach ($k in $want.Keys) {
+              $line = $o | Where-Object { $_ -like "${k}: would stage *" } | Select-Object -First 1
+              if (-not $line) { throw "${b}: no plan line for $k" }
+              if ($line -notlike "*$($want[$k])*") { throw "${b}: $k does not name $($want[$k]): $line" }
+              if ($line -like '*no DriverVer*') { throw "${b}: $k has no DriverVer: $line" }
+            }
+          }
+          $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board nosuch -Plan
+          if ($LASTEXITCODE -ne 2) { throw "an unknown board should exit 2, got $LASTEXITCODE" }
+
   release:
     name: Rolling "ci" release (driver package)
-    needs: package
+    needs: [package, online-plan]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

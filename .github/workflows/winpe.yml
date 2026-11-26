@@ -17,10 +17,6 @@ on:
       - 'tools/woa-deploy/**'
       - '.github/workflows/winpe.yml'
       - 'drivers/bluetooth/**'
-      # The driver package (drivers.yml) takes its woa-rk3576 drivers from
-      # this workflow's artifact, so it rebuilds when any driver changes.
-      - 'drivers/**'
-      - 'build/**'
 
 permissions:
   contents: read
@@ -544,12 +540,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           # The same test-signed packages the image carries, for pnputil on an
-          # installed Windows: woa-drivers\<driver>\*.inf, woa-audio\ and
-          # woa-tools. drivers.yml builds the driver package from it.
+          # installed Windows: woa-drivers\<driver>\*.inf, and woa-tools.
           name: woa-drivers-signed-arm64
           path: |
             C:\WinPE_arm64\media\woa-drivers\**
-            C:\WinPE_arm64\media\woa-audio\**
             C:\WinPE_arm64\media\woa-tools\**
           retention-days: 30
           if-no-files-found: error
