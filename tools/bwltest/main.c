@@ -523,6 +523,544 @@ test_faults(void)
     free(clm);
 }
 
+/* ------------------------------------------------------------ WLAN (scan, join, data) */
+
+/* What the core hands the "front end" through bwl_net_ops. */
+static struct {
+    bwl_bss Bss[16];
+    unsigned char Body[16][512];
+    unsigned BodyLen[16];
+    unsigned NBss;
+    unsigned char Rx[8][1600];
+    unsigned RxLen[8];
+    unsigned NRx;
+} seen;
+
+static void
+net_rx(void *Ctx, const u8 *Eth, u32 Len)
+{
+    (void)Ctx;
+    if (seen.NRx < 8 && Len <= sizeof(seen.Rx[0])) {
+        memcpy(seen.Rx[seen.NRx], Eth, Len);
+        seen.RxLen[seen.NRx] = Len;
+    }
+    seen.NRx++;
+}
+
+static void
+net_scan(void *Ctx, const bwl_bss *Bss, const u8 *Body, u32 Len)
+{
+    (void)Ctx;
+    if (seen.NBss < 16 && Len <= sizeof(seen.Body[0])) {
+        seen.Bss[seen.NBss] = *Bss;
+        memcpy(seen.Body[seen.NBss], Body, Len);
+        seen.BodyLen[seen.NBss] = Len;
+    }
+    seen.NBss++;
+}
+
+static const bwl_net_ops test_net = { net_rx, net_scan };
+
+/* Attach, download, start and load the CLM with synthetic files. */
+static int
+start_fw(fake_chip *f, bwl_dev *d, int model)
+{
+    unsigned char *fw, *nvt, *clm, nv[512];
+    unsigned fwlen, nvtlen, clmlen, chunks, cst;
+    int n, fws, r;
+
+    if (model == FAKE_43752) {
+        synthetic_files_trailer("<FW-TAG>4362a2-roml/bwltest Version=18.35.387.23.7 (bwltest) FWID=01-0",
+                                &fw, &fwlen, &nvt, &nvtlen, &clm, &clmlen);
+    } else {
+        synthetic_files(&fw, &fwlen, &nvt, &nvtlen, &clm, &clmlen);
+    }
+    FakeInitModel(f, model);
+    dev_init(d, f);
+    n = BwlNvramConvert(nvt, nvtlen, nv, sizeof(nv));
+    f->ExpectClm = clm;
+    f->ExpectClmLen = clmlen;
+    r = BwlAttach(d);
+    if (r == 0) r = BwlDownload(d, fw, fwlen, nv, (unsigned)n, 0);
+    if (r == 0) r = BwlStart(d, 100);
+    if (r == 0) r = BwlClmLoad(d, clm, clmlen, &chunks, &cst, &fws);
+    free(fw);
+    free(nvt);
+    /* the CLM stays allocated: the fake compares against it at clmload_status (done) */
+    free(clm);
+    f->ExpectClm = NULL;
+    return r;
+}
+
+/* Run the poller until one of the events in Want is pending, at most N times. */
+static int
+service_until(bwl_dev *d, unsigned Want, int N)
+{
+    int i;
+
+    for (i = 0; i < N; i++) {
+        int r = BwlService(d);
+        if (r < 0) {
+            return r;
+        }
+        if (d->Wlan.Events & Want) {
+            return 0;
+        }
+    }
+    return BWL_E_TIMEOUT;
+}
+
+static int
+find_seen(const char *ssid)
+{
+    unsigned i;
+
+    for (i = 0; i < seen.NBss && i < 16; i++) {
+        if (seen.Bss[i].SsidLen == strlen(ssid) && memcmp(seen.Bss[i].Ssid, ssid, seen.Bss[i].SsidLen) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/* An ARP request from the station for the gateway, as Windows would send it. */
+static unsigned
+arp_request(const unsigned char *mac, unsigned char *eth)
+{
+    memset(eth, 0xFF, 6);
+    memcpy(eth + 6, mac, 6);
+    eth[12] = 0x08; eth[13] = 0x06;
+    eth[14] = 0; eth[15] = 1; eth[16] = 0x08; eth[17] = 0; eth[18] = 6; eth[19] = 4; eth[20] = 0; eth[21] = 1;
+    memcpy(eth + 22, mac, 6);
+    memcpy(eth + 28, FakeStaIp, 4);
+    memset(eth + 32, 0, 6);
+    memcpy(eth + 38, FakeGatewayIp, 4);
+    return 42;
+}
+
+/* The station's EAPOL frame number Msg to the AP, as an 802.11 frame from
+ * Windows converted the way the driver does it. */
+static int
+send_eapol(bwl_dev *d, unsigned msg)
+{
+    unsigned char w[200], eth[200];
+    int n;
+
+    memset(w, 0, sizeof(w));
+    w[0] = 0x08; w[1] = 0x01;                       /* data, To DS */
+    memcpy(w + 4, d->Wlan.Bssid, 6);                /* A1 BSSID */
+    memcpy(w + 10, d->Wlan.Mac, 6);                 /* A2 SA */
+    memcpy(w + 16, d->Wlan.Bssid, 6);               /* A3 DA */
+    memcpy(w + 24, "\xAA\xAA\x03\x00\x00\x00\x88\x8E", 8);
+    w[32] = 2; w[33] = (unsigned char)msg; w[35] = 95;
+    n = Bwl80211ToEth(w, 32 + 99, eth, sizeof(eth));
+    CHECK_EQ(n, 14 + 99);
+    CHECK_EQ(eth[12], 0x88);
+    return BwlTxEth(d, eth, (unsigned)n, 7);
+}
+
+static void
+test_wlan_pure(void)
+{
+    u8 ch, band, buf[512], eth[1600], w[1700];
+    static const u8 rsn_tkip[] = { 48, 20, 1, 0, 0, 0x0F, 0xAC, 2, 1, 0, 0, 0x0F, 0xAC, 4, 1, 0, 0, 0x0F, 0xAC, 2, 0, 0 };
+    static const u8 rsn_sae[] = { 48, 20, 1, 0, 0, 0x0F, 0xAC, 4, 1, 0, 0, 0x0F, 0xAC, 4, 1, 0, 0, 0x0F, 0xAC, 8, 0, 0 };
+    static const u8 rsn_mfpr[] = { 48, 20, 1, 0, 0, 0x0F, 0xAC, 4, 1, 0, 0, 0x0F, 0xAC, 4, 1, 0, 0, 0x0F, 0xAC, 2, 0xC0, 0 };
+    static const u8 rsn_mixed[] = { 48, 24, 1, 0, 0, 0x0F, 0xAC, 4, 1, 0, 0, 0x0F, 0xAC, 4, 2, 0, 0, 0x0F, 0xAC, 8,
+                                    0, 0x0F, 0xAC, 2, 0x80, 0 };
+    bwl_frameq *q;
+    bwl_bss b;
+    unsigned len, prio, i;
+    int n;
+
+    /* chanspecs, both encodings */
+    CHECK_EQ(BwlChanspec(IOTYPE_D11AC, 6, 0), 0x1006);
+    CHECK_EQ(BwlChanspec(IOTYPE_D11AC, 36, 1), 0xD024);
+    CHECK_EQ(BwlChanspec(IOTYPE_D11N, 6, 0), 0x2B06);
+    CHECK_EQ(BwlChanspec(IOTYPE_D11N, 149, 1), 0x1B95);
+    BwlChanspecDecode(IOTYPE_D11AC, 0xE02A, &ch, &band);        /* 80 MHz at 42, lower-lower */
+    CHECK_EQ(ch, 36); CHECK_EQ(band, 1);
+    BwlChanspecDecode(IOTYPE_D11AC, 0xE32A, &ch, &band);        /* upper-upper */
+    CHECK_EQ(ch, 48);
+    BwlChanspecDecode(IOTYPE_D11AC, 0xD926, &ch, &band);        /* 40 MHz at 38, upper */
+    CHECK_EQ(ch, 40);
+    BwlChanspecDecode(IOTYPE_D11N, 0x2B0B, &ch, &band);
+    CHECK_EQ(ch, 11); CHECK_EQ(band, 0);
+    BwlChanspecDecode(IOTYPE_D11N, 0x1D26, &ch, &band);         /* 40 MHz at 38, lower */
+    CHECK_EQ(ch, 36); CHECK_EQ(band, 1);
+
+    /* security from the RSN element */
+    CHECK_EQ(BwlRsnSecurity(NULL, 0x0001), BWL_SEC_OPEN);
+    CHECK_EQ(BwlRsnSecurity(NULL, 0x0011), BWL_SEC_OTHER);
+    CHECK_EQ(BwlBuildRsnIe(buf, sizeof(buf)), 22);
+    CHECK_EQ(BwlRsnSecurity(buf, 0x0011), BWL_SEC_WPA2_PSK);
+    CHECK_EQ(BwlRsnSecurity(rsn_tkip, 0x0011), BWL_SEC_OTHER);  /* TKIP group */
+    CHECK_EQ(BwlRsnSecurity(rsn_sae, 0x0011), BWL_SEC_OTHER);   /* SAE only */
+    CHECK_EQ(BwlRsnSecurity(rsn_mfpr, 0x0011), BWL_SEC_OTHER);  /* MFP required */
+    CHECK_EQ(BwlRsnSecurity(rsn_mixed, 0x0011), BWL_SEC_WPA2_PSK);  /* WPA2/WPA3 transition */
+    buf[8] = 5;                                                 /* a pairwise count past the element */
+    CHECK_EQ(BwlRsnSecurity(buf, 0x0011), BWL_SEC_OTHER);
+
+    /* a cached record without elements: SSID and rates built from it */
+    memset(buf, 0, sizeof(buf));
+    BwlPutLe32(buf + 4, 128);
+    memcpy(buf + 8, "\x02\x01\x02\x03\x04\x05", 6);
+    BwlPutLe16(buf + 14, 100);
+    BwlPutLe16(buf + 16, 0x0401);
+    buf[18] = 4; memcpy(buf + 19, "home", 4);
+    BwlPutLe32(buf + 52, 2); buf[56] = 0x82; buf[57] = 0x84;
+    BwlPutLe16(buf + 72, 0x100B);
+    BwlPutLe16(buf + 78, (u16)-77);
+    {
+        u8 body[64];
+        u32 bl = 0;
+        CHECK_EQ(BwlBssInfoParse(buf, 128, IOTYPE_D11AC, &b, body, sizeof(body), &bl), 0);
+        CHECK_EQ(b.Channel, 11); CHECK_EQ(b.Band, 0); CHECK_EQ(b.Rssi, -77);
+        CHECK_EQ(b.Security, BWL_SEC_OPEN);
+        CHECK_EQ(bl, 12 + 6 + 4);
+        CHECK_EQ(body[8], 100); CHECK_EQ(body[10], 0x01); CHECK_EQ(body[11], 0x04);
+        CHECK_EQ(body[12], 0); CHECK_EQ(body[13], 4); CHECK(memcmp(body + 14, "home", 4) == 0);
+        CHECK_EQ(body[18], 1); CHECK_EQ(body[19], 2); CHECK_EQ(body[20], 0x82);
+        CHECK_EQ(BwlBssFromBody(b.Bssid, 11, 0, -77, body, bl, &b), 0);
+        CHECK_EQ(b.SsidLen, 4);
+        CHECK_EQ(BwlBssInfoParse(buf, 120, IOTYPE_D11AC, &b, body, sizeof(body), &bl), BWL_E_FORMAT);
+        BwlPutLe32(buf + 120, 400);                             /* elements past the record */
+        BwlPutLe16(buf + 116, 128);
+        CHECK_EQ(BwlBssInfoParse(buf, 128, IOTYPE_D11AC, &b, body, sizeof(body), &bl), BWL_E_FORMAT);
+    }
+
+    /* Ethernet and native 802.11 data frames */
+    {
+        static const u8 bssid[6] = { 2, 0x11, 0x22, 0x33, 0x44, 1 };
+        static const u8 ipx[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0x81, 0x37, 0xAB, 0xCD };
+        static const u8 llc[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0x00, 0x03, 0x42, 0x42, 0x03, 0, 0, 0 };
+        u8 back[1600];
+
+        memset(eth, 0, sizeof(eth));
+        memcpy(eth, "\x00\x90\x4c\xc5\x12\x38\x02\xaa\xbb\xcc\xdd\x01\x08\x00", 14);
+        for (i = 14; i < 1514; i++) eth[i] = (u8)i;
+        n = BwlEthTo80211(bssid, eth, 1514, w, sizeof(w));
+        CHECK_EQ(n, 24 + 8 + 1500);
+        CHECK_EQ(w[0], 0x08); CHECK_EQ(w[1], 0x02);
+        CHECK(memcmp(w + 4, eth, 6) == 0 && memcmp(w + 10, bssid, 6) == 0 && memcmp(w + 16, eth + 6, 6) == 0);
+        CHECK(memcmp(w + 24, "\xAA\xAA\x03\x00\x00\x00\x08\x00", 8) == 0);
+        /* back again as Windows would send it: To DS, QoS with +HTC */
+        {
+            u8 t[1700];
+            memset(t, 0, 30);
+            t[0] = 0x88; t[1] = 0x81;
+            memcpy(t + 4, bssid, 6); memcpy(t + 10, eth + 6, 6); memcpy(t + 16, eth, 6);
+            memcpy(t + 30, w + 24, (size_t)n - 24);
+            CHECK_EQ(Bwl80211ToEth(t, 30 + (unsigned)n - 24, back, sizeof(back)), 1514);
+            CHECK(memcmp(back, eth, 6) == 0 && memcmp(back + 6, eth + 6, 6) == 0);
+            CHECK(memcmp(back + 12, eth + 12, 1502) == 0);
+            t[1] = 0x41;                                        /* protected: refused */
+            CHECK_EQ(Bwl80211ToEth(t, 30 + (unsigned)n - 24, back, sizeof(back)), 0);
+            t[0] = 0x80; t[1] = 0x01;                           /* a beacon: not data */
+            CHECK_EQ(Bwl80211ToEth(t, 60, back, sizeof(back)), 0);
+            t[0] = 0x08; t[1] = 0x03;                           /* four addresses: refused */
+            CHECK_EQ(Bwl80211ToEth(t, 60, back, sizeof(back)), 0);
+            CHECK_EQ(Bwl80211ToEth(t, 20, back, sizeof(back)), 0);
+        }
+        n = BwlEthTo80211(bssid, ipx, sizeof(ipx), w, sizeof(w));
+        CHECK_EQ(n, 24 + 8 + 2);
+        CHECK(memcmp(w + 24, "\xAA\xAA\x03\x00\x00\xF8\x81\x37", 8) == 0);   /* 802.1H */
+        n = BwlEthTo80211(bssid, llc, sizeof(llc), w, sizeof(w));       /* an 802.3 length of 3 */
+        CHECK_EQ(n, 24 + 3);
+        CHECK_EQ(BwlEthTo80211(bssid, eth, 1514, w, 100), BWL_E_SPACE);
+        CHECK_EQ(BwlEthTo80211(bssid, eth, 10, w, sizeof(w)), BWL_E_FORMAT);
+        /* an LLC frame without SNAP from Windows goes as 802.3 with its length */
+        memset(w, 0, 24); w[0] = 0x08; w[1] = 0x01;
+        memcpy(w + 24, "\x42\x42\x03\x01", 4);
+        n = Bwl80211ToEth(w, 28, back, sizeof(back));
+        CHECK_EQ(n, 18);
+        CHECK_EQ(back[12], 0); CHECK_EQ(back[13], 4);
+    }
+
+    /* the frame FIFO */
+    q = calloc(1, sizeof(*q));
+    CHECK(BwlFrameqPeek(q, &len, &prio) == NULL);
+    for (i = 0; i < BWL_FRAMEQ_SLOTS - 1; i++) {
+        eth[0] = (u8)i;
+        CHECK_EQ(BwlFrameqPush(q, eth, 60 + i, i), 1);
+    }
+    CHECK_EQ(BwlFrameqPush(q, eth, 60, 0), 0);                  /* full */
+    CHECK_EQ(BwlFrameqCount(q), BWL_FRAMEQ_SLOTS - 1);
+    CHECK(BwlFrameqPeek(q, &len, &prio) != NULL);
+    CHECK_EQ(len, 60); CHECK_EQ(prio, 0);
+    BwlFrameqPop(q);
+    CHECK(BwlFrameqPeek(q, &len, &prio)[0] == 1);
+    CHECK_EQ(prio, 1);
+    CHECK_EQ(BwlFrameqPush(q, eth, BWL_FRAMEQ_MAX + 1, 0), 0);  /* too long */
+    CHECK_EQ(q->Drops, 2);
+    free(q);
+}
+
+static void
+test_wlan(int model)
+{
+    const int is43752 = model == FAKE_43752;
+    fake_chip f;
+    bwl_dev d;
+    unsigned char eth[64], body[600];
+    unsigned i, before;
+    int open, psk, wep, r;
+    bwl_bss b;
+
+    printf("WLAN: %s\n", is43752 ? "simulated BCM43752" : "simulated BCM43456");
+    memset(&seen, 0, sizeof(seen));
+    r = start_fw(&f, &d, model);
+    CHECK_EQ(r, 0);
+    if (r) {
+        printf("  start stopped at \"%s\": %s\n", d.Step, f.LastViolation);
+        FakeFree(&f);
+        return;
+    }
+    d.Wlan.Net = &test_net;
+
+    /* firmware set-up */
+    CHECK_EQ(BwlWlanInit(&d, "DE"), 0);
+    CHECK(d.Wlan.Up && f.Up);
+    CHECK_EQ(d.Wlan.IoType, IOTYPE_D11AC);
+    CHECK_EQ(d.Wlan.Has5g, 1);
+    CHECK_EQ(d.Wlan.FwSupCapable, is43752 ? 0 : 1);
+    CHECK_EQ(d.Wlan.Mac[2], 0x4c);
+    CHECK_EQ(f.Mpc, 0); CHECK_EQ(f.Pm, 0); CHECK_EQ(f.Infra, 1); CHECK_EQ(f.RoamOff, 1);
+    CHECK_EQ(f.Country, ('D' << 8) | 'E');
+    CHECK(f.EventMaskSet);
+    CHECK(f.EventMask[E_ESCAN_RESULT / 8] & (1u << (E_ESCAN_RESULT % 8)));
+    CHECK(f.EventMask[E_PSK_SUP / 8] & (1u << (E_PSK_SUP % 8)));
+    CHECK(f.EventMask[E_LINK / 8] & (1u << (E_LINK % 8)));
+    CHECK(f.EventMask[E_SET_SSID / 8] & 1u);
+
+    /* scan */
+    CHECK_EQ(BwlScanStart(&d), 0);
+    CHECK_EQ(service_until(&d, BWL_EV_SCAN_DONE, 20), 0);
+    CHECK_EQ(d.Wlan.ScanStatus, 0);
+    CHECK_EQ(seen.NBss, FAKE_NAPS);
+    open = find_seen("bwltest-open");
+    psk = find_seen("bwltest-psk");
+    wep = find_seen("bwltest-wep");
+    CHECK(open >= 0 && psk >= 0 && wep >= 0);
+    if (open < 0 || psk < 0 || wep < 0) {
+        FakeFree(&f);
+        return;
+    }
+    CHECK_EQ(seen.Bss[open].Channel, 6); CHECK_EQ(seen.Bss[open].Band, 0);
+    CHECK_EQ(seen.Bss[open].Rssi, -48); CHECK_EQ(seen.Bss[open].Security, BWL_SEC_OPEN);
+    CHECK_EQ(seen.Bss[open].Beacon, 1);
+    CHECK_EQ(seen.Bss[psk].Channel, 36); CHECK_EQ(seen.Bss[psk].Band, 1);   /* from the 80 MHz chanspec */
+    CHECK_EQ(seen.Bss[psk].Security, BWL_SEC_WPA2_PSK);
+    CHECK_EQ(seen.Bss[psk].Beacon, 0);
+    CHECK_EQ(seen.Bss[wep].Security, BWL_SEC_OTHER);
+    /* the bodies, as Windows gets them: Timestamp, interval, capability, SSID first */
+    for (i = 0; i < 8; i++) CHECK_EQ(seen.Body[psk][i], 0);
+    CHECK_EQ(seen.Body[psk][8], 100);
+    CHECK_EQ(seen.Body[psk][10] & 0x11, 0x11);
+    CHECK_EQ(seen.Body[psk][12], 0);
+    CHECK_EQ(seen.Body[psk][13], 11);
+    /* the network as Windows hands it back for the connect */
+    CHECK_EQ(BwlBssFromBody(seen.Bss[psk].Bssid, 36, 1, -61, seen.Body[psk], seen.BodyLen[psk], &b), 0);
+    CHECK_EQ(b.Security, BWL_SEC_WPA2_PSK);
+    CHECK(memcmp(b.Ssid, "bwltest-psk", 11) == 0);
+    /* a second scan, the results again */
+    seen.NBss = 0;
+    CHECK_EQ(BwlScanStart(&d), 0);
+    CHECK_EQ(service_until(&d, BWL_EV_SCAN_DONE, 20), 0);
+    CHECK_EQ(seen.NBss, FAKE_NAPS);
+
+    /* open network: join, ARP to the gateway, leave */
+    d.Wlan.Events = 0;
+    CHECK_EQ(BwlConnect(&d, &seen.Bss[open], NULL), 0);
+    CHECK_EQ(service_until(&d, BWL_EV_ASSOC, 20), 0);
+    CHECK_EQ(d.Wlan.ConnStatus, 0);
+    CHECK_EQ(d.Wlan.Link, BWL_LINK_UP);
+    CHECK_EQ(f.Assoc, FAKE_AP_OPEN);
+    CHECK_EQ(f.Wsec, 0); CHECK_EQ(f.WpaAuth, 0); CHECK_EQ(f.SupWpa, 0);
+    CHECK(memcmp(d.Wlan.Bssid, FakeAps[FAKE_AP_OPEN].Bssid, 6) == 0);
+    CHECK_EQ(d.Wlan.AssocAid, 5);
+    {
+        u32 n = BwlAssocReqBody(&d, body, sizeof(body));
+        CHECK(n > 4 + 2 + 12);
+        CHECK_EQ(body[4], 0); CHECK_EQ(body[5], 12);            /* the SSID element the firmware sent */
+        CHECK(BwlFindIe(body + 4, n - 4, 48) == NULL);
+        n = BwlAssocRspBody(&d, body, sizeof(body));
+        CHECK_EQ(n, 6 + 10);
+        CHECK_EQ(body[4], 5); CHECK_EQ(body[5], 0xC0);
+    }
+    CHECK_EQ(BwlLinkInfo(&d), 0);
+    CHECK_EQ(d.Wlan.RateKbps, 65000);
+    CHECK_EQ(d.Wlan.Rssi, -52);
+    seen.NRx = 0;
+    CHECK_EQ(BwlTxEth(&d, eth, arp_request(d.Wlan.Mac, eth), 0), 0);
+    for (i = 0; i < 5 && seen.NRx == 0; i++) {
+        CHECK(BwlService(&d) >= 0);
+    }
+    CHECK_EQ(f.ArpReplies, 1);
+    CHECK_EQ(seen.NRx, 1);
+    CHECK_EQ(seen.RxLen[0], 14 + 28);
+    CHECK(memcmp(seen.Rx[0], d.Wlan.Mac, 6) == 0);
+    CHECK(memcmp(seen.Rx[0] + 6, FakeGatewayMac, 6) == 0);
+    CHECK(memcmp(seen.Rx[0] + 22, FakeGatewayMac, 6) == 0);  /* the answer: the gateway's address */
+    /* many frames in a row: the credit window (4 here) holds the rest back
+     * until the next frame from the firmware */
+    before = f.ArpReplies;
+    for (i = 0; i < 40; i++) {
+        int k;
+        for (k = 0; k < 50 && (r = BwlTxEth(&d, eth, 42, 0)) == BWL_E_CREDIT; k++) {
+            CHECK(BwlService(&d) >= 0);
+        }
+        CHECK_EQ(r, 0);
+    }
+    for (i = 0; i < 10; i++) {
+        CHECK(BwlService(&d) >= 0);
+    }
+    CHECK_EQ(f.ArpReplies - before, 40);
+    CHECK_EQ(d.Wlan.RxData, 41);
+    CHECK_EQ(BwlDisconnect(&d, 3), 0);
+    CHECK_EQ(d.Wlan.Link, BWL_LINK_DOWN);
+    CHECK_EQ(f.Assoc, -1);
+    for (i = 0; i < 3; i++) {
+        CHECK(BwlService(&d) >= 0);
+    }
+    CHECK_EQ(d.Wlan.Events & BWL_EV_DISCONNECT, 0);         /* our own leaving is not a drop */
+    CHECK_EQ(BwlTxEth(&d, eth, 42, 0), 0);                  /* sent, and dropped by the firmware */
+    CHECK(BwlService(&d) >= 0);
+    CHECK_EQ(f.DataDropped, 1);
+
+    /* WPA2-PSK, the host's supplicant (WiFiCx): EAPOL as data, then the keys */
+    d.Wlan.Events = 0;
+    seen.NRx = 0;
+    CHECK_EQ(BwlConnect(&d, &b, NULL), 0);
+    CHECK_EQ(service_until(&d, BWL_EV_ASSOC, 20), 0);
+    CHECK_EQ(d.Wlan.ConnStatus, 0);
+    CHECK_EQ(d.Wlan.Link, BWL_LINK_ASSOCIATED);
+    CHECK_EQ(d.Wlan.Events & BWL_EV_KEYED, 0);
+    CHECK_EQ(f.SupWpa, 0); CHECK_EQ(f.Wsec, 4); CHECK_EQ(f.WpaAuth, 0x80);
+    CHECK_EQ(d.Wlan.FwSup, 0);
+    {
+        u32 n = BwlAssocReqBody(&d, body, sizeof(body));
+        const u8 *rsn = BwlFindIe(body + 4, n - 4, 48);
+        u8 ours[24];
+        CHECK(rsn != NULL);
+        CHECK_EQ(BwlBuildRsnIe(ours, sizeof(ours)), 22);
+        CHECK(rsn != NULL && memcmp(rsn, ours, 22) == 0);       /* what message 2 must carry */
+    }
+    for (i = 0; i < 3 && seen.NRx == 0; i++) {
+        CHECK(BwlService(&d) >= 0);
+    }
+    CHECK_EQ(seen.NRx, 1);                                  /* message 1 */
+    CHECK_EQ(seen.Rx[0][12], 0x88); CHECK_EQ(seen.Rx[0][13], 0x8E);
+    CHECK_EQ(seen.Rx[0][15], 1);
+    CHECK_EQ(d.Wlan.RxEapol, 1);
+    /* a key is taken as soon as the link is associated (the order is
+     * Windows' business); leave, and go through the handshake properly */
+    CHECK_EQ(BwlSetKey(&d, 1, 0, (const u8 *)"0123456789abcdef", 16), 0);
+    CHECK_EQ(BwlDisconnect(&d, 3), 0);
+    for (i = 0; i < 3; i++) CHECK(BwlService(&d) >= 0);
+    d.Wlan.Events = 0;
+    seen.NRx = 0;
+    CHECK_EQ(BwlConnect(&d, &b, NULL), 0);
+    CHECK_EQ(service_until(&d, BWL_EV_ASSOC, 20), 0);
+    CHECK_EQ(d.Wlan.Link, BWL_LINK_ASSOCIATED);
+    for (i = 0; i < 3 && seen.NRx == 0; i++) CHECK(BwlService(&d) >= 0);
+    CHECK_EQ(seen.NRx, 1);
+    CHECK_EQ(send_eapol(&d, 2), 0);                         /* message 2 */
+    for (i = 0; i < 3 && seen.NRx < 2; i++) CHECK(BwlService(&d) >= 0);
+    CHECK_EQ(seen.NRx, 2);
+    CHECK_EQ(seen.Rx[1][15], 3);                            /* message 3 */
+    CHECK_EQ(send_eapol(&d, 4), 0);                         /* message 4, then the keys */
+    CHECK_EQ(BwlSetKey(&d, 1, 0, (const u8 *)"0123456789abcdef", 16), 0);
+    CHECK_EQ(BwlSetKey(&d, 0, 1, (const u8 *)"fedcba9876543210", 16), 0);
+    CHECK_EQ(f.KeysSet, 3);                                 /* the early one and these two */
+    CHECK_EQ(f.KeyErrors, 0);
+    CHECK(memcmp(f.PairKey, "0123456789abcdef", 16) == 0);
+    CHECK(memcmp(f.GroupKey, "fedcba9876543210", 16) == 0);
+    CHECK_EQ(f.GroupIdx, 1);
+    CHECK_EQ(d.Wlan.Link, BWL_LINK_UP);
+    CHECK_EQ(f.EapolFromHost, 2);
+    CHECK_EQ(d.Wlan.TxEapol, 2);
+    CHECK_EQ(BwlSetKey(&d, 0, 4, (const u8 *)"fedcba9876543210", 16), BWL_E_FORMAT);
+    before = f.ArpReplies;
+    seen.NRx = 0;
+    CHECK_EQ(BwlTxEth(&d, eth, arp_request(d.Wlan.Mac, eth), 0), 0);
+    for (i = 0; i < 3 && seen.NRx == 0; i++) CHECK(BwlService(&d) >= 0);
+    CHECK_EQ(f.ArpReplies - before, 1);
+    CHECK_EQ(seen.NRx, 1);
+    /* the AP leaves */
+    FakeApDeauth(&f, 7);
+    CHECK_EQ(service_until(&d, BWL_EV_DISCONNECT, 5), 0);
+    CHECK_EQ(d.Wlan.Link, BWL_LINK_DOWN);
+    CHECK_EQ(d.Wlan.DisconnectReason, 7);
+    CHECK_EQ(d.Wlan.DisconnectEvent, E_DEAUTH_IND);
+    CHECK_EQ(d.Wlan.DisconnectByPeer, 1);
+    CHECK_EQ(BwlSetKey(&d, 1, 0, (const u8 *)"0123456789abcdef", 16), BWL_E_STATE);
+
+    /* WPA2-PSK, the firmware's supplicant */
+    d.Wlan.Events = 0;
+    r = BwlConnect(&d, &b, FAKE_PSK_PASS);
+    if (is43752) {
+        /* this simulated firmware has no idsup: sup_wpa 1 is refused */
+        CHECK_EQ(r, BWL_E_FIRMWARE);
+        CHECK_EQ(d.Wlan.Link, BWL_LINK_DOWN);
+    } else {
+        CHECK_EQ(r, 0);
+        CHECK_EQ(service_until(&d, BWL_EV_ASSOC, 20), 0);
+        CHECK_EQ(d.Wlan.ConnStatus, 0);
+        CHECK_EQ(d.Wlan.Events & BWL_EV_KEYED, BWL_EV_KEYED);
+        CHECK_EQ(d.Wlan.Link, BWL_LINK_UP);
+        CHECK_EQ(f.SupWpa, 1);
+        CHECK(strcmp(f.Pmk, FAKE_PSK_PASS) == 0);
+        CHECK_EQ(BwlSetKey(&d, 1, 0, (const u8 *)"0123456789abcdef", 16), BWL_E_STATE);   /* not ours to set */
+        before = f.ArpReplies;
+        CHECK_EQ(BwlTxEth(&d, eth, arp_request(d.Wlan.Mac, eth), 0), 0);
+        CHECK(BwlService(&d) >= 0);
+        CHECK_EQ(f.ArpReplies - before, 1);
+        CHECK_EQ(BwlDisconnect(&d, 3), 0);
+        for (i = 0; i < 3; i++) CHECK(BwlService(&d) >= 0);
+        /* a wrong passphrase: the handshake fails */
+        d.Wlan.Events = 0;
+        CHECK_EQ(BwlConnect(&d, &b, "not the passphrase"), 0);
+        CHECK_EQ(service_until(&d, BWL_EV_ASSOC, 20), 0);
+        CHECK_EQ(d.Wlan.ConnStatus, 0x107);
+        CHECK_EQ(d.Wlan.ConnEvent, E_PSK_SUP);
+        CHECK_EQ(d.Wlan.Link, BWL_LINK_DOWN);
+        for (i = 0; i < 3; i++) CHECK(BwlService(&d) >= 0);
+        CHECK_EQ(d.Wlan.Events & BWL_EV_DISCONNECT, 0);
+        CHECK_EQ(BwlConnect(&d, &b, "short"), BWL_E_FORMAT);
+    }
+
+    /* what cannot be joined */
+    CHECK_EQ(BwlConnect(&d, &seen.Bss[wep], NULL), BWL_E_FORMAT);
+    d.Wlan.Events = 0;
+    b = seen.Bss[open];
+    b.Bssid[5] = 0x99;                                      /* no such AP */
+    CHECK_EQ(BwlConnect(&d, &b, NULL), 0);
+    CHECK_EQ(service_until(&d, BWL_EV_ASSOC, 20), 0);
+    CHECK_EQ(d.Wlan.ConnStatus, E_STATUS_NO_NETWORKS);
+    CHECK_EQ(d.Wlan.Link, BWL_LINK_DOWN);
+    /* a scan still running when a join is wanted is aborted */
+    f.HoldEscan = 1;
+    CHECK_EQ(BwlScanStart(&d), 0);
+    CHECK(BwlService(&d) >= 0);
+    CHECK_EQ(d.Wlan.Scanning, 1);
+    d.Wlan.Events = 0;
+    CHECK_EQ(BwlConnect(&d, &seen.Bss[open], NULL), 0);
+    CHECK_EQ(f.ScanAborts, 1);
+    CHECK(d.Wlan.Events & BWL_EV_SCAN_DONE);
+    CHECK_EQ(d.Wlan.Scanning, 0);
+    CHECK_EQ(service_until(&d, BWL_EV_ASSOC, 20), 0);
+    CHECK_EQ(d.Wlan.Link, BWL_LINK_UP);
+
+    CHECK_EQ(f.Violations, 0);
+    if (f.Violations) {
+        printf("  last violation: %s\n", f.LastViolation);
+    }
+    printf("  %u commands, %u frames out, %u in, %u events, %u scans, %u joins\n", f.DcmdSeen,
+           d.Stats.FramesTx, d.Stats.FramesRx, d.Stats.EventsRx, f.Escans, f.Joins);
+    FakeFree(&f);
+}
+
 static unsigned char *
 slurp(const char *dir, const char *name, unsigned *len)
 {
@@ -605,6 +1143,9 @@ main(int argc, char **argv)
         test_bcdc_event();
         test_xfer_split();
         test_faults();
+        test_wlan_pure();
+        test_wlan(FAKE_4345);
+        test_wlan(FAKE_43752);
         synthetic_files(&fw, &fwlen, &nv, &nvlen, &clm, &clmlen);
         printf("bring-up with synthetic files\n");
         bringup(FAKE_4345, fw, fwlen, nv, nvlen, clm, clmlen, "7.45.96.0", 6);

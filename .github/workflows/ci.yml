@@ -228,7 +228,10 @@ jobs:
     # The Wi-Fi driver's SDIO, chip, firmware and protocol code is plain C
     # (drivers/net/bcmwlsdio/bwl*.c). Build it with tools/bwltest, which
     # runs it against a simulated BCM43456 and BCM43752: unit tests, then attach,
-    # download, start and control commands with synthetic files; then the
+    # download, start and control commands with synthetic files, then the
+    # station against simulated access points (escan, open and WPA2-PSK
+    # joins with the host's and the firmware's supplicant, keys, data
+    # frames through the credit window, deauthentication); then the
     # same bring-up with the real firmware files install-firmware.ps1
     # fetches, at the same pinned commits and hashes. The files are only
     # downloaded into the runner, never stored or uploaded.
@@ -239,7 +242,7 @@ jobs:
         run: |
           set -eux
           B=drivers/net/bcmwlsdio
-          SRC="$B/bwl_sdio.c $B/bwl_chip.c $B/bwl_bringup.c $B/bwl_fw.c $B/bwl_proto.c $B/bwl_ctl.c"
+          SRC="$B/bwl_sdio.c $B/bwl_chip.c $B/bwl_bringup.c $B/bwl_fw.c $B/bwl_proto.c $B/bwl_ctl.c $B/bwl_wlan.c $B/bwl_data.c"
           gcc -std=c99 -O2 -Wall -Wextra -Werror -o bwltest tools/bwltest/main.c tools/bwltest/fakechip.c $SRC
           gcc -std=c99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror \
               -o bwltest-asan tools/bwltest/main.c tools/bwltest/fakechip.c $SRC

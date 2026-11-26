@@ -3,9 +3,11 @@
  * in an SDPCM control frame, read frames until its reply arrives, and
  * the iovar helpers built on it (get/set by name, clmload).
  *
- * Polled because W3 has no card interrupt yet: the SDIO core's
- * intstatus is read over the backplane every millisecond instead. The
- * interrupt handling (W4) will call the same receive path.
+ * Polled: no card interrupt is used. The SDIO core's intstatus is read
+ * over the backplane, every millisecond inside a command and every few
+ * milliseconds from the Wi-Fi worker (BwlService). Events go to
+ * bwl_wlan.c, data frames to the front end (Wlan.Net); BwlTxEth sends
+ * data frames inside the firmware's credit window.
  *
  * The receive loop is OpenBSD bwfm's bwfm_sdio_rx_frames and
  * bwfm_sdio_task; the abort after a bad frame is Linux brcmfmac's
@@ -21,6 +23,9 @@
 
 #include "bwl.h"
 #include "bwl_regs.h"
+
+/* An event is at least the Ethernet header, bcmeth_hdr and the message. */
+#define EV_MIN (14u + 10u + 48u)
 
 typedef struct want {
     int  Active;
@@ -61,6 +66,7 @@ Dispatch(bwl_dev *Dev, const bwl_frame *F, want *W)
     bwl_event ev;
     const u8 *p;
     u32 plen;
+    int r;
 
     switch (F->Channel) {
     case SDPCM_CH_CONTROL:
@@ -87,12 +93,26 @@ Dispatch(bwl_dev *Dev, const bwl_frame *F, want *W)
             Dev->Stats.RxErrors++;
             return;
         }
-        if (BwlEventParse(p, plen, &ev) == 0) {
+        r = BwlEventParse(p, plen, &ev);
+        if (r == 0) {
             Dev->Stats.EventsRx++;
             Dev->Stats.LastEvent = ev.Type;
             Dev->Stats.LastEventStatus = ev.Status;
+            BwlWlanEvent(Dev, &ev);
+        } else if (r == BWL_E_STATE || plen < EV_MIN) {
+            /* an ordinary data frame (also a short one the event parser refused) */
+            Dev->Stats.DataRx++;
+            if (plen >= 14) {
+                Dev->Wlan.RxData++;
+                if (BwlGetBe16(p + 12) == ETHERTYPE_EAPOL) {
+                    Dev->Wlan.RxEapol++;
+                }
+                if (Dev->Wlan.Net && Dev->Wlan.Net->rx_eth) {
+                    Dev->Wlan.Net->rx_eth(Dev->Ctx, p, plen);
+                }
+            }
         } else {
-            Dev->Stats.DataRx++;    /* no data path in W3: dropped */
+            Dev->Stats.RxErrors++;  /* a Broadcom frame that is not a well-formed event */
         }
         return;
 
@@ -134,6 +154,7 @@ RxFrames(bwl_dev *Dev, want *W)
             return BWL_E_FORMAT;
         }
         Dev->TxMaxSeq = f.MaxSeq;
+        Dev->Wlan.FlowCtl = f.FlowCtl;
         flen = (u32)f.FrameLen - BWL_SDPCM_HDR;
         if (flen == 0) {
             nextlen = (u32)f.NextLen << 4;
@@ -217,6 +238,87 @@ int
 BwlPollOnce(bwl_dev *Dev)
 {
     return Poll(Dev, NULL);
+}
+
+int
+BwlService(bwl_dev *Dev)
+{
+    u32 before = Dev->Stats.FramesRx;
+    int r;
+
+    if (!Dev->FwRunning) {
+        return BWL_E_STATE;
+    }
+    r = Poll(Dev, NULL);
+    if (r) {
+        return r;
+    }
+    r = BwlWlanService(Dev);
+    if (r) {
+        return r;
+    }
+    return (int)(Dev->Stats.FramesRx - before);
+}
+
+/* brcmfmac prio2prec: best effort and "none" swap with background, so that
+ * the flow-control bit for 802.1D priority 0 is bit 2. */
+static unsigned
+Prec(unsigned Prio)
+{
+    Prio &= 7;
+    return (Prio == 0 || Prio == 3) ? (Prio ^ 2) : Prio;
+}
+
+int
+BwlTxReady(const bwl_dev *Dev, unsigned Prio)
+{
+    return Dev->FwRunning && BwlTxCredit(Dev->TxSeq, Dev->TxMaxSeq) &&
+           !(Dev->Wlan.FlowCtl & (1u << Prec(Prio)));
+}
+
+int
+BwlTxEth(bwl_dev *Dev, const u8 *Eth, u32 Len, unsigned Prio)
+{
+    u8 *b = Dev->Bounce;
+    int len, r;
+
+    if (!Dev->FwRunning) {
+        return BWL_E_STATE;
+    }
+    if (Len < 14 || BWL_SDPCM_HDR + BCDC_HDR_LEN + Len + 512 > Dev->BounceSize / 2) {
+        Dev->Wlan.TxDataDrops++;
+        return BWL_E_FORMAT;
+    }
+    if (!BwlTxReady(Dev, Prio)) {
+        if (Dev->Wlan.FlowCtl & (1u << Prec(Prio))) {
+            Dev->Wlan.FlowHold++;
+        }
+        return BWL_E_CREDIT;
+    }
+    /* BCDC data header: version, 802.1D priority, interface 0, no data offset */
+    b[BWL_SDPCM_HDR + 0] = (u8)BCDC_FLAG_VER(BCDC_PROTO_VER);
+    b[BWL_SDPCM_HDR + 1] = (u8)(Prio & 7);
+    b[BWL_SDPCM_HDR + 2] = 0;
+    b[BWL_SDPCM_HDR + 3] = 0;
+    BwlMemCpy(b + BWL_SDPCM_HDR + BCDC_HDR_LEN, Eth, Len);
+    len = BwlSdpcmBuild(b, Dev->BounceSize / 2, SDPCM_CH_DATA, Dev->TxSeq, b + BWL_SDPCM_HDR,
+                        BCDC_HDR_LEN + Len, Dev->F2BlockSize);
+    if (len < 0) {
+        Dev->Wlan.TxDataDrops++;
+        return len;
+    }
+    r = BwlFrameRw(Dev, b, (u32)len, 1);
+    if (r) {
+        Dev->Wlan.TxDataDrops++;
+        return r;
+    }
+    Dev->TxSeq++;
+    Dev->Stats.FramesTx++;
+    Dev->Wlan.TxData++;
+    if (BwlGetBe16(Eth + 12) == ETHERTYPE_EAPOL) {
+        Dev->Wlan.TxEapol++;
+    }
+    return BWL_OK;
 }
 
 int
