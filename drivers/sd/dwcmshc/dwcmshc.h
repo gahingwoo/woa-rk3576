@@ -403,36 +403,10 @@ Environment:
 #define MSHC_RDYINT_GEN_MAXVAL_MASK                 (0xff << 0)
 
 //
-// MSHC IDMAC fields
+// MSHC IDMAC descriptors, the table builder and the DMA FIFOTH value
+// (plain C, shared with tools/idmactest).
 //
-#define MSHC_IDMAC_DES0_OWN                         (0x1U << 31)
-#define MSHC_IDMAC_DES0_CES                         (0x1 << 30)
-#define MSHC_IDMAC_DES0_ER                          (0x1 << 5)
-#define MSHC_IDMAC_DES0_CH                          (0x1 << 4)
-#define MSHC_IDMAC_DES0_FS                          (0x1 << 3)
-#define MSHC_IDMAC_DES0_LD                          (0x1 << 2)
-#define MSHC_IDMAC_DES0_DIC                         (0x1 << 1)
-
-#define MSHC_IDMAC_DES1_BS2_SHIFT                   13
-#define MSHC_IDMAC_DES1_BS2_MASK                    (0x1fff << 13)
-#define MSHC_IDMAC_DES1_BS1_SHIFT                   0
-#define MSHC_IDMAC_DES1_BS1_MASK                    (0x1fff << 0)
-
-#pragma pack(1)
-
-typedef struct _MSHC_IDMAC_DESCRIPTOR {
-    ULONG Des0; // Control & Status register
-    ULONG Des1; // Buffer size
-    ULONG Des2; // Buffer address
-    ULONG Des3; // Next descriptor address
-} MSHC_IDMAC_DESCRIPTOR, *PMSHC_IDMAC_DESCRIPTOR;
-
-#pragma pack()
-
-//
-// Maximum buffer size per chained descriptor entry
-//
-#define MSHC_IDMAC_MAX_LENGTH_PER_ENTRY     0x1000
+#include "idmac.h"
 
 #define MSHC_OPTIMAL_FIFO_THRESHOLD(_Depth)  ((_Depth) / 2)
 
@@ -644,6 +618,32 @@ struct _MSHC_EXTENSION {
     } Diag;
 
     //
+    // Data transfer counters, kept on both controllers and written with the
+    // breadcrumbs (SdDiag for the SD slot, SdioDiag for the SDIO controller):
+    // which transfer method sdport picked, how big its requests are, and how
+    // long the controller held them.
+    //
+    struct {
+        volatile LONG DmaRequests;
+        volatile LONG PioRequests;
+        volatile LONG64 DmaBytes;
+        volatile LONG64 PioBytes;
+        volatile LONG MaxDmaLength;
+        volatile LONG MaxSgElements;
+        volatile LONG MaxDescriptors;
+        volatile LONG BuildErrors;          // descriptor table refused
+        ULONG LastBuildError;               // MSHC_IDMAC_E_*
+        volatile LONG IdmacErrors;          // IDSTS FBE/DU/CES seen by the ISR
+        ULONG LastIdmacIdsts;
+        volatile LONG OwnWaits;             // completion waited for the last descriptor
+        volatile LONG OwnTimeouts;          // ... and it never came back
+        volatile LONG64 DmaTicks;           // issue to completion, DMA data requests
+        LONG64 DmaIssueTick;
+        LONG64 TickFrequency;
+        volatile LONG DataErrors;           // requests completed with an error
+    } Xfer;
+
+    //
     // Current request state
     //
     PSDPORT_REQUEST OutstandingRequest;
@@ -689,6 +689,14 @@ struct _MSHC_EXTENSION {
     //
     ULONG FifoThreshold;
     ULONG FifoDmaBurstSize;
+    ULONG Fifoth;
+
+    //
+    // DES0 of the last descriptor of the DMA transfer on the bus (in
+    // sdport's common buffer), NULL otherwise.  The IDMAC clears its OWN bit
+    // once the last byte is in memory, which for a read can be after DTO.
+    //
+    volatile ULONG *IdmacLastDes0;
 
     //
     // Work item for completing lengthy commands with busy signaling
