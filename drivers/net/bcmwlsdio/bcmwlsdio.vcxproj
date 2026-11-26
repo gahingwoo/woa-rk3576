@@ -76,6 +76,7 @@
     <ClCompile Include="driver.c" />
     <ClCompile Include="sdbus.c" />
     <ClCompile Include="files.c" />
+    <ClCompile Include="pool.c" />
     <ClCompile Include="bwl_sdio.c" />
     <ClCompile Include="bwl_chip.c" />
     <ClCompile Include="bwl_bringup.c" />

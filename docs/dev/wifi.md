@@ -284,6 +284,9 @@ Written by the driver:
 | `BcdcIoType`, `MacAddress`, `ClmChunks`, `ClmStatus`, `ClmResult`, `FwVersion`, `FwVersionNumber`, `FwCmdStatus` | control channel results |
 | `Cmd52Count`, `Cmd53Count`, `Cmd52Errors`, `Cmd53Errors`, `LastSdStatus`, `LastSdArg`, `LastR5Flags` | bus counters |
 | `FramesTx`, `FramesRx`, `EventsRx`, `LastEvent`, `RxErrors`, `RxAborts`, `GlomRx`, `MailboxData`, `IntStatus`, `Polls` | frame counters |
+| `Cmd53OutsideBounce` | CMD53s refused because their buffer was not inside the bounce buffer (should be 0) |
+| `BounceGuardOk` | 1: nothing was written past the bounce buffer during the bring-up |
+| `PoolGuardErrors`, `PoolGuardBuffer`, `PoolGuardWhere`, `PoolGuardSize`, `PoolGuardOffset` | a driver buffer written past its end (pool.c); absent if none |
 
 ## Board session for W2 and W3
 
@@ -326,6 +329,50 @@ with `LastSdStatus` and `LastSdArg` say which command sdbus refused (an
 above); `ErrorDetail` is the address or register. Backing out: set `Stage`
 0, or turn the firmware option off (Windows then sees no SDIO controller),
 or `pnputil /delete-driver <oem>.inf /uninstall`.
+
+## BAD_POOL_CALLER at device removal (0xC2/0x99)
+
+Seen 2026-11-26 when PnP removed the bcmwlsdio devices to switch drivers.
+With symbols for ntoskrnl, Wdf01000 and sdbus 22621 the stack reads:
+`PnpProcessQueryRemoveAndEject` > `IopRemoveDevice` > KMDF
+`FxPkgFdo::ProcessRemoveDeviceOverload` > `FxPkgPnp::CleanupStateMachines`
+> `FxPkgFdo::ReleaseReenumerationInterface` > sdbus
+`SdbusReenumerationInterfaceDereference` (tail call) > `ExFreePoolWithTag`.
+The block being freed is sdbus's own GUID_REENUMERATE_SELF_INTERFACE
+context (0x18 bytes, non-paged, tag `SdIc`), which sdbus allocates when
+KMDF starts the FDO and frees when KMDF releases the interface at
+IRP_MN_REMOVE_DEVICE. `ExFreePoolWithTag` raises 0x99 only for an address
+below kernel space or not 16-byte aligned; the address was `...2c8`, and
+sdbus had just found its signature there, so the block itself was handed
+out misaligned or its pointer was moved: pool damage that predates the
+free. No bcmwlsdio
+buffer or object is freed on that path. FN_1's teardown crumb (`stopped: CPU halted`) was not
+in the log, so the instance going away was most likely FN_2 or FN_3,
+which never touch the card (that driver logged a crumb only after a
+registry write; the driver now logs first and tags every line `FN<n>`).
+
+To catch the writer (run elevated, then restart; the KD listener reports
+0xC1/0xC4/0xD6 at the faulting instruction):
+
+    verifier /flags 0x809 /driver bcmwlsdio.sys sdbus.sys dwcmshc.sys
+
+0x1 special pool, 0x8 pool tracking, 0x800 miscellaneous checks; on
+bcmwlsdio.sys this also turns on the KMDF verifier. A second round adds
+0x80 (DMA checks) and sdport.sys: `verifier /flags 0x889 /driver
+bcmwlsdio.sys sdbus.sys dwcmshc.sys sdport.sys`. sdport.sys also carries
+the eMMC boot disk, so keep the rescue Windows at hand; there, undo it
+offline by deleting `VerifyDrivers` and `VerifyDriverLevel` under
+`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management`
+of the loaded main hive. Online: `verifier /reset`, restart.
+
+Repro without a new package: `pnputil /disable-device "<instance>"` on one
+of the SD function devices (`SD\VID_02D0&PID_A9BF&FN_n\...`). That removes
+only bcmwlsdio's FDO above sdbus's child PDO; the SD host (dwcmshc, sdport)
+and sdbus stay up, so this is not the host teardown the SD rules forbid.
+A disabled device is not started at the next boot, so a crash does not
+loop; `pnputil /enable-device` brings it back. Order: first all three at
+Stage 0 and disable FN_2 (no card access at all: a crash here clears the
+bring-up code), then FN_1 at Stage 2 after `firmware running`.
 
 ## Licences
 
