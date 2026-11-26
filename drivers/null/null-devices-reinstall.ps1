@@ -14,7 +14,7 @@
 
 $ErrorActionPreference = 'Stop'
 $log = Join-Path $env:SystemRoot 'Temp\null-devices-reinstall.log'
-$ids = 'HYMB0001', 'RKCP0806', 'RKCP3005', 'HISI0031'
+$ids = 'HYMB0001', 'RKCP0806', 'RKCP3005', 'HISI0031', 'AMZN0001'
 $out = @("null-devices-reinstall $(Get-Date -Format s)")
 $n = 0
 foreach ($id in $ids) {

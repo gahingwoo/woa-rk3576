@@ -24,10 +24,17 @@
 ;                  serial.sys cannot drive (32-bit registers). Declared on
 ;                  the CM5-IO; the TaishanPi 3M firmware no longer declares
 ;                  it from 2026-11-24.
+;   ACPI\AMZN0001  \_SB.PCIn.RES0  the PCIe controller registers (DBI) of
+;                  each root complex (edk2-rk3576 Pcie.asl). The device only
+;                  describes that range, for an OS that reaches config space
+;                  through the DBI; Windows uses the MCFG's ECAM window and
+;                  needs no driver. Its _CID PNP0C02 does not get it a
+;                  driver on ARM64 Windows (code 28, one per segment).
 ;
 ; Install: stage it (pnputil /add-driver rk3576-null.inf, no /install),
 ; then tools\null-devices-reinstall.ps1 as SYSTEM, then restart. See
-; README.md in this directory.
+; README.md in this directory. The driver package (tools/rk3576-drivers)
+; carries it for every board and does the same from install.cmd /online.
 ;
 ; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
 ; SPDX-License-Identifier: GPL-2.0-only
@@ -50,6 +57,7 @@ PnpLockdown = 1
 %RK806.DeviceDesc%   = Null_Inst, ACPI\RKCP0806
 %PINC.DeviceDesc%    = Null_Inst, ACPI\RKCP3005
 %UART2.DeviceDesc%   = Null_Inst, ACPI\HISI0031
+%PCIEDBI.DeviceDesc% = Null_Inst, ACPI\AMZN0001
 
 [Null_Inst.NT]
 ; nothing to copy, nothing to register
@@ -64,3 +72,4 @@ HYM8563.DeviceDesc = "HYM8563 real-time clock (not used by Windows)"
 RK806.DeviceDesc   = "RK806 power management IC (managed by the firmware)"
 PINC.DeviceDesc    = "RK3576 pin controller (managed by the firmware)"
 UART2.DeviceDesc   = "RK3576 UART2 (no Windows driver)"
+PCIEDBI.DeviceDesc = "RK3576 PCIe controller registers (not used by Windows)"
