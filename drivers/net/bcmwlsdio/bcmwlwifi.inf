@@ -37,6 +37,7 @@ DefaultDestDir = 13
 
 [SourceDisksFiles]
 bcmwlsdio.sys = 1
+bwlsdflt.sys  = 1
 
 [Manufacturer]
 %ProviderName% = Standard,NTARM64.10.0...16299
@@ -71,6 +72,7 @@ HKR,,                NumberOfNetworkInterfaces, 0x00010001, 1
 
 [BCMWL_CopyFiles]
 bcmwlsdio.sys
+bwlsdflt.sys
 
 [BCMWL_Inst.NT.HW]
 AddReg = BCMWL_Inst.NT.HW.AddReg
@@ -85,6 +87,9 @@ HKR,,"MaxBlocks",0x00010003,32
 HKR,,"F2BlockMode",0x00010003,0
 HKR,,"Verify",0x00010003,1
 HKR,,"FirmwareDir",0x00000002,"\SystemRoot\System32\drivers\brcm"
+; bwlsdflt below the FDO: sdport 22621 frees the wrong address when KMDF
+; releases GUID_REENUMERATE_SELF_INTERFACE_STANDARD at removal (bwlsdflt.c).
+HKR,,"LowerFilters",0x00010000,"bwlsdflt"
 ; Stage 3: the poller's interval while frames move and when idle (ms), the
 ; time a connect task may take, and the firmware's own WPA2 supplicant
 ; (1: used for the network FwSupSsid names, or any, with Passphrase; both
@@ -96,6 +101,7 @@ HKR,,"FwSupplicant",0x00010003,0
 
 [BCMWL_Inst.NT.Services]
 AddService = bcmwlsdio,0x00000002,BCMWL_Service
+AddService = bwlsdflt,,BWLSDFLT_Service
 
 [BCMWL_Service]
 DisplayName   = %BCMWL.SvcDesc%
@@ -103,6 +109,13 @@ ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
 StartType     = 3 ; SERVICE_DEMAND_START
 ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
 ServiceBinary = %13%\bcmwlsdio.sys
+
+[BWLSDFLT_Service]
+DisplayName   = %BWLSDFLT.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\bwlsdflt.sys
 
 [BCMWL_Inst.NT.Wdf]
 KmdfService = bcmwlsdio, BCMWL_wdfsect
@@ -116,3 +129,4 @@ DiskName          = "Broadcom SDIO Wi-Fi Installation Disk"
 BCMWL.DeviceDesc  = "Broadcom BCM43456 Wi-Fi (SDIO, WiFiCx)"
 BCMWL.43752Desc   = "Broadcom BCM43752 Wi-Fi (SDIO, WiFiCx)"
 BCMWL.SvcDesc     = "Broadcom SDIO Wi-Fi driver"
+BWLSDFLT.SvcDesc      = "SDIO function filter for bcmwlsdio (sdport removal fix)"
