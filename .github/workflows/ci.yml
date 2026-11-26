@@ -143,6 +143,7 @@ jobs:
           # IVF. Frame counts are FFmpeg's; every frame's address registers
           # must point into the tool's buffers (the driver's check).
           set -eu
+          sudo apt-get update -qq > /dev/null
           sudo apt-get install -y -qq ffmpeg > /dev/null
           mkdir -p vp9 && cd vp9
           fail=0
