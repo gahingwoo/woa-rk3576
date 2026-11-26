@@ -11,13 +11,13 @@ until the next release.
 
 | Feature | Driver | Notes |
 |---|---|---|
-| eMMC | `dwcsdhc` | Windows boots from it on both boards |
+| eMMC | `dwcsdhc` | Windows boots from it on the CM5-IO and the TaishanPi 3M |
 | SD card | `dwcmshc` | eject and reinsert work (CM5-IO) |
-| NVMe (CM5-IO) | inbox `stornvme` | |
+| NVMe (CM5-IO, ROCK 4D) | inbox `stornvme` | the ROCK 4D boots Windows from it |
 | USB-A | inbox `usbxhci` | |
 | USB-C, CM5-IO | inbox `usbxhci` | USB 2.0 |
 | USB-C, TaishanPi 3M | inbox `usbxhci` | ci firmware. Only a device plugged in before power-on works (USB 3, 329 MB/s on a disk); one plugged in later gets no power until the next boot. Reboot before connecting a charger or a PC there |
-| Ethernet | `dwc_eqos` | DHCP; 1 Gbps on the TaishanPi 3M |
+| Ethernet | `dwc_eqos` | DHCP; 1 Gbps on the TaishanPi 3M. ROCK 4D: ci firmware (it sets the RTL8211F RGMII delays) |
 
 ## Display
 
@@ -25,9 +25,9 @@ Without a GPU driver, the inbox BasicDisplay scans out the firmware's
 framebuffer: one mode, no hot-plug, drawn on the CPU.
 
 With [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52) (TaishanPi
-3M) the desktop is drawn on the Mali-G52, the DSI screen can be turned to
+3M, ROCK 4D) the desktop is drawn on the Mali-G52, the DSI screen can be turned to
 landscape and has a brightness slider, and HDMI hot-plug and HDMI audio
-work. Its settings are in that repository.
+work (DSI on the TaishanPi 3M only). Its settings are in that repository.
 
 ## Touch (TaishanPi 3M, ci firmware)
 
@@ -35,12 +35,15 @@ work. Its settings are in that repository.
 points. The firmware declares the controller (`\_SB.I2C0.TCH0`,
 `RKCP9271`) only when the screen is attached.
 
-## Audio (TaishanPi 3M, ci firmware)
+## Audio (TaishanPi 3M, ROCK 4D, ci firmware)
 
 - Headphone jack and jack microphone: rk3xi2sbus, es8323 and csaudiork3x
   1.0.0.135 or later. Keep the installed pl330dma.
 - HDMI audio: the same drivers, with wddm-mali-g52 driving HDMI (its
   `HdmiHpd` setting at 3).
+- ROCK 4D: headphones, microphone and HDMI audio work with the same
+  drivers. Its jack has no detect switch; detection through rk3xsaradc is
+  not tried yet (see below).
 - CM5-IO HDMI audio is declared by the firmware, not tried.
 
 Details: [audio](dev/audio.md).
@@ -59,8 +62,8 @@ driver).
 
 [vdpu383](../drivers/video/vdpu383) and its test tool `vdpu383test` decode
 H.264 on the TaishanPi 3M, matching FFmpeg bit for bit on the conformance
-streams. Needs *Video Decoder (VDPU383)* enabled in firmware setup (off by
-default). Players do not use it yet: [video decode](dev/video-decode.md).
+streams, and work on the ROCK 4D too. Needs *Video Decoder (VDPU383)* enabled in firmware
+setup (on by default in ci firmware, off in 0.4.1). Players do not use it yet: [video decode](dev/video-decode.md).
 
 ## Buttons on the TaishanPi 3M (CI only)
 
@@ -84,22 +87,23 @@ the ADC alone.
 
 ## ADC keys and headphone jack on other boards (CI only)
 
-[rk3xsaradc](../drivers/adc/rk3xsaradc) binds `ACPI\RKCP0ADC` (on board
-branches for the CM5-IO and ROCK 4D). Their Maskrom keys become HID buttons
+[rk3xsaradc](../drivers/adc/rk3xsaradc) binds `ACPI\RKCP0ADC` (ROCK 4D: ci
+firmware; CM5-IO: a firmware branch). Their Maskrom keys become HID buttons
 on vendor page 0xFF00, which Windows ignores by itself. The ROCK 4D's
 headphone jack has no detect switch; it is read on ADC channel 3 and drives
 the Headphones endpoint through es8323. `tools/adctest` reads any channel.
 
 ## NPU
 
-[woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) (TaishanPi 3M).
+[woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) (TaishanPi 3M,
+ROCK 4D).
 
 ## Load and temperatures
 
 Task Manager on 23H2 shows no NPU and no temperature. rk-monitor shows them:
 a tray icon with the hottest temperature, a popup, and a desktop widget with
 CPU per cluster, GPU (use, temperature, clock), NPU per core and the thermal
-zones.
+zones. Without maliwddm the GPU rows say "Mali driver not installed".
 
 Install the RK3576 tools (CI artifact `rk3576-tools-arm64`): unpack it and
 run `install.cmd`. It puts rk-monitor, `rknputest` and `charsiu_run` into
@@ -111,8 +115,10 @@ driver update. `uninstall.cmd` removes all of it. Details:
 
 ## Not available
 
-- Wi-Fi on both boards ([wireless](dev/wireless.md)).
-- The EC20 modem's network interface on the TaishanPi 3M (MBIM switch
-  written, not tried: [EC20](dev/ec20.md)).
+- Wi-Fi on any board ([wireless](dev/wireless.md)), and Bluetooth on the
+  ROCK 4D.
+- Mobile data from the EC20 modem on the TaishanPi 3M: this firmware never
+  answers MBIM, and RNDIS mode forwards nothing. The module stays in QMI
+  mode until Quectel firmware is available ([EC20](dev/ec20.md)).
 - A valid RTC time on the TaishanPi 3M
   ([troubleshooting](troubleshooting.md#the-clock-is-wrong-after-every-boot)).

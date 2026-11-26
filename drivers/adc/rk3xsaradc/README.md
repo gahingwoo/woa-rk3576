@@ -111,7 +111,7 @@ dependency; CI runs its unit test on Linux:
 ## Board test plan
 
 Per board, with firmware that declares
-`\_SB.ADC0` and this driver installed (`pnputil /add-driver rk3xsaradc.inf /install`):
+`\_SB.ADC0` and this driver installed (`pnputil /add-driver rk3xsaradc.inf`, stage only, then restart):
 
 1. Device Manager: "Rockchip RK3576 SARADC" started, no code 10. `reg query`
    the Device Parameters key: `DiagDsdStatus` 0, `DiagResetAvailable` 1,

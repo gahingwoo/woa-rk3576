@@ -2,13 +2,13 @@
 
 [English](README.md) | 简体中文
 
-Rockchip RK3576 开发板（ArmSoM CM5-IO、立创泰山派 3M）的 Windows on Arm 驱动，以及把 Windows 11 23H2 装到 eMMC 上的 WinPE 映像和脚本。先装固件：[edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/blob/main/README.zh-CN.md)。
+Rockchip RK3576 开发板（ArmSoM CM5-IO、立创泰山派 3M、Radxa ROCK 4D）的 Windows on Arm 驱动，以及把 Windows 11 23H2 装到 eMMC（ROCK 4D 上是 NVMe）上的 WinPE 映像和脚本。先装固件：[edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/blob/main/README.zh-CN.md)。
 
 ![泰山派 3M 的 DSI 屏上横屏显示的 Windows 11，报告 10 点触摸](docs/imgs/tspi3m-win11-touch-landscape.png)
 
 ## 安装
 
-1. 把 edk2-rk3576 固件以完整映像写到 eMMC。
+1. 把 edk2-rk3576 固件以完整映像写到 eMMC（ROCK 4D：SPI NOR 和 NVMe，见[它的说明](docs/INSTALL.zh-CN.md#radxa-rock-4d)）。
 2. 按[安装说明](docs/INSTALL.zh-CN.md)操作：[最新正式版](https://github.com/gahingwoo/woa-rk3576/releases/latest)的 WinPE U 盘，Windows 11 23H2 ARM64 ISO 里的 `install.wim`，运行一个脚本。
 
 也可以用 [Maskrom Studio](https://github.com/gahingwoo/maskrom-studio) 在电脑上直接安装，不用 U 盘（仅 CI）。
@@ -17,33 +17,33 @@ Rockchip RK3576 开发板（ArmSoM CM5-IO、立创泰山派 3M）的 Windows on 
 
 ## 状态
 
-Windows 11 23H2（22631）。板测：在该板上实际跑通。仅 CI：CI 能编译，没在该板上跑过。分支：需要尚未合入 `main` 的固件分支。"ci 固件"：需要 0.4.1 之后的 edk2-rk3576（下一个正式版之前用它的 `ci` 构建）。
+Windows 11 23H2（22631）。板测：在该板上实际跑通。仅 CI：CI 能编译，没在该板上跑过。分支：需要尚未合入 `main` 的固件分支。"ci 固件"：需要 0.4.1 之后的 edk2-rk3576（下一个正式版之前用它的 `ci` 构建）。没试过：没在该板上跑过。ROCK 4D 从 NVMe 运行 Windows，所有功能都需要 ci 固件（它的 ACPI 表只在 edk2-rk3576 的 `main` 上）。
 
-| 功能 | 驱动 | CM5-IO | 泰山派 3M | 备注 |
-|---|---|---|---|---|
-| eMMC（系统盘） | dwcsdhc | 板测 | 板测 | |
-| SD 卡 | dwcmshc | 板测 | 仅 CI | 泰山派 3M：驱动能启动，没插卡试过 |
-| NVMe | 系统自带 stornvme | 板测 | 无此硬件 | |
-| USB-A | 系统自带 usbxhci | 板测 | 板测 | |
-| USB-C | 系统自带 usbxhci | 板测 | 板测 | CM5-IO：USB 2.0。泰山派 3M：只认上电时已插的设备，ci 固件 |
-| 以太网 | dwc_eqos | 板测 | 板测 | |
-| GPIO、I2C、SPI、DMA | rk3xgpio、rk3xi2c、rk3xspi、pl330dma | 板测 | 板测 | 驱动能启动 |
-| 40 针排针供应用使用 | rk3xuart、系统自带 rhproxy | 分支 | 仅 CI | [40 针排针](docs/pin40.zh-CN.md) |
-| 显示，帧缓冲 | 系统自带 BasicDisplay | 板测 | 板测 | 一个分辨率 |
-| 显示，GPU | [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52) | 仅 CI | 板测 | |
-| 触摸（DSI 屏） | gt9271 | 仅 CI | 板测 | ci 固件 |
-| 耳机孔、麦克风 | rk3xi2sbus、csaudiork3x、es8323 | 无此硬件 | 板测 | ci 固件 |
-| HDMI 音频 | 同上 | 仅 CI | 板测 | 配合 wddm-mali-g52，ci 固件 |
-| 蓝牙 | bcm4345bt | 仅 CI | 板测 | 不能通话，ci 固件 |
-| Wi-Fi | 无 | 无 | 无 | [无线](docs/dev/wireless.zh-CN.md) |
-| NPU | [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) | 无 | 板测 | |
-| 视频解码器（VDPU383） | vdpu383 | 仅 CI | 板测 | 只有测试工具，播放器还不能用 |
-| ADC 按键 | [rk3xsaradc](drivers/adc/rk3xsaradc) | 仅 CI | 仅 CI | 泰山派 3M：Recovery 键作电源按钮 |
-| 电源键（RK806） | [rk806pwrkey](drivers/input/rk806pwrkey) | 分支 | 无此硬件 | |
-| 板载指示灯 | [rkled](drivers/leds/rkled) | 分支 | 仅 CI | |
-| 硬件看门狗 | 系统自带（固件 WDAT） | 仅 CI | 仅 CI | 用 [wdthang](tools/wdthang) 测试 |
-| RTC、PMIC、引脚控制器 | [null](drivers/null) | 仅 CI | 板测 | 不需要驱动，只给设备起名 |
-| ROCK 4D 的 EEPROM | [rkeeprom](drivers/misc/rkeeprom) | | | ROCK 4D 固件分支，仅 CI |
+| 功能 | 驱动 | CM5-IO | 泰山派 3M | ROCK 4D | 备注 |
+|---|---|---|---|---|---|
+| eMMC（系统盘） | dwcsdhc | 板测 | 板测 | 无此硬件 | |
+| SD 卡 | dwcmshc | 板测 | 仅 CI | 没试过 | 泰山派 3M：驱动能启动，没插卡试过 |
+| NVMe | 系统自带 stornvme | 板测 | 无此硬件 | 板测 | ROCK 4D：系统盘 |
+| USB-A | 系统自带 usbxhci | 板测 | 板测 | 没试过 | |
+| USB-C | 系统自带 usbxhci | 板测 | 板测 | 没试过 | CM5-IO：USB 2.0。泰山派 3M：只认上电时已插的设备，ci 固件 |
+| 以太网 | dwc_eqos | 板测 | 板测 | 板测 | ROCK 4D：ci 固件（RTL8211F 的 RGMII 延时） |
+| GPIO、I2C、SPI、DMA | rk3xgpio、rk3xi2c、rk3xspi、pl330dma | 板测 | 板测 | 没试过 | 驱动能启动 |
+| 40 针排针供应用使用 | rk3xuart、系统自带 rhproxy | 分支 | 仅 CI | 仅 CI | 固件里默认关闭；[40 针排针](docs/pin40.zh-CN.md) |
+| 显示，帧缓冲 | 系统自带 BasicDisplay | 板测 | 板测 | 板测 | 一个分辨率 |
+| 显示，GPU | [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52) | 仅 CI | 板测 | 板测 | |
+| 触摸（DSI 屏） | gt9271 | 仅 CI | 板测 | 无此硬件 | ci 固件 |
+| 耳机孔、麦克风 | rk3xi2sbus、csaudiork3x、es8323 | 无此硬件 | 板测 | 板测 | ci 固件。ROCK 4D：插拔检测（rk3xsaradc）没试过 |
+| HDMI 音频 | 同上 | 仅 CI | 板测 | 板测 | 配合 wddm-mali-g52，ci 固件 |
+| 蓝牙 | bcm4345bt | 仅 CI | 板测 | 无 | 不能通话，ci 固件 |
+| Wi-Fi | 无 | 无 | 无 | 无 | [无线](docs/dev/wireless.zh-CN.md) |
+| NPU | [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) | 无 | 板测 | 板测 | |
+| 视频解码器（VDPU383） | vdpu383 | 仅 CI | 板测 | 板测 | 只有测试工具，播放器还不能用 |
+| ADC 按键 | [rk3xsaradc](drivers/adc/rk3xsaradc) | 仅 CI | 仅 CI | 仅 CI | 泰山派 3M：Recovery 键作电源按钮 |
+| 电源键（RK806） | [rk806pwrkey](drivers/input/rk806pwrkey) | 分支 | 无此硬件 | 仅 CI | |
+| 板载指示灯 | [rkled](drivers/leds/rkled) | 分支 | 仅 CI | 仅 CI | |
+| 硬件看门狗 | 系统自带（固件 WDAT） | 仅 CI | 仅 CI | 仅 CI | 用 [wdthang](tools/wdthang) 测试 |
+| RTC、PMIC、引脚控制器 | [null](drivers/null) | 仅 CI | 板测 | 板测 | 不需要驱动，只给设备起名 |
+| EEPROM | [rkeeprom](drivers/misc/rkeeprom) | 无此硬件 | 无此硬件 | 仅 CI | |
 
 每项结果都来自同一块板子。细节见[硬件功能](docs/features.zh-CN.md)。
 

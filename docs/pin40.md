@@ -27,7 +27,7 @@ Firmware support per board:
 |---|---|---|
 | TaishanPi 3M | `main` | both options |
 | CM5-IO | `cm5io-parity` | both options, not merged to `main` yet |
-| ROCK 4D | `rock4d-parity` | both options, not merged to `main` yet |
+| ROCK 4D | `main` | both options, not tried on the board |
 
 The debug console UART (UART0) is never one of the header UARTs here, on
 any board, and rk3xuart refuses to start on it.
@@ -143,7 +143,7 @@ console. Pins 27/28 are I2C6 with the board's EEPROM at 0x50 (mainline
 2. Install rk3xuart from the CI artifact (`rk3576-woa-uart-arm64`, or the
    signed packages the WinPE workflow puts on its media) the same way as the
    other test-signed drivers ([INSTALL.md](INSTALL.md)):
-   `pnputil /add-driver rk3xuart.inf /install`.
+   `pnputil /add-driver rk3xuart.inf` (stage only), then restart.
 3. Check rhproxy is on the system:
    `reg query HKLM\SYSTEM\CurrentControlSet\Services\rhproxy` and
    `dir C:\Windows\INF\rhproxy.inf`. Device Manager should then show
@@ -217,6 +217,6 @@ Nothing above has run on hardware. In this order, one board at a time
    finds a known I2C device on pins 3/5. SpiTestTool loopback with MOSI
    wired to MISO on SPI1.
 4. Both on: pins 8, 10, 37, 40 are gone from the GPIO list, the UARTs work.
-5. Then the CM5-IO and ROCK 4D on their branches, the same steps; on the
+5. Then the CM5-IO (on its branch) and the ROCK 4D, the same steps; on the
    CM5-IO, check the debug console on pins 8/10 keeps working with both
    options on.

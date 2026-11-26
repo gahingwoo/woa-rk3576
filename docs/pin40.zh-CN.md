@@ -24,7 +24,7 @@ Linux 没有任何作用。
 |---|---|---|
 | 泰山派 3M | `main` | 两个选项都有 |
 | CM5-IO | `cm5io-parity` | 两个选项都有，还没合并到 `main` |
-| ROCK 4D | `rock4d-parity` | 两个选项都有，还没合并到 `main` |
+| ROCK 4D | `main` | 两个选项都有，还没在板上试过 |
 
 调试串口（UART0）在任何板子上都不会成为排针 UART，rk3xuart 遇到它也会拒绝启动。
 
@@ -121,7 +121,7 @@ Linux 没有任何作用。
 1. 在固件 Setup 的 ACPI / Device Tree 页打开 "40-pin UART"、"40-pin GPIO/I2C/SPI for apps"，或两个都开。
    保存并重启。
 2. 用 CI 产物（`rk3576-woa-uart-arm64`，或 WinPE 工作流放到介质上的签名包）安装 rk3xuart，方法和其他
-   测试签名驱动一样（[INSTALL.zh-CN.md](INSTALL.zh-CN.md)）：`pnputil /add-driver rk3xuart.inf /install`。
+   测试签名驱动一样（[INSTALL.zh-CN.md](INSTALL.zh-CN.md)）：`pnputil /add-driver rk3xuart.inf`（只暂存），然后重启。
 3. 确认系统里有 rhproxy：`reg query HKLM\SYSTEM\CurrentControlSet\Services\rhproxy` 和
    `dir C:\Windows\INF\rhproxy.inf`。之后设备管理器的系统设备下应该出现已启动的
    "Resource Hub proxy device"。问题代码 51 表示它用到的某个控制器（GPIO、I2C 或 SPI）没有启动。
@@ -177,5 +177,5 @@ powershell -ExecutionPolicy Bypass -File i2c-scan.ps1 -Bus I2C7
    万用表跟随 `gpio-blink.ps1 -Pin 0` 变化。`i2c-scan.ps1 -Bus I2C7` 找到接在 3/5 脚上的已知 I2C 设备。
    SPI1 上把 MOSI 接到 MISO，用 SpiTestTool 做回环。
 4. 两个都开：GPIO 列表里没有 8、10、37、40 脚，UART 正常。
-5. 然后在各自分支上测 CM5-IO 和 ROCK 4D，步骤相同；在 CM5-IO 上确认两个选项都打开时 8/10 脚上的调试串口
+5. 然后测 CM5-IO（在它的分支上）和 ROCK 4D，步骤相同；在 CM5-IO 上确认两个选项都打开时 8/10 脚上的调试串口
    照常工作。

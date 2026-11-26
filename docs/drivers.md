@@ -43,17 +43,25 @@ first:
    certutil -addstore -f TrustedPublisher signer.cer
    ```
 
-3. Install a driver that is not yet running:
+3. Stage the package and restart:
 
    ```
-   pnputil /add-driver gt9271.inf /install
+   pnputil /add-driver gt9271.inf
+   shutdown /r /t 0
    ```
+
+   A device that has no driver yet picks the staged package up at the next
+   boot. Do not use `/install` on a running board.
+
+Never reinstall the SD/eMMC host drivers (`dwcsdhc`, `dwcmshc`) in the
+running Windows, not even by the steps below: on the eMMC boards Windows
+runs from them. Update them offline from WinPE.
 
 ## Replacing a driver that is already bound and running
 
-`pnputil /add-driver` followed by a restart keeps the old driver, and
-`/install` on a running audio, DMA, display or Bluetooth driver has
-bugchecked the TaishanPi 3M. Instead:
+For a device that already has a driver, `pnputil /add-driver` followed by a
+restart keeps the old driver, and `/install` on a running audio, DMA,
+display or Bluetooth driver has bugchecked the TaishanPi 3M. Instead:
 
 1. Stage the package only: `pnputil /add-driver <name>.inf`.
 2. As SYSTEM, set bit 0x20 (`CONFIGFLAG_REINSTALL`) in `ConfigFlags` under

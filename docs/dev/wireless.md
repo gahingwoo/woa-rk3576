@@ -7,6 +7,10 @@ English | [简体中文](wireless.zh-CN.md)
 | Bluetooth | board-tested with [bcm4345bt](../../drivers/bluetooth/bcm4345bt): pairing, file transfer, no voice (SCO) | CI only (bcm4345bt, `RKCP4362`) |
 | Wi-Fi | SDIO controller (dwcmshc) and [bcmwlsdio](../../drivers/net/bcmwlsdio) W3 board-tested 2026-11-26: firmware runs, no network interface yet ([wifi.md](wifi.md)) | CI only (bcmwlsdio BCM43752) |
 
+ROCK 4D: AIC8800D80 Wi-Fi and Bluetooth on USB, no driver on `main`. A
+driver is on branch `aic8800-usb`, not tried on the board
+([wifi.md](wifi.md#other-boards-rock-4d-dragon-q6a-cm5-io)).
+
 bcm4345bt runs the UART itself instead of a separate SerCx2 UART driver and
 hands the HCI link to the in-box BthMini; how is in its README. The original
 assessment is in [history](../history/2026-11-21-wireless-assessment.md).
