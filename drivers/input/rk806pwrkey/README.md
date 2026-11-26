@@ -44,7 +44,8 @@ later, the ISR backs off 100 ms per interrupt instead of spinning a CPU.
 ## Install
 
 Needs rk3xi2c and rk3xgpio. With the CI's test-signed package (the WinPE
-workflow signs it): `pnputil /add-driver rk806pwrkey.inf /install`.
+workflow signs it): `pnputil /add-driver rk806pwrkey.inf` (stage only), then
+restart.
 
 ## Test plan (board)
 

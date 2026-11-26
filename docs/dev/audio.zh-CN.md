@@ -10,7 +10,8 @@
 | HDMI 输出，48 kHz 立体声 | 泰山派 3M | `PcdHdmiAudioPreset`（TRUE） | 同上，另加负责 HDMI 的 wddm-mali-g52 | 板测 |
 | HDMI 输出 | CM5-IO | `PcdHdmiAudioPreset`（TRUE） | 同上 | 仅 CI |
 | ES8388：CN3 排针（OUT2 在测试点上），LIN2/RIN2 差分麦克风焊盘 | CM5-IO | edk2-rk3576 分支 `cm5io-parity` | 同上，es8323 中断可选 | 分支 |
-| ES8388：耳机孔，LIN1 耳机麦克风 | ROCK 4D | edk2-rk3576 分支 `rock4d-parity` | 同上 | 分支 |
+| ES8388：耳机孔，LIN1 麦克风 | ROCK 4D | edk2-rk3576 `main` | 同上 | 板测（插拔检测没试过） |
+| HDMI 输出 | ROCK 4D | edk2-rk3576 `main` | 同上，另加负责 HDMI 的 wddm-mali-g52 | 板测 |
 
 这些需要比 0.4.1 新的 edk2-rk3576 固件（下一个正式版发布前用 `ci` 构建）。USB 音频设备用 Windows 自带的
 USB Audio Class 驱动就能用。
@@ -143,14 +144,15 @@ ROCK 4D 的 J18 没有检测开关。它的麦克风触点从 VCCA3V3_CODEC 经 
 
 - 硬件音量：Windows 的音量在软件里实现，codec 固定在 0 dB。
 - 耳麦麦克风（RINPUT）、48 kHz 以外的采样率，以及 16 位格式。
-- CM5-IO 和 ROCK 4D 的 ES8388：已描述和配置，两块板子上都没运行过。
+- CM5-IO 的 ES8388：已描述和配置，没在板子上运行过。
+- ROCK 4D 用 SARADC 做的耳机插拔检测：没在板子上运行过。
 
 ## 安装
 
 1. 固件：比 0.4.1 新的 edk2-rk3576（见上文）。
 2. 已签名的驱动包在 WinPE 介质的 `woa-audio\` 里，旁边是这次构建的测试证书。部署脚本不会注入它们。
    按[驱动](../drivers.zh-CN.md)一页的方法安装：先信任证书，然后对 rk3xi2sbus、csaudiork3x 和 es8323 运行
-   `pnputil /add-driver ... /install`。`pl330dma` 已经从 `woa-drivers\` 装好了。CI 工作流的 artifact
+   `pnputil /add-driver ...`（只暂存，不加 `/install`），再重启。`pl330dma` 已经从 `woa-drivers\` 装好了。CI 工作流的 artifact
    里是未签名的 catalog，装不上。
 3. 设备管理器里，DSDT 发布的每个 SAI 会出现一个 "Rockchip SAI Bus"，每个下面有一个 "Rockchip I2S Audio (WDM)"；
    泰山派 3M 上还有 "Everest 8388 Audio Codec (RK3576 SAI)"。

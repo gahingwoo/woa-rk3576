@@ -35,15 +35,20 @@
    certutil -addstore -f TrustedPublisher signer.cer
    ```
 
-3. 安装一个还没在运行的驱动：
+3. 暂存驱动包，然后重启：
 
    ```
-   pnputil /add-driver gt9271.inf /install
+   pnputil /add-driver gt9271.inf
+   shutdown /r /t 0
    ```
+
+   还没有驱动的设备会在下次启动时用上暂存的驱动包。在运行中的板子上不要用 `/install`。
+
+不要在运行中的 Windows 里重装 SD/eMMC 主机驱动（`dwcsdhc`、`dwcmshc`）：下面的方法也不行：eMMC 板上的 Windows 就运行在它们上面。请从 WinPE 离线更新。
 
 ## 替换已经绑定并在运行的驱动
 
-`pnputil /add-driver` 之后重启，Windows 仍会保留旧驱动；而对正在运行的音频、DMA、显示或蓝牙驱动用 `/install`，曾让泰山派 3M 蓝屏。正确做法：
+对已经有驱动的设备，`pnputil /add-driver` 之后重启，Windows 仍会保留旧驱动；而对正在运行的音频、DMA、显示或蓝牙驱动用 `/install`，曾让泰山派 3M 蓝屏。正确做法：
 
 1. 只暂存驱动包：`pnputil /add-driver <名字>.inf`。
 2. 以 SYSTEM 身份，在设备的 `HKLM\SYSTEM\CurrentControlSet\Enum\<实例>` 键下，把 `ConfigFlags` 的 0x20 位（`CONFIGFLAG_REINSTALL`）置 1。

@@ -2,7 +2,7 @@
 
 [English](INSTALL.md) | 简体中文
 
-用本仓库的 WinPE U 盘，把 Windows 11 23H2 装到 ArmSoM CM5-IO 或立创泰山派 3M 的 eMMC 上。两块板都板测过。新板子请从 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/blob/main/README.zh-CN.md) 开始。[Maskrom Studio](https://github.com/gahingwoo/maskrom-studio) 可以在电脑上通过 USB 完成同样的安装（仅 CI）。
+用本仓库的 WinPE U 盘，把 Windows 11 23H2 装到 ArmSoM CM5-IO 或立创泰山派 3M 的 eMMC 上。两块板都板测过。Radxa ROCK 4D 没有 eMMC，Windows 装在 NVMe 上，见[它的说明](#radxa-rock-4d)。新板子请从 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/blob/main/README.zh-CN.md) 开始。[Maskrom Studio](https://github.com/gahingwoo/maskrom-studio) 可以在电脑上通过 USB 完成同样的安装（仅 CI）。
 
 ## 用哪个版本
 
@@ -90,5 +90,12 @@ Windows 会完成初始设置（不联网也能完成），进入桌面，右下
 - 以后在已装好 Windows 的板子上更新固件，选"UEFI firmware, keep the partitions"。写完整映像会清掉分区表。
 - 接着立创的 DSI 屏时，固件用屏幕而不是 HDMI，Windows 也在屏幕上以竖屏显示（装 wddm-mali-g52 后可横屏）。想通过 HDMI 安装，先断电拔下屏幕排线。
 - WinPE 和第一次设置时，手边准备一个 USB 键盘。
+
+### Radxa ROCK 4D
+
+- 没有 eMMC：固件在 SPI NOR 里，Windows 装在 NVMe 上。
+- 需要 edk2-rk3576 的 `main`（它的 `ci` 构建）：0.4.1 及更早的版本没有为这块板编译 ACPI，启动不了 Windows。
+- `main` 上的部署脚本只装到 eMMC。装到 NVMe 的功能在 `rock4d-nvme` 分支上，还没合并。
+- Windows 下没有 Wi-Fi 和蓝牙（AIC8800D80，`main` 上没有驱动）。请用以太网。
 
 启动不了时：见[故障排查](troubleshooting.zh-CN.md)。

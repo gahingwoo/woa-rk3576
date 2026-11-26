@@ -115,10 +115,9 @@ It goes to `%SystemRoot%\System32\drivers\brcm\BCM4345C5.hcd`; the
 3. Trust the package's `signer.cer` (Root and TrustedPublisher, as for the
    other drivers: see [INSTALL](../../../docs/INSTALL.md)). The signed package
    is the `bcm4345bt-signed-arm64` artifact of the WinPE workflow.
-4. First install, on a device with no driver yet:
-   `pnputil /add-driver bcm4345bt.inf /install`. To replace an installed
-   copy, stage it with `pnputil /add-driver bcm4345bt.inf` (no `/install`)
-   and restart: stopping this driver on a running system has ended in
+4. Stage it with `pnputil /add-driver bcm4345bt.inf` (no `/install`) and
+   restart, for a first install as well as to replace an installed copy:
+   stopping this driver on a running system has ended in
    DPC_WATCHDOG_VIOLATION.
 
 ## Reading what happened

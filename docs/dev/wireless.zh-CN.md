@@ -5,7 +5,9 @@
 | | 泰山派 3M | CM5-IO |
 |---|---|---|
 | 蓝牙 | 板测，用 [bcm4345bt](../../drivers/bluetooth/bcm4345bt)：能配对、传文件，没有语音（SCO） | 仅 CI（bcm4345bt，`RKCP4362`） |
-| Wi-Fi | `main` 上没有 | `main` 上没有 |
+| Wi-Fi | SDIO 控制器（dwcmshc）和 [bcmwlsdio](../../drivers/net/bcmwlsdio) W3 于 2026-11-26 板测：固件能运行，还没有网络接口（[wifi.md](wifi.md)） | 仅 CI（bcmwlsdio BCM43752） |
+
+ROCK 4D：USB 上的 AIC8800D80 Wi-Fi 和蓝牙，`main` 上没有驱动。`aic8800-usb` 分支上有一个驱动，还没在板上试过（[wifi.md](wifi.md#other-boards-rock-4d-dragon-q6a-cm5-io)）。
 
 bcm4345bt 自己驱动 UART，不另外用 SerCx2 UART 驱动，并把 HCI 链路交给系统自带的 BthMini；具体做法见它的 README。最初的评估见 [history](../history/2026-11-21-wireless-assessment.md)。
 

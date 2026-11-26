@@ -4,7 +4,8 @@ English | [简体中文](INSTALL.zh-CN.md)
 
 Install Windows 11 23H2 on the eMMC of an ArmSoM CM5-IO or an LCKFB
 TaishanPi 3M with the WinPE stick from this repository. Board-tested on both
-boards. New boards start at
+boards. The Radxa ROCK 4D has no eMMC and runs Windows from NVMe; see
+[its notes](#radxa-rock-4d). New boards start at
 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576#from-a-new-board-to-windows-or-linux).
 [Maskrom Studio](https://github.com/gahingwoo/maskrom-studio) does the same
 install from a PC over USB (CI only).
@@ -137,5 +138,15 @@ installation from WinPE without erasing it. Other ways:
   wddm-mali-g52). To install over HDMI, unplug the screen's ribbon with the
   power off.
 - Keep a USB keyboard at hand for WinPE and the first setup.
+
+### Radxa ROCK 4D
+
+- No eMMC: the firmware is in SPI NOR and Windows goes on the NVMe drive.
+- Needs edk2-rk3576 `main` (its `ci` build): 0.4.1 and older are built
+  without ACPI for this board and cannot start Windows.
+- The deploy script on `main` installs to the eMMC only. The NVMe target is
+  on branch `rock4d-nvme`, not merged yet.
+- No Wi-Fi or Bluetooth under Windows (AIC8800D80, no driver on `main`).
+  Use Ethernet.
 
 If it does not boot: [troubleshooting](troubleshooting.md).
