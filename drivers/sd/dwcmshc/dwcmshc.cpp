@@ -331,10 +331,14 @@ MshcSlotInitialize(
         // Initialize the DPC that handles local request completions.
         KeInitializeDpc(&MshcExtension->LocalRequestDpc, MshcLocalRequestDpc, MshcExtension);
 
-        // SDIO controller only: registry breadcrumbs for the Wi-Fi bring-up.
-        if (MshcExtension->IsSdio) {
-            MshcSdioDiagInit(MshcExtension, MiniportFdo);
+        // Registry breadcrumbs: SdioDiag (Wi-Fi bring-up) or SdDiag.
+        {
+            LARGE_INTEGER Frequency;
+
+            (VOID)KeQueryPerformanceCounter(&Frequency);
+            MshcExtension->Xfer.TickFrequency = Frequency.QuadPart;
         }
+        MshcSdioDiagInit(MshcExtension, MiniportFdo);
 
     } else {
         //
@@ -453,10 +457,34 @@ MshcSlotInitialize(
     Capabilities->MaximumBlockSize = 0xFFFF;
     Capabilities->MaximumBlockCount = 0xFFFF;
 
+    //
+    // RK3576 sdmmc and sdio both report a 32-bit IDMAC (mainline Linux:
+    // "IDMAC supports 32-bit address mode", Version ID 270a).
+    //
+    // Address64Bit = 0 is what keeps the IDMAC below 4 GiB, and the board
+    // has RAM above it (4 GB from 0x40000000).  sdport
+    // (SdhostInitializeScatterGatherDma, 10.0.22621.608) asks IoGetDmaAdapter
+    // for a version 3 scatter/gather bus master with Dma32BitAddresses set,
+    // Dma64BitAddresses = Address64Bit and DmaAddressWidth 32, and maps every
+    // transfer with BuildScatterGatherList, so the HAL double-buffers any
+    // page above 4 GiB through its map registers.  The descriptor table is
+    // AllocateCommonBuffer of the same adapter, so it is below 4 GiB too.
+    // The builder still refuses an element past 4 GiB rather than truncate it.
+    //
+    // Cache maintenance is the HAL's as well: the controllers are _CCA 0 in
+    // the DSDT, so the adapter is not coherent, the common buffer is mapped
+    // uncached (sdport passes CacheEnabled FALSE), and sdport's
+    // FlushAdapterBuffers/PutScatterGatherList do the flushes and
+    // invalidates around each transfer.
+    //
     ULONG DmaInterface = (HconReg & MSHC_HCON_DMA_INTERFACE_MASK) >> MSHC_HCON_DMA_INTERFACE_SHIFT;
     switch (DmaInterface) {
     case MSHC_HCON_DMA_INTERFACE_IDMAC:
         if ((HconReg & MSHC_HCON_ADDR_CONFIG_IDMAC64) == 0) {
+            //
+            // sdport allocates DmaDescriptorSize * NumberOfMapRegisters for
+            // the table; see MshcIdmacCapacityFor for why that is enough.
+            //
             Capabilities->DmaDescriptorSize = sizeof(MSHC_IDMAC_DESCRIPTOR);
 
             Capabilities->Supported.ScatterGatherDma = 1;
@@ -481,8 +509,17 @@ MshcSlotInitialize(
     Capabilities->AlignmentRequirement = sizeof(ULONG) - 1;
 
     //
-    // Use PIO for small transfers.
-    // TODO: Determine the optimal value here?
+    // How sdport (SdhostBuildTransfer, 10.0.22621.608) picks the transfer
+    // method: scatter/gather DMA whenever ScatterGatherDma is set, except
+    // that a transfer of PioTransferMaxThreshold bytes or less goes PIO when
+    // UsePioForRead (reads) or UsePioForWrite (writes) is set.  So these
+    // flags do not force PIO; with the threshold at 64 only the short
+    // register reads (SCR, SD status, CMD6 switch status, CMD53 byte reads
+    // of a few words) are PIO, and every block transfer is IDMAC.
+    //
+    // The SDIO controller keeps the same split: what the Wi-Fi driver moves
+    // through CMD53 is padded to whole words (bcmwlsdio), and its bring-up
+    // ran with this setting.
     //
     Capabilities->PioTransferMaxThreshold = 64;
     Capabilities->Flags.UsePioForRead = TRUE;
@@ -598,14 +635,12 @@ MshcSlotIssueBusOperation(
         "Type:%!BUSOPERATIONTYPE!",
         BusOperation->Type);
 
-    if (MshcExtension->IsSdio) {
-        InterlockedIncrement(&MshcExtension->Diag.BusOps);
-        MshcExtension->Diag.LastBusOpType = (ULONG)BusOperation->Type;
-        if (BusOperation->Type == SdSetBusWidth) {
-            MshcExtension->Diag.BusWidth = (ULONG)BusOperation->Parameters.BusWidth;
-        }
-        MshcSdioDiagKick(MshcExtension);
+    InterlockedIncrement(&MshcExtension->Diag.BusOps);
+    MshcExtension->Diag.LastBusOpType = (ULONG)BusOperation->Type;
+    if (BusOperation->Type == SdSetBusWidth) {
+        MshcExtension->Diag.BusWidth = (ULONG)BusOperation->Parameters.BusWidth;
     }
+    MshcSdioDiagKick(MshcExtension);
 
     Status = STATUS_NOT_SUPPORTED;
 
@@ -817,6 +852,11 @@ MshcSlotInterrupt(
     Rintsts = MshcReadRegister(MshcExtension, MSHC_RINTSTS);
     Idsts = MshcReadRegister(MshcExtension, MSHC_IDSTS);
     Ctrl = MshcReadRegister(MshcExtension, MSHC_CTRL);
+
+    if (Idsts & (MSHC_IDINT_FBE | MSHC_IDINT_DUI | MSHC_IDINT_CES)) {
+        InterlockedIncrement(&MshcExtension->Xfer.IdmacErrors);
+        MshcExtension->Xfer.LastIdmacIdsts = Idsts;
+    }
 
     if (Rintsts & MSHC_INT_ERROR) {
         MSHC_LOG_ERROR(
@@ -1557,9 +1597,7 @@ MshcCleanup(
             MshcExtension->CompleteRequestBusyWorkItem = NULL;
         }
 
-        if (MshcExtension->IsSdio) {
-            MshcSdioDiagCleanup(MshcExtension);
-        }
+        MshcSdioDiagCleanup(MshcExtension);
 
         MshcRockchipCleanup(MshcExtension);
 
@@ -1603,6 +1641,11 @@ MshcResetHost(
     // bus is not to be completed to sdport after this.
     //
     InterlockedExchangePointer((PVOID volatile *)&MshcExtension->SdportRequest, NULL);
+
+    //
+    // Nor is its descriptor table to be waited for.
+    //
+    InterlockedExchangePointer((PVOID volatile *)&MshcExtension->IdmacLastDes0, NULL);
 
     //
     // Better reset everything no matter the requested type, just in case.
@@ -2411,6 +2454,20 @@ MshcSendCommand(
         if (!NT_SUCCESS(Status)) {
             return Status;
         }
+
+        if (Command->TransferMethod == SdTransferMethodSgDma) {
+            LONG Length = (LONG)MIN(Command->Length, (ULONG)MAXLONG);
+
+            InterlockedIncrement(&MshcExtension->Xfer.DmaRequests);
+            InterlockedAdd64(&MshcExtension->Xfer.DmaBytes, Command->Length);
+            if (Length > MshcExtension->Xfer.MaxDmaLength) {
+                MshcExtension->Xfer.MaxDmaLength = Length;
+            }
+            MshcExtension->Xfer.DmaIssueTick = KeQueryPerformanceCounter(NULL).QuadPart;
+        } else {
+            InterlockedIncrement(&MshcExtension->Xfer.PioRequests);
+            InterlockedAdd64(&MshcExtension->Xfer.PioBytes, Command->Length);
+        }
     }
 
     //
@@ -2565,11 +2622,10 @@ MshcSetTransferMode(
     MshcWriteRegister(MshcExtension, MSHC_BYTCNT, BlockCount * BlockSize);
 
     //
-    // Write the desired FIFO watermarks.
+    // Write the FIFO watermarks and the DMA burst size the Build routine
+    // chose (MshcBuildPioTransfer, MshcBuildDmaTransfer).
     //
-    Fifoth = (MshcExtension->FifoDmaBurstSize << MSHC_FIFOTH_DMA_MULTIPLE_TRANSACTION_SIZE_SHIFT) & MSHC_FIFOTH_DMA_MULTIPLE_TRANSACTION_SIZE_MASK;
-    Fifoth |= ((MshcExtension->FifoThreshold - 1) << MSHC_FIFOTH_RX_WMARK_SHIFT) & MSHC_FIFOTH_RX_WMARK_MASK;
-    Fifoth |= (MshcExtension->FifoThreshold << MSHC_FIFOTH_TX_WMARK_SHIFT) & MSHC_FIFOTH_TX_WMARK_MASK;
+    Fifoth = MshcExtension->Fifoth;
     MshcWriteRegister(MshcExtension, MSHC_FIFOTH, Fifoth);
 
     return STATUS_SUCCESS;
@@ -2651,6 +2707,11 @@ MshcBuildPioTransfer(
         MSHC_OPTIMAL_FIFO_THRESHOLD(MshcExtension->PlatformInfo->Capabilities.FifoDepth));
 
     MshcExtension->FifoDmaBurstSize = 0; // don't care
+    MshcExtension->Fifoth =
+        ((MshcExtension->FifoDmaBurstSize << MSHC_FIFOTH_DMA_MULTIPLE_TRANSACTION_SIZE_SHIFT) & MSHC_FIFOTH_DMA_MULTIPLE_TRANSACTION_SIZE_MASK) |
+        (((MshcExtension->FifoThreshold - 1) << MSHC_FIFOTH_RX_WMARK_SHIFT) & MSHC_FIFOTH_RX_WMARK_MASK) |
+        ((MshcExtension->FifoThreshold << MSHC_FIFOTH_TX_WMARK_SHIFT) & MSHC_FIFOTH_TX_WMARK_MASK);
+    MshcExtension->IdmacLastDes0 = NULL;
 
     //
     // Disable IDMAC
@@ -2673,40 +2734,86 @@ MshcBuildDmaTransfer(
     )
 {
     NTSTATUS Status;
+    ULONG Ctrl;
+    ULONG Bmod;
+    ULONG Intmask;
+
+    MshcExtension->IdmacLastDes0 = NULL;
+
+    if ((Request->Command.ScatterGatherList == NULL) ||
+        (Request->Command.DmaVirtualAddress == NULL)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    //
+    // The FIFO data request interrupts belong to PIO; the IDMAC drains the
+    // FIFO itself (mainline dw_mci_submit_data_dma masks them too).
+    //
+    Intmask = MshcReadRegister(MshcExtension, MSHC_INTMASK);
+    Intmask &= ~(MSHC_INT_RXDR | MSHC_INT_TXDR);
+    MshcWriteRegister(MshcExtension, MSHC_INTMASK, Intmask);
 
     MshcExtension->FifoThreshold =
         MSHC_OPTIMAL_FIFO_THRESHOLD(MshcExtension->PlatformInfo->Capabilities.FifoDepth);
-    MshcExtension->FifoDmaBurstSize = 2; // 8 transfers
+    MshcExtension->FifoDmaBurstSize = 0;
+    MshcExtension->Fifoth = MshcIdmacFifoth(
+        MshcExtension->PlatformInfo->Capabilities.FifoDepth,
+        Request->Command.BlockSize);
 
     Status = MshcSetTransferMode(MshcExtension, Request);
     if (!NT_SUCCESS(Status)) {
         return Status;
     }
 
-    NT_ASSERT(Request->Command.ScatterGatherList != NULL);
+    //
+    // Reset the DMA interface and the IDMAC before every transfer, as
+    // mainline dw_mci_idmac_start_dma does: the previous transfer may have
+    // been PIO, or one that ended in an error.  Both bits clear themselves.
+    //
+    Status = MshcResetWait(MshcExtension, MSHC_CTRL_DMA_RESET);
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
+    Bmod = MshcReadRegister(MshcExtension, MSHC_BMOD);
+    MshcWriteRegister(MshcExtension, MSHC_BMOD, Bmod | MSHC_BMOD_SWR);
 
     //
-    // Create the IDMAC descriptor table in the host's DMA buffer.
+    // Build the descriptor table in sdport's common buffer.
     //
     Status = MshcCreateIdmacDescriptorTable(MshcExtension, Request);
     if (!NT_SUCCESS(Status)) {
         return Status;
     }
 
-    NT_ASSERT(Request->Command.DmaPhysicalAddress.HighPart == 0);
+    //
+    // The table is in uncached memory and the IDMAC reads it as soon as it
+    // is enabled: make every descriptor write visible before the register
+    // writes that start it (mainline: wmb() before DBADDR/BMOD).
+    //
+    KeMemoryBarrier();
+#if defined(_M_ARM64)
+    __dsb(_ARM64_BARRIER_SY);
+#endif
 
+    MshcWriteRegister(MshcExtension, MSHC_IDSTS, MSHC_IDINT_ALL);
     MshcWriteRegister(
         MshcExtension,
         MSHC_DBADDR,
         Request->Command.DmaPhysicalAddress.LowPart);
 
     //
-    // Enable IDMAC
+    // Select the IDMAC, then enable it with fixed bursts, then poll demand
+    // so it fetches the first descriptor.
     //
-    ULONG Ctrl = MshcReadRegister(MshcExtension, MSHC_CTRL);
+    Ctrl = MshcReadRegister(MshcExtension, MSHC_CTRL);
     Ctrl |= MSHC_CTRL_USE_INTERNAL_DMAC;
     MshcWriteRegister(MshcExtension, MSHC_CTRL, Ctrl);
-    MshcWriteRegister(MshcExtension, MSHC_BMOD, MSHC_BMOD_DE | MSHC_BMOD_FB);
+
+    Bmod = MshcReadRegister(MshcExtension, MSHC_BMOD);
+    Bmod |= MSHC_BMOD_DE | MSHC_BMOD_FB;
+    MshcWriteRegister(MshcExtension, MSHC_BMOD, Bmod);
+
+    MshcWriteRegister(MshcExtension, MSHC_PLDMND, 1);
 
     return STATUS_SUCCESS;
 }
@@ -2808,6 +2915,45 @@ MshcCompleteRequest(
     _In_ NTSTATUS Status
     )
 {
+    volatile ULONG *LastDes0;
+
+    //
+    // A DMA transfer is over for the CPU only once the IDMAC has closed its
+    // last descriptor.  DTO says the card side is done; on a read the IDMAC
+    // may still be writing the FIFO's last words to memory (mainline waits
+    // for RI/TI as well as DTO for the same reason).  The descriptor is in
+    // uncached common buffer, so its OWN bit is the IDMAC's own word on it.
+    // FIFO depth at bus speed is a few microseconds at most.
+    //
+    LastDes0 = (volatile ULONG *)InterlockedExchangePointer(
+        (PVOID volatile *)&MshcExtension->IdmacLastDes0, NULL);
+    if ((LastDes0 != NULL) && (Status == STATUS_SUCCESS) &&
+        (Request->Command.TransferMethod == SdTransferMethodSgDma)) {
+        ULONG Waits;
+
+        for (Waits = 0; Waits < 1000; Waits++) {
+            if ((*LastDes0 & MSHC_IDMAC_DES0_OWN) == 0) {
+                break;
+            }
+            KeStallExecutionProcessor(1);
+        }
+
+        if (Waits != 0) {
+            InterlockedIncrement(&MshcExtension->Xfer.OwnWaits);
+        }
+
+        if ((*LastDes0 & MSHC_IDMAC_DES0_OWN) != 0) {
+            InterlockedIncrement(&MshcExtension->Xfer.OwnTimeouts);
+            MSHC_LOG_ERROR(
+                MshcExtension->LogHandle,
+                MshcExtension,
+                "IDMAC did not close the last descriptor (DES0:0x%08lx IDSTS:0x%08lx)",
+                *LastDes0,
+                MshcReadRegister(MshcExtension, MSHC_IDSTS));
+            Status = STATUS_IO_DEVICE_ERROR;
+        }
+    }
+
     Request->Status = Status;
 
     //
@@ -2845,6 +2991,20 @@ MshcCompleteRequest(
             }
             return;
         }
+    }
+
+    if ((Request->Type == SdRequestTypeCommandWithTransfer) &&
+        (Request->Status != STATUS_MORE_PROCESSING_REQUIRED)) {
+        if (!NT_SUCCESS(Request->Status)) {
+            InterlockedIncrement(&MshcExtension->Xfer.DataErrors);
+        } else if ((Request->Command.TransferMethod == SdTransferMethodSgDma) &&
+                   (MshcExtension->Xfer.DmaIssueTick != 0)) {
+            InterlockedAdd64(
+                &MshcExtension->Xfer.DmaTicks,
+                KeQueryPerformanceCounter(NULL).QuadPart - MshcExtension->Xfer.DmaIssueTick);
+            MshcExtension->Xfer.DmaIssueTick = 0;
+        }
+        MshcSdioDiagKick(MshcExtension);
     }
 
     if (Request->Type == SdRequestTypeCommandNoTransfer) {
@@ -2988,82 +3148,59 @@ MshcCreateIdmacDescriptorTable(
     _In_ PSDPORT_REQUEST Request
     )
 {
-    UNREFERENCED_PARAMETER(MshcExtension);
+    MSHC_IDMAC_BUILDER Builder;
+    PSCATTER_GATHER_LIST SgList;
+    ULONG Index;
+    int Result;
 
-    PMSHC_IDMAC_DESCRIPTOR Descriptor;
-    ULONG Count;
-    ULONG NumberOfElements;
-    PHYSICAL_ADDRESS NextAddress;
-    ULONG NextLength;
-    ULONG RemainingLength;
-    PSCATTER_GATHER_ELEMENT SglistElement;
+    SgList = Request->Command.ScatterGatherList;
 
-    Descriptor = (PMSHC_IDMAC_DESCRIPTOR)Request->Command.DmaVirtualAddress;
-    NumberOfElements = Request->Command.ScatterGatherList->NumberOfElements;
-    SglistElement = &Request->Command.ScatterGatherList->Elements[0];
-    Count = 0;
+    MshcIdmacBegin(
+        &Builder,
+        (PMSHC_IDMAC_DESCRIPTOR)Request->Command.DmaVirtualAddress,
+        (MSHC_U64)Request->Command.DmaPhysicalAddress.QuadPart,
+        MshcIdmacCapacityFor(Request->Command.Length));
 
-    NT_ASSERT(NumberOfElements > 0);
-
-    //
-    // Iterate through each element in the SG list and convert it into the
-    // descriptor table required by the controller.
-    //
-    while (NumberOfElements > 0) {
-        RemainingLength = SglistElement->Length;
-        NextAddress.QuadPart = SglistElement->Address.QuadPart;
-
-        NT_ASSERT(RemainingLength > 0);
-
-        while (RemainingLength > 0) {
-            NextLength = MIN(MSHC_IDMAC_MAX_LENGTH_PER_ENTRY, RemainingLength);
-            RemainingLength -= NextLength;
-
-            //
-            // Set initial attributes.
-            //
-            Descriptor[Count].Des0 = MSHC_IDMAC_DES0_OWN | MSHC_IDMAC_DES0_DIC;
-
-            //
-            // Set the buffer length.
-            //
-            NT_ASSERT(IS_ALIGNED(NextLength, sizeof(ULONG)));
-            Descriptor[Count].Des1 = (NextLength << MSHC_IDMAC_DES1_BS1_SHIFT) & MSHC_IDMAC_DES1_BS1_MASK;
-
-            //
-            // Set the address field.
-            //
-            // The HighPart should not be a non-zero value, since in the
-            // DMA adapter object, we declared that this device only
-            // supports 32-bit addressing.
-            //
-            NT_ASSERT(NextAddress.HighPart == 0);
-            NT_ASSERT(IS_ALIGNED(NextAddress.HighPart, sizeof(ULONG)));
-            Descriptor[Count].Des2 = NextAddress.LowPart;
-
-            //
-            // Not using chained or dual-buffer modes.
-            //
-            Descriptor[Count].Des3 = 0;
-
-            NextAddress.QuadPart += NextLength;
-            Count++;
-        }
-
-        SglistElement += 1;
-        NumberOfElements -= 1;
+    for (Index = 0; Index < SgList->NumberOfElements; Index++) {
+        (VOID)MshcIdmacAppend(
+            &Builder,
+            (MSHC_U64)SgList->Elements[Index].Address.QuadPart,
+            SgList->Elements[Index].Length);
     }
 
-    //
-    // Mark the first descriptor.
-    //
-    Descriptor[0].Des0 |= MSHC_IDMAC_DES0_FS;
+    Result = MshcIdmacFinish(&Builder);
 
     //
-    // Mark the last descriptor.
+    // The list must describe exactly the transfer the controller is told
+    // about (BYTCNT), or the IDMAC runs out of descriptors or the card of
+    // data.
     //
-    Descriptor[Count - 1].Des0 |= (MSHC_IDMAC_DES0_ER | MSHC_IDMAC_DES0_LD);
-    Descriptor[Count - 1].Des0 &= ~MSHC_IDMAC_DES0_DIC;
+    if ((Result == MSHC_IDMAC_OK) && (Builder.Bytes != Request->Command.Length)) {
+        Result = MSHC_IDMAC_E_LENGTH;
+    }
+
+    if (Result != MSHC_IDMAC_OK) {
+        InterlockedIncrement(&MshcExtension->Xfer.BuildErrors);
+        MshcExtension->Xfer.LastBuildError = (ULONG)Result;
+        MSHC_LOG_ERROR(
+            MshcExtension->LogHandle,
+            MshcExtension,
+            "IDMAC table refused: error %d, %lu elements, %lu bytes",
+            Result,
+            SgList->NumberOfElements,
+            Request->Command.Length);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((LONG)SgList->NumberOfElements > MshcExtension->Xfer.MaxSgElements) {
+        MshcExtension->Xfer.MaxSgElements = (LONG)SgList->NumberOfElements;
+    }
+    if ((LONG)Builder.Count > MshcExtension->Xfer.MaxDescriptors) {
+        MshcExtension->Xfer.MaxDescriptors = (LONG)Builder.Count;
+    }
+
+    MshcExtension->IdmacLastDes0 =
+        (volatile ULONG *)&Builder.Table[Builder.Count - 1].Des0;
 
     MSHC_LOG_TRACE(
         MshcExtension->LogHandle,
@@ -3071,7 +3208,7 @@ MshcCreateIdmacDescriptorTable(
         "PhysicalAddress:0x%p, VirtualAddress:0x%p, Count:%lu",
         (PVOID)(Request->Command.DmaPhysicalAddress.LowPart),
         Request->Command.DmaVirtualAddress,
-        Count);
+        Builder.Count);
 
     return STATUS_SUCCESS;
 }

@@ -228,6 +228,28 @@ jobs:
           LIST
           exit $fail
 
+  idmactest:
+    name: dwcmshc IDMAC descriptor builder (Linux, gcc)
+    # The SD/SDIO miniport builds its IDMAC descriptor tables and its DMA
+    # FIFOTH value with plain C (drivers/sd/dwcmshc/idmac.h). tools/idmactest
+    # checks sizes, chaining, the last descriptor, the 4 GiB limit, table
+    # overflow and random HAL-style scatter/gather lists against it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and check
+        run: |
+          set -eux
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -o idmactest tools/idmactest/main.c
+          gcc -std=c99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror \
+              -o idmactest-asan tools/idmactest/main.c
+          # the header must build with no libc, and as C++ as the driver does
+          printf '#include "drivers/sd/dwcmshc/idmac.h"\n' > inc.c
+          gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -pedantic -I. -c inc.c -o /dev/null
+          g++ -std=c++14 -Wall -Wextra -Werror -I. -x c++ -c inc.c -o /dev/null
+          ./idmactest
+          ./idmactest-asan
+
   bwltest:
     name: bcmwlsdio core against a simulated chip (Linux, gcc)
     # The Wi-Fi driver's SDIO, chip, firmware and protocol code is plain C
