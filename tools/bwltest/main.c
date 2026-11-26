@@ -659,6 +659,55 @@ send_eapol(bwl_dev *d, unsigned msg)
     return BwlTxEth(d, eth, (unsigned)n, 7);
 }
 
+/* UTF-16 of an ASCII multi-string ("a\0b\0\0", Len bytes counted) */
+static unsigned
+w16(const char *A, unsigned Len, u16 *Out)
+{
+    unsigned i;
+
+    for (i = 0; i < Len; i++) {
+        Out[i] = (u16)(unsigned char)A[i];
+    }
+    return Len;
+}
+
+static void
+test_fn_ids(void)
+{
+    /* the board's instance ID (TaishanPi 3M, sdbus 22621) */
+    static const char inst1[] = "SD\\VID_02D0&PID_A9BF&FN_1\\3&28878BD8&0&0";
+    static const char inst2[] = "SD\\VID_02D0&PID_A9BF&FN_2\\3&28878BD8&0&0";
+    static const char inst3[] = "SD\\VID_02D0&PID_A9BF&FN_3\\3&28878BD8&0&0";
+    /* hardware IDs as a multi-string: the function-specific one first */
+    static const char hw2[] = "SD\\VID_02D0&PID_A9BF&FN_2\0SD\\VID_02D0&PID_A9BF\0";
+    static const char hwlow[] = "SD\\VID_02d0&PID_a9bf&fn_1\0SD\\VID_02d0&PID_a9bf\0";
+    static const char none[] = "SD\\VID_02D0&PID_A9BF\0SD\\VID_02D0\0";
+    static const char cm5[] = "SD\\VID_02D0&PID_AAE8&FN_1\\3&1F2E3D4C&0&0";
+    /* not a function: "FN_" inside another token, a two-digit number, an 8 */
+    static const char decoy1[] = "SD\\VID_02D0&PID_FN_1A\\3&28878BD8&0&0";
+    static const char decoy2[] = "SD\\VID_02D0&PID_A9BF&FN_12\\3&0";
+    static const char decoy3[] = "SD\\VID_02D0&PID_A9BF&FN_8\\3&0";
+    static const char decoy4[] = "XFN_1&";
+    u16 b[128];
+
+    CHECK_EQ(BwlFindFn(b, w16(inst1, sizeof(inst1) - 1, b)), 1);
+    CHECK_EQ(BwlFindFn(b, w16(inst2, sizeof(inst2) - 1, b)), 2);
+    CHECK_EQ(BwlFindFn(b, w16(inst3, sizeof(inst3), b)), 3);    /* with its NUL */
+    CHECK_EQ(BwlFindFn(b, w16(hw2, sizeof(hw2), b)), 2);
+    CHECK_EQ(BwlFindFn(b, w16(hwlow, sizeof(hwlow), b)), 1);
+    CHECK_EQ(BwlFindFn(b, w16(none, sizeof(none), b)), -1);
+    CHECK_EQ(BwlFindFn(b, w16(cm5, sizeof(cm5) - 1, b)), 1);
+    CHECK_EQ(BwlFindFn(b, w16(decoy1, sizeof(decoy1) - 1, b)), -1);
+    CHECK_EQ(BwlFindFn(b, w16(decoy2, sizeof(decoy2) - 1, b)), -1);
+    CHECK_EQ(BwlFindFn(b, w16(decoy3, sizeof(decoy3) - 1, b)), -1);
+    CHECK_EQ(BwlFindFn(b, w16(decoy4, sizeof(decoy4) - 1, b)), -1);
+    /* the ID cut short right after the digit, and nothing at all */
+    CHECK_EQ(BwlFindFn(b, w16(inst1, 25, b)), 1);
+    CHECK_EQ(BwlFindFn(b, w16(inst1, 24, b)), -1);
+    CHECK_EQ(BwlFindFn(b, 0), -1);
+    CHECK_EQ(BwlFindFn(NULL, 0), -1);
+}
+
 static void
 test_wlan_pure(void)
 {
@@ -1143,6 +1192,7 @@ main(int argc, char **argv)
         test_bcdc_event();
         test_xfer_split();
         test_faults();
+        test_fn_ids();
         test_wlan_pure();
         test_wlan(FAKE_4345);
         test_wlan(FAKE_43752);

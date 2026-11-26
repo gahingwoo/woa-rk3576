@@ -41,8 +41,8 @@ static EVT_WDF_WORKITEM BwlEvtBringUp;
 static EVT_WDF_OBJECT_CONTEXT_CLEANUP BwlEvtDeviceCleanup;
 static KSTART_ROUTINE BwlWorkerMain;
 
-/* {4d36e972-e325-11ce-bfc1-08002be10318}: the Net setup class */
-static const GUID BwlNetClassGuid = { 0x4d36e972, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } };
+static VOID EarlyCrumb(_In_ PCSTR Step);
+static VOID EarlyCrumbF(_In_ PCSTR Fmt, _In_ ULONG A, _In_ ULONG B);
 /* DEVPKEY_Device_InstanceId */
 static const DEVPROPKEY BwlInstanceIdKey = {
     { 0x78c34fc8, 0x104a, 0x4aca, { 0x9e, 0xa4, 0x52, 0x4d, 0x52, 0x99, 0x6e, 0x57 } }, 256
@@ -640,6 +640,7 @@ BwlEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
     UNREFERENCED_PARAMETER(Raw);
     UNREFERENCED_PARAMETER(Translated);
 
+    EarlyCrumbF("PrepareHardware (function %u, wifi %u)", ctx->AddFunction, ctx->WifiMode);
     InterlockedExchange(&ctx->Stopping, 0);
     ctx->Stage = BwlGetULong(ctx, L"Stage", BWL_STAGE_OPEN);
     ctx->MaxBlocks = BwlGetULong(ctx, L"MaxBlocks", 32);
@@ -765,78 +766,149 @@ ReadStage(_In_ PWDFDEVICE_INIT DeviceInit)
     return v;
 }
 
-static BOOLEAN
-IsNetClass(_In_ PWDFDEVICE_INIT DeviceInit)
-{
-    GUID g;
-    ULONG len = 0;
+/*
+ * Early breadcrumbs: before the device exists there is no Device
+ * Parameters key, so DriverEntry and DeviceAdd append to EarlyTrace in the
+ * service's Parameters key, flushed at each step, so that a bugcheck
+ * leaves them readable:
+ *   reg query HKLM\SYSTEM\CurrentControlSet\Services\bcmwlsdio\Parameters
+ * DriverEntry starts it afresh each boot.
+ */
+#define EARLY_MAX 3000
+static WCHAR g_ParamsPath[256];
+static CHAR g_Early[EARLY_MAX];
+static ULONG g_EarlyLen, g_AddSeq;
+static FAST_MUTEX g_EarlyLock;
+static BOOLEAN g_EarlyReady;
 
-    RtlZeroMemory(&g, sizeof(g));
-    if (!NT_SUCCESS(WdfFdoInitQueryProperty(DeviceInit, DevicePropertyClassGuid, sizeof(g), &g, &len))) {
-        return FALSE;
+static VOID
+EarlyCrumb(_In_ PCSTR Step)
+{
+    UNICODE_STRING path, name;
+    OBJECT_ATTRIBUTES oa;
+    HANDLE key;
+    PWCHAR w;
+    ULONG i, n;
+
+    if (!g_EarlyReady || KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return;
     }
-    return RtlEqualMemory(&g, &BwlNetClassGuid, sizeof(g));
+    ExAcquireFastMutex(&g_EarlyLock);
+    n = (ULONG)strlen(Step);
+    if (g_EarlyLen + n + 2 < EARLY_MAX) {
+        RtlCopyMemory(g_Early + g_EarlyLen, Step, n);
+        g_EarlyLen += n;
+        g_Early[g_EarlyLen++] = '\n';
+        g_Early[g_EarlyLen] = 0;
+    }
+    w = (PWCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (g_EarlyLen + 1) * sizeof(WCHAR), BWL_POOL_TAG);
+    if (w != NULL) {
+        for (i = 0; i < g_EarlyLen; i++) {
+            w[i] = (WCHAR)(UCHAR)g_Early[i];
+        }
+        w[g_EarlyLen] = 0;
+        RtlInitUnicodeString(&path, g_ParamsPath);
+        InitializeObjectAttributes(&oa, &path, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+        if (NT_SUCCESS(ZwCreateKey(&key, KEY_WRITE, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL))) {
+            RtlInitUnicodeString(&name, L"EarlyTrace");
+            (VOID)ZwSetValueKey(key, &name, 0, REG_SZ, w, (g_EarlyLen + 1) * sizeof(WCHAR));
+            (VOID)ZwFlushKey(key);
+            ZwClose(key);
+        }
+        ExFreePoolWithTag(w, BWL_POOL_TAG);
+    }
+    ExReleaseFastMutex(&g_EarlyLock);
+    BWL_LOG("early: %s", Step);
 }
 
-/* The digit after the first "FN_" in a (multi-)string of UTF-16, or 0xFF. */
-static UCHAR
-FindFn(_In_reads_(Chars) const WCHAR *S, _In_ ULONG Chars)
+static VOID
+EarlyCrumbF(_In_ PCSTR Fmt, _In_ ULONG A, _In_ ULONG B)
 {
-    ULONG i;
+    CHAR t[96];
 
-    for (i = 0; i + 3 < Chars; i++) {
-        if ((S[i] == L'F' || S[i] == L'f') && (S[i + 1] == L'N' || S[i + 1] == L'n') && S[i + 2] == L'_' &&
-            S[i + 3] >= L'0' && S[i + 3] <= L'7') {
-            return (UCHAR)(S[i + 3] - L'0');
-        }
+    if (NT_SUCCESS(RtlStringCbPrintfA(t, sizeof(t), Fmt, A, B))) {
+        EarlyCrumb(t);
     }
-    return 0xFF;
+}
+
+/*
+ * One property of the device-to-be into Buf (UTF-16, Cap characters),
+ * before WdfDeviceCreate. Fixed buffers only: the memory objects
+ * WdfFdoInitAllocAndQueryProperty returns belong to the device init and
+ * must not be deleted by the driver. Returns the characters read, 0 if
+ * the property is missing or does not fit.
+ */
+#define PROP_CHARS 512
+static ULONG
+QueryString(_In_ PWDFDEVICE_INIT DeviceInit, _In_opt_ const DEVPROPKEY *Key, _In_ DEVICE_REGISTRY_PROPERTY Prop,
+            _Out_writes_(Cap) PWCHAR Buf, _In_ ULONG Cap)
+{
+    ULONG len = 0;
+    NTSTATUS status;
+
+    RtlZeroMemory(Buf, Cap * sizeof(WCHAR));
+    if (Key != NULL) {
+        WDF_DEVICE_PROPERTY_DATA pd;
+        DEVPROPTYPE type = 0;
+
+        WDF_DEVICE_PROPERTY_DATA_INIT(&pd, Key);
+        status = WdfFdoInitQueryPropertyEx(DeviceInit, &pd, (Cap - 1) * sizeof(WCHAR), Buf, &len, &type);
+    } else {
+        status = WdfFdoInitQueryProperty(DeviceInit, Prop, (Cap - 1) * sizeof(WCHAR), Buf, &len);
+    }
+    if (!NT_SUCCESS(status) || len > (Cap - 1) * sizeof(WCHAR)) {
+        EarlyCrumbF("  query: status %08x, %u bytes", (ULONG)status, len);
+        Buf[0] = 0;
+        return 0;
+    }
+    return len / sizeof(WCHAR);
+}
+
+/* The setup class comes back as text: "{4d36e972-e325-11ce-bfc1-08002be10318}" is Net. */
+static BOOLEAN
+IsNetClass(_In_ PWDFDEVICE_INIT DeviceInit, _Out_writes_(PROP_CHARS) PWCHAR Buf)
+{
+    UNICODE_STRING got, net;
+
+    if (QueryString(DeviceInit, NULL, DevicePropertyClassGuid, Buf, PROP_CHARS) == 0) {
+        return FALSE;
+    }
+    RtlInitUnicodeString(&got, Buf);
+    RtlInitUnicodeString(&net, L"{4d36e972-e325-11ce-bfc1-08002be10318}");
+    return RtlEqualUnicodeString(&got, &net, TRUE);
 }
 
 /*
  * Which SDIO function this device is, before the device exists (WiFiCx
  * has to be set up before WdfDeviceCreate, and only function 1 gets it).
- * sdbus names the function in the device's IDs ("...&FN_1"); the instance
- * ID, the hardware IDs and the compatible IDs are looked at, in that
- * order. Which one carries it is recorded (FunctionSource). PrepareHardware
- * checks the answer against SDP_FUNCTION_NUMBER.
+ * sdbus names it in the instance ID ("SD\VID_02D0&PID_A9BF&FN_1\3&...")
+ * and in the hardware IDs; the instance ID, the hardware IDs and the
+ * compatible IDs are tried in that order (BwlFindFn, host-tested). Which
+ * one answered is recorded (FunctionSource). PrepareHardware checks the
+ * answer against SDP_FUNCTION_NUMBER.
  */
 static UCHAR
-FunctionFromIds(_In_ PWDFDEVICE_INIT DeviceInit, _Out_ PULONG Source)
+FunctionFromIds(_In_ PWDFDEVICE_INIT DeviceInit, _Out_writes_(PROP_CHARS) PWCHAR Buf, _Out_ PULONG Source)
 {
     static const DEVICE_REGISTRY_PROPERTY props[] = { DevicePropertyHardwareID, DevicePropertyCompatibleIDs };
-    WDF_DEVICE_PROPERTY_DATA pd;
-    WDF_OBJECT_ATTRIBUTES attr;
-    DEVPROPTYPE type;
-    WDFMEMORY mem;
-    size_t size;
-    UCHAR fn = 0xFF;
-    ULONG i;
+    ULONG i, n;
+    int fn;
 
     *Source = 0;
-    WDF_DEVICE_PROPERTY_DATA_INIT(&pd, &BwlInstanceIdKey);
-    WDF_OBJECT_ATTRIBUTES_INIT(&attr);
-    if (NT_SUCCESS(WdfFdoInitAllocAndQueryPropertyEx(DeviceInit, &pd, NonPagedPoolNx, &attr, &mem, &type))) {
-        const WCHAR *w = (const WCHAR *)WdfMemoryGetBuffer(mem, &size);
-
-        fn = FindFn(w, (ULONG)(size / sizeof(WCHAR)));
-        WdfObjectDelete(mem);
-        if (fn != 0xFF) {
-            *Source = 1;
-            return fn;
-        }
+    EarlyCrumb(" add: instance ID");
+    n = QueryString(DeviceInit, &BwlInstanceIdKey, DevicePropertyHardwareID, Buf, PROP_CHARS);
+    fn = BwlFindFn((const u16 *)Buf, n);
+    if (fn >= 0) {
+        *Source = 1;
+        return (UCHAR)fn;
     }
     for (i = 0; i < RTL_NUMBER_OF(props); i++) {
-        WDF_OBJECT_ATTRIBUTES_INIT(&attr);
-        if (NT_SUCCESS(WdfFdoInitAllocAndQueryProperty(DeviceInit, props[i], NonPagedPoolNx, &attr, &mem))) {
-            const WCHAR *w = (const WCHAR *)WdfMemoryGetBuffer(mem, &size);
-
-            fn = FindFn(w, (ULONG)(size / sizeof(WCHAR)));
-            WdfObjectDelete(mem);
-            if (fn != 0xFF) {
-                *Source = 2 + i;
-                return fn;
-            }
+        EarlyCrumb(i == 0 ? " add: hardware IDs" : " add: compatible IDs");
+        n = QueryString(DeviceInit, NULL, props[i], Buf, PROP_CHARS);
+        fn = BwlFindFn((const u16 *)Buf, n);
+        if (fn >= 0) {
+            *Source = 2 + i;
+            return (UCHAR)fn;
         }
     }
     return 0xFF;
@@ -854,6 +926,7 @@ BwlEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     BOOLEAN net, wifi;
     ULONG stage, source = 0;
     UCHAR fn;
+    PWCHAR buf;
 
     UNREFERENCED_PARAMETER(Driver);
 
@@ -862,16 +935,29 @@ BwlEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
      * System INF) is a plain device that does what Stage says. An instance
      * whose IDs name no function is taken for function 1 (one PDO for the
      * card), and PrepareHardware tells if that was wrong. */
-    net = IsNetClass(DeviceInit);
+    buf = (PWCHAR)ExAllocatePool2(POOL_FLAG_PAGED, PROP_CHARS * sizeof(WCHAR), BWL_POOL_TAG);
+    if (buf == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    EarlyCrumbF("DeviceAdd #%u (IRQL %u)", InterlockedIncrement((volatile LONG *)&g_AddSeq), KeGetCurrentIrql());
+    EarlyCrumb(" add: class");
+    net = IsNetClass(DeviceInit, buf);
+    EarlyCrumb(" add: stage");
     stage = ReadStage(DeviceInit);
-    fn = FunctionFromIds(DeviceInit, &source);
+    fn = FunctionFromIds(DeviceInit, buf, &source);
+    ExFreePoolWithTag(buf, BWL_POOL_TAG);
     wifi = net && stage >= BWL_STAGE_NETWORK && (fn == 1 || fn == 0xFF);
+    EarlyCrumbF(" add: net %u stage %u", net, stage);
+    EarlyCrumbF(" add: function %u (source %u)", fn, source);
     if (wifi) {
+        EarlyCrumb(" add: NetDeviceInitConfig");
         status = NetDeviceInitConfig(DeviceInit);
         if (NT_SUCCESS(status)) {
+            EarlyCrumb(" add: WifiDeviceInitConfig");
             status = BwlWifiPreDeviceCreate(DeviceInit);
         }
         if (!NT_SUCCESS(status)) {
+            EarlyCrumbF(" add: init config failed %08x", (ULONG)status, 0);
             return status;
         }
     }
@@ -887,7 +973,9 @@ BwlEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attr, BWL_DEVICE_CONTEXT);
     attr.EvtCleanupCallback = BwlEvtDeviceCleanup;
+    EarlyCrumb(" add: WdfDeviceCreate");
     status = WdfDeviceCreate(&DeviceInit, &attr, &device);
+    EarlyCrumbF(" add: WdfDeviceCreate %08x", (ULONG)status, 0);
     if (!NT_SUCCESS(status)) {
         return status;
     }
@@ -904,7 +992,9 @@ BwlEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     BwlPutULong(ctx, L"ActiveMode", wifi ? 1 : 0);
     if (wifi) {
         /* the adapter comes later, when WiFiCx asks for it */
+        EarlyCrumb(" add: WifiDeviceInitialize");
         status = BwlWifiPostDeviceCreate(ctx);
+        EarlyCrumbF(" add: WifiDeviceInitialize %08x", (ULONG)status, 0);
         BwlPutULong(ctx, L"WifiInitStatus", (ULONG)status);
         if (!NT_SUCCESS(status)) {
             return status;
@@ -923,7 +1013,9 @@ BwlEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     WDF_WORKITEM_CONFIG_INIT(&wic, BwlEvtBringUp);
     WDF_OBJECT_ATTRIBUTES_INIT(&attr);
     attr.ParentObject = device;
-    return WdfWorkItemCreate(&wic, &attr, &ctx->BringUp);
+    status = WdfWorkItemCreate(&wic, &attr, &ctx->BringUp);
+    EarlyCrumbF(" add: done %08x (wifi %u)", (ULONG)status, wifi);
+    return status;
 }
 
 NTSTATUS
@@ -931,6 +1023,17 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 {
     WDF_DRIVER_CONFIG config;
 
+    NTSTATUS status;
+
+    ExInitializeFastMutex(&g_EarlyLock);
+    if (NT_SUCCESS(RtlStringCchCopyNW(g_ParamsPath, RTL_NUMBER_OF(g_ParamsPath), RegistryPath->Buffer,
+                                      RegistryPath->Length / sizeof(WCHAR))) &&
+        NT_SUCCESS(RtlStringCchCatW(g_ParamsPath, RTL_NUMBER_OF(g_ParamsPath), L"\\Parameters"))) {
+        g_EarlyReady = TRUE;
+    }
+    EarlyCrumb("DriverEntry");
     WDF_DRIVER_CONFIG_INIT(&config, BwlEvtDeviceAdd);
-    return WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &config, WDF_NO_HANDLE);
+    status = WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &config, WDF_NO_HANDLE);
+    EarlyCrumbF("WdfDriverCreate %08x", (ULONG)status, 0);
+    return status;
 }

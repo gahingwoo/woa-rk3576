@@ -60,6 +60,31 @@ BwlChanspecDecode(u32 IoType, u16 Cs, u8 *Channel, u8 *Band)
     *Channel = (u8)(ch > 0 && ch < 256 ? ch : 0);
 }
 
+/* ------------------------------------------------------------ sdbus IDs */
+
+int
+BwlFindFn(const u16 *S, u32 Chars)
+{
+    u32 i;
+
+    for (i = 1; i + 3 < Chars; i++) {
+        u16 t;
+
+        if (S[i - 1] != '&' && S[i - 1] != '\\') {
+            continue;
+        }
+        if ((S[i] != 'F' && S[i] != 'f') || (S[i + 1] != 'N' && S[i + 1] != 'n') || S[i + 2] != '_' ||
+            S[i + 3] < '0' || S[i + 3] > '7') {
+            continue;
+        }
+        t = (u16)(i + 4 < Chars ? S[i + 4] : 0);
+        if (t == 0 || t == '\\' || t == '&') {
+            return S[i + 3] - '0';
+        }
+    }
+    return -1;
+}
+
 /* ------------------------------------------------------------ elements */
 
 const u8 *

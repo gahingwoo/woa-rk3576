@@ -274,7 +274,11 @@ artifact `wifi-bringup-signed-arm64` from branch `bcmwlsdio-wificx`.
    (REG_SZ) on the function 1 key, restart, join that network.
 7. CM5-IO (BCM43752): the same with `install-firmware.ps1 -Chip 43752`.
 
-Reading a failure: `FwState` and `LastStep` name the step; no networks
+Reading a failure: before the device exists (DriverEntry, DeviceAdd)
+nothing can go to Device Parameters, so the driver appends each early step
+to `EarlyTrace` in `HKLM\SYSTEM\CurrentControlSet\Services\bcmwlsdio\Parameters`,
+flushed (one line per step, every instance; started afresh at each boot).
+After that, `FwState` and `LastStep` name the step; no networks
 with `ScanResults` 0 means escan gave nothing (`WlanFwStatus`); "can't
 connect" with `RxEapol` 0 means message 1 never came, `TxEapol` 1 and no
 message 3 points at the RSN element or the message 2 path, `ConnStatus`

@@ -538,6 +538,13 @@ int  BwlBssInfoParse(const u8 *Bi, u32 Len, u32 IoType, bwl_bss *Out, u8 *Body, 
 int  BwlBssFromBody(const u8 *Bssid, unsigned Channel, unsigned Band, int Rssi, const u8 *Body, u32 Len,
                     bwl_bss *Out);
 
+/*
+ * The SDIO function an sdbus device ID names: "...&FN_<d>" followed by the
+ * end, '\\', '&' or a NUL (a multi-string is searched whole). S is UTF-16
+ * (Chars units, NUL or not). Returns 0..7, or -1 when no ID names one.
+ */
+int  BwlFindFn(const u16 *S, u32 Chars);
+
 /* The element with this ID in Ies, or NULL. */
 const u8 *BwlFindIe(const u8 *Ies, u32 Len, u8 Id);
 
