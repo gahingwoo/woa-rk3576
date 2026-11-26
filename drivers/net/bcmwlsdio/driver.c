@@ -5,10 +5,11 @@
  * names come from the chip ID (BwlChipFwName): brcmfmac43456-sdio.* or
  * brcmfmac43752-sdio.*.
  *
- * PnP: PrepareHardware opens the SDBUS interface, SelfManagedIoInit
- * queues the bring-up on a work item (it takes seconds and must not hold
- * up the PnP start), SelfManagedIoSuspend stops it and halts the chip's
- * CPU, ReleaseHardware closes the interface.
+ * PnP: AddDevice opens the SDBUS interface (it must, see BwlEvtDeviceAdd),
+ * SelfManagedIoInit queues the bring-up on a work item (it takes seconds
+ * and must not hold up the PnP start), SelfManagedIoSuspend stops it and
+ * halts the chip's CPU, ReleaseHardware closes the interface and a restart's
+ * PrepareHardware opens it again.
  *
  * Everything is reported under the device's registry key (Device
  * Parameters) and flushed; docs/dev/wifi.md lists the values.
@@ -24,6 +25,8 @@ DRIVER_INITIALIZE DriverEntry;
 static EVT_WDF_DRIVER_DEVICE_ADD BwlEvtDeviceAdd;
 static EVT_WDF_DEVICE_PREPARE_HARDWARE BwlEvtPrepareHardware;
 static EVT_WDF_DEVICE_RELEASE_HARDWARE BwlEvtReleaseHardware;
+static EVT_WDF_DEVICE_D0_ENTRY BwlEvtD0Entry;
+static EVT_WDF_OBJECT_CONTEXT_CLEANUP BwlEvtDeviceCleanup;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_INIT BwlEvtSelfManagedIoInit;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_SUSPEND BwlEvtSelfManagedIoSuspend;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_CLEANUP BwlEvtSelfManagedIoCleanup;
@@ -453,6 +456,13 @@ out:
     if (fwMem) WdfObjectDelete(fwMem);
 }
 
+/* Milliseconds since boot, from interrupt time. */
+static ULONG
+TimeMs(_In_ LONG64 InterruptTime)
+{
+    return (ULONG)((ULONG64)InterruptTime / 10000ULL);
+}
+
 static VOID
 BwlEvtBringUp(_In_ WDFWORKITEM WorkItem)
 {
@@ -462,6 +472,7 @@ BwlEvtBringUp(_In_ WDFWORKITEM WorkItem)
     (VOID)ExSetTimerResolution(10000, TRUE);
     BringUp(ctx);
     (VOID)ExSetTimerResolution(0, FALSE);
+    BwlPutULong(ctx, L"BringUpDoneMs", TimeMs((LONG64)KeQueryInterruptTime()));
 }
 
 /* Stop the bring-up; then, with I/O allowed again, halt the chip's CPU and turn F1/F2 off. */
@@ -495,6 +506,7 @@ BwlEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
     UNREFERENCED_PARAMETER(Raw);
     UNREFERENCED_PARAMETER(Translated);
 
+    ctx->PrepareHardwareTime = (LONG64)KeQueryInterruptTime();
     InterlockedExchange(&ctx->Stopping, 0);
     ctx->Stage = GetULong(ctx, L"Stage", BWL_STAGE_OPEN);
     ctx->MaxBlocks = GetULong(ctx, L"MaxBlocks", 32);
@@ -502,8 +514,10 @@ BwlEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
     ctx->Verify = GetULong(ctx, L"Verify", 1);
     BwlPutULong(ctx, L"StageSeen", ctx->Stage);
 
-    status = BwlSdOpen(ctx);
+    /* Open since AddDevice; again here only on a restart after ReleaseHardware. */
+    status = ctx->SdOpen ? STATUS_SUCCESS : BwlSdOpen(ctx);
     BwlPutULong(ctx, L"SdOpenStatus", (ULONG)status);
+    BwlPutULong(ctx, L"EarlyOpenStatus", (ULONG)ctx->EarlyOpenStatus);
     BwlCrumb(ctx, NT_SUCCESS(status) ? "SDBUS open" : "SDBUS open failed");
     /* The device still starts, so that the breadcrumbs can be read. */
     return STATUS_SUCCESS;
@@ -518,6 +532,37 @@ BwlEvtReleaseHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Translated)
     StopBringUp(ctx);
     BwlSdClose(ctx);
     return STATUS_SUCCESS;
+}
+
+/*
+ * Boot timing, under Device Parameters: AddDeviceMs, PrepareHardwareMs,
+ * D0EntryMs (ms since boot), and AddToD0Ms. AddDevice to PrepareHardware is
+ * the PDO's start in sdbus.
+ */
+static NTSTATUS
+BwlEvtD0Entry(_In_ WDFDEVICE Device, _In_ WDF_POWER_DEVICE_STATE PreviousState)
+{
+    PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
+    LONG64 now = (LONG64)KeQueryInterruptTime();
+
+    UNREFERENCED_PARAMETER(PreviousState);
+
+    if (ctx->AddDeviceTime != 0) {
+        BwlPutULong(ctx, L"AddDeviceMs", TimeMs(ctx->AddDeviceTime));
+        BwlPutULong(ctx, L"PrepareHardwareMs", TimeMs(ctx->PrepareHardwareTime));
+        BwlPutULong(ctx, L"D0EntryMs", TimeMs(now));
+        BwlPutULong(ctx, L"AddToD0Ms", TimeMs(now - ctx->AddDeviceTime));
+        /* Only the first D0 after AddDevice; later ones are not the boot. */
+        ctx->AddDeviceTime = 0;
+    }
+    return STATUS_SUCCESS;
+}
+
+static VOID
+BwlEvtDeviceCleanup(_In_ WDFOBJECT Object)
+{
+    /* A device removed before it ever started still holds the AddDevice open. */
+    BwlSdClose(BwlGetContext((WDFDEVICE)Object));
 }
 
 static NTSTATUS
@@ -559,18 +604,36 @@ BwlEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = BwlEvtPrepareHardware;
     pnp.EvtDeviceReleaseHardware = BwlEvtReleaseHardware;
+    pnp.EvtDeviceD0Entry = BwlEvtD0Entry;
     pnp.EvtDeviceSelfManagedIoInit = BwlEvtSelfManagedIoInit;
     pnp.EvtDeviceSelfManagedIoSuspend = BwlEvtSelfManagedIoSuspend;
     pnp.EvtDeviceSelfManagedIoCleanup = BwlEvtSelfManagedIoCleanup;
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnp);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attr, BWL_DEVICE_CONTEXT);
+    attr.EvtCleanupCallback = BwlEvtDeviceCleanup;
     status = WdfDeviceCreate(&DeviceInit, &attr, &device);
     if (!NT_SUCCESS(status)) {
         return status;
     }
     ctx = BwlGetContext(device);
     ctx->Device = device;
+    ctx->AddDeviceTime = (LONG64)KeQueryInterruptTime();
+
+    /*
+     * Open the SDBUS interface here, before the PDO starts, as ntddsd.h says
+     * to. sdbus (22621) runs SdbusStartFunctionWorker when it starts a
+     * function's PDO: unless the interface was initialised with
+     * SDIO_FLAG_DO_NOT_MANAGE_IO_ENABLE, it sets the function's IOEx bit and
+     * polls IORx up to 2000 times, a 1 ms timer apart (a clock tick, ~15.6
+     * ms, in practice). F2 does not come ready until the firmware runs and
+     * F3 apparently never, so each of those PDO starts took about half a minute,
+     * holding up PnP, with every other request to the card queued behind
+     * it. Opened in PrepareHardware, the flag arrived after that. sdbus
+     * keeps the flag with the PDO, so it also covers a later restart.
+     * A failure here leaves things as they were: PrepareHardware opens.
+     */
+    ctx->EarlyOpenStatus = BwlSdOpen(ctx);
 
     /* Every CMD53 goes through this buffer: non-paged, for the MDLs. */
     WDF_OBJECT_ATTRIBUTES_INIT(&attr);

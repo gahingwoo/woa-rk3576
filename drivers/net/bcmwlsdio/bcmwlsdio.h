@@ -69,6 +69,15 @@ typedef struct _BWL_DEVICE_CONTEXT {
     ULONG LastR5Flags;
 
     LONG StepSeq;
+
+    /*
+     * Boot timing, interrupt time (100 ns) at each PnP step, and what the
+     * early SDBUS open in AddDevice returned (see BwlEvtDeviceAdd).
+     */
+    LONG64 AddDeviceTime;
+    LONG64 PrepareHardwareTime;
+    NTSTATUS EarlyOpenStatus;
+
     bwl_dev Bwl;
 } BWL_DEVICE_CONTEXT, *PBWL_DEVICE_CONTEXT;
 
