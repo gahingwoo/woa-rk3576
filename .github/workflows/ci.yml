@@ -992,6 +992,12 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: Parse tools\sdio-boottime.ps1 under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $e = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path tools\sdio-boottime.ps1), [ref]$null, [ref]$e)
+          if ($e) { $e | Out-Host; throw 'parse errors in tools\sdio-boottime.ps1' }
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
         with:
@@ -1037,7 +1043,10 @@ jobs:
               if (-not (Test-Path (Join-Path $d $f))) { throw "$n package: $f missing" }
             }
           }
-          Copy-Item drivers\net\bcmwlsdio\install-firmware.ps1, drivers\net\bcmwlsdio\README.md $pkg -Force
+          Copy-Item drivers\net\bcmwlsdio\install-firmware.ps1, drivers\net\bcmwlsdio\README.md, tools\sdio-boottime.ps1 $pkg -Force
+          foreach ($n in 'dwcmshc', 'bcmwlsdio') {
+            Select-String -Path "$pkg\$n\$n.inf" -Pattern '^\s*DriverVer' | ForEach-Object { Write-Host "$n $($_.Line)" }
+          }
           "woa-rk3576 $env:GITHUB_SHA, run ${{ github.run_number }}" | Set-Content "$pkg\VERSION.txt" -Encoding ascii
           Get-ChildItem $pkg -Recurse -File | Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
       - uses: actions/upload-artifact@v4

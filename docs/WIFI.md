@@ -222,6 +222,11 @@ second `SdPortCompleteRequest` call appears.
 `SdioDiag` version 2 adds `RefusedCompletions`, `LastRefusedCmd`,
 `LastRefusedStatus` (a completion the guard refused: the old code would have
 given it to sdport), `LocalTimeouts`, `StaleLocalDpcs` and `DeferredKicks`.
+Version 3 adds boot timing: ms since boot of the first command, CMD7 and
+the 4-bit switch, CMD52 reads of IORx and writes of IOEx, command and data
+timeouts, resets by type, request latency and the time spent waiting.
+It is written at most once a second and flushed at most every 10 s.
+`tools/sdio-boottime.ps1` prints it with the boot's PnP events.
 
 Two packages, one service: an older `dwcmshc` package that binds only the SD
 slot (`ACPI\RKCPFE2C`) shares the service name. Only one `dwcmshc.sys` image

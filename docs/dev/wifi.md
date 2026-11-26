@@ -126,6 +126,10 @@ unknown, and W3 is written to find out rather than assume:
    needs F2 for the version query, so a W3 pass answers both.
 3. **IOEx.** The PDO is opened with `SDIO_FLAG_DO_NOT_MANAGE_IO_ENABLE`;
    the driver turns F1 and F2 on itself, F2 only after the firmware runs.
+   It is opened in AddDevice: sdbus enables the function's IOEx bit when it
+   starts the PDO unless the flag is already set, and then polls IORx up to
+   2000 times a clock tick apart, about 30 s for each of F2 and F3, which
+   are not ready without firmware.
 4. **Block size of F2.** For a block-mode CMD53, sdbus programs the host's
    block size from the function's block length, and the F1 PDO's is 64,
    while F2 uses 512. So F2 stays in byte mode (at most 512 bytes per
@@ -284,6 +288,7 @@ Written by the driver:
 | `BcdcIoType`, `MacAddress`, `ClmChunks`, `ClmStatus`, `ClmResult`, `FwVersion`, `FwVersionNumber`, `FwCmdStatus` | control channel results |
 | `Cmd52Count`, `Cmd53Count`, `Cmd52Errors`, `Cmd53Errors`, `LastSdStatus`, `LastSdArg`, `LastR5Flags` | bus counters |
 | `FramesTx`, `FramesRx`, `EventsRx`, `LastEvent`, `RxErrors`, `RxAborts`, `GlomRx`, `MailboxData`, `IntStatus`, `Polls` | frame counters |
+| `AddDeviceMs`, `PrepareHardwareMs`, `D0EntryMs`, `AddToD0Ms`, `BringUpDoneMs`, `EarlyOpenStatus` | boot timing (ms since boot); AddDevice to PrepareHardware is the PDO start in sdbus. `tools/sdio-boottime.ps1` prints them |
 
 ## Board session for W2 and W3
 
