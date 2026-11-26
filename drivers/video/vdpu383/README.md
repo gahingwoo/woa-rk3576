@@ -84,6 +84,7 @@ stops Windows):
 | `FirstRunResult`, `FirstRunStatus` | first decode of the session (0 = ok) |
 | `IommuSetting`, `IommuOn`, `MmuDte0`, `MmuEnableStatus0/1` | `Iommu` value read, whether paging came on, directory register, status after enable (bit 0 = paging) |
 | `LastMmuFaultAddr` | IO address of the last IOMMU fault |
+| `LastImportStage`, `LastImportStatus`, `LastImportPages`, `LastImportExporterStatus`, `LastImportExporterPages`, `LastImportHandle`, `LastImportPid`, `ImportFailures`, `Imports` | last failed `IOCTL_VDPU383_IMPORT` (first 16 failures, then every 64th). Stage: 1 parameters or IOMMU off, 2 no memory, 3 refresh of an unknown import, 4 no free IO addresses, 5 no exporter (maliwddm did not start it), 6 exporter refused (its status; maliwddm's `VdecLast*` says why), 7 page count differs (asked vs exporter), 8 IOMMU entries |
 
 ## Zero copy (interface 3)
 
