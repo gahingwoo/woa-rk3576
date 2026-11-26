@@ -340,11 +340,13 @@ u32  BwlConsoleRead(bwl_dev *Dev, char *Out, u32 Cap);
  * NVRAM text to the form the firmware expects: one NUL-terminated
  * key=value per line, comments and blank lines dropped, padded to 4 bytes,
  * then a 32-bit token (length in words, and its complement in the upper
- * half). Dst must hold SrcLen + 8 bytes. Returns the length, or a negative
- * error.
+ * half). Dst must hold SrcLen + BWL_NVRAM_SLACK bytes: at worst every
+ * byte is kept and the last line has no newline (SrcLen + 1), the padding
+ * adds up to 4 (at least one NUL) and the token 4, so SrcLen + 9; 12 keeps
+ * the size a multiple of 4. Returns the length, or a negative error.
  */
 int  BwlNvramConvert(const u8 *Src, u32 SrcLen, u8 *Dst, u32 DstCap);
-#define BWL_NVRAM_SLACK 8u
+#define BWL_NVRAM_SLACK 12u
 
 /*
  * The version in a firmware image's trailer, as text. 0 if found. Older

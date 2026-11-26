@@ -116,6 +116,10 @@ typedef struct fake_chip {
     unsigned Escans, Joins, ScanAborts, DataFromHost, EapolFromHost, DataDropped, ArpReplies;
     unsigned char LastEapol[128];
     unsigned LastEapolLen;
+
+    /* a firmware that misbehaves, for the buffer-bound tests */
+    unsigned ReplyExtra;    /* bytes appended to every control reply, and claimed in its length */
+    unsigned ConsoleBufSize;/* console ring size, 0 = 0x100 */
 } fake_chip;
 
 /* The simulated air. */

@@ -291,8 +291,17 @@ boot(fake_chip *F)
     memset(F->Ram + shared, 0, 0x400);
     put_le32(F->Ram + shared + SHARED_FLAGS, 3);
     put_le32(F->Ram + shared + SHARED_CONSOLE_ADDR, F->RamBase + cons);
+    if (F->ConsoleBufSize > 0x100) {
+        /* a big ring, below the shared block, full of text */
+        unsigned i;
+
+        logbuf = shared - F->ConsoleBufSize - 0x100;
+        for (i = 0; i < F->ConsoleBufSize; i++) {
+            F->Ram[logbuf + i] = (unsigned char)(i % 64 == 63 ? '\n' : 'a' + i % 26);
+        }
+    }
     put_le32(F->Ram + cons + CONSOLE_LOG_BUF, F->RamBase + logbuf);
-    put_le32(F->Ram + cons + CONSOLE_LOG_BUFSZ, 0x100);
+    put_le32(F->Ram + cons + CONSOLE_LOG_BUFSZ, F->ConsoleBufSize > 0x100 ? F->ConsoleBufSize : 0x100);
     memcpy(F->Ram + logbuf, log, loglen);
     put_le32(F->Ram + cons + CONSOLE_LOG_IDX, loglen);
     put_le32(F->Ram + top - 4, F->RamBase + shared);
@@ -1015,6 +1024,16 @@ handle_tx_frame(fake_chip *F, const unsigned char *p, unsigned len)
     if (err) {
         put_le32(reply + 8, flags | BCDC_DCMD_ERROR);
         put_le32(reply + 12, (unsigned)status);
+    }
+    if (F->ReplyExtra) {
+        unsigned extra = F->ReplyExtra;
+
+        if (rlen + extra > sizeof(reply)) {
+            extra = (unsigned)sizeof(reply) - rlen;
+        }
+        memset(reply + rlen, 0xEE, extra);
+        rlen += extra;
+        put_le32(reply + 4, dlen + extra);     /* and say so in the length */
     }
     queue_frame(F, SDPCM_CH_CONTROL, reply, rlen);
     if (F->EscanPending && !F->HoldEscan) {
