@@ -1,0 +1,100 @@
+;
+; bcmwlsdio.inf - Broadcom BCM43456 Wi-Fi (AMPAK AP6256, LCKFB TaishanPi 3M)
+; and BCM43752 Wi-Fi (BW3752-50B1, ArmSoM CM5 on the CM5-IO) on the RK3576
+; SDIO controller. Bring-up driver (W3 of docs/dev/wifi.md):
+; it identifies the chip and starts its firmware, and has no network
+; interface yet.
+;
+; Target: Windows on ARM64. Binds the SDIO card that sdbus.sys enumerates
+; under the SDIO controller (ACPI\RKCPFE2D, driven by dwcmshc). The
+; firmware (edk2-rk3576) declares that controller only when "SDIO Wi-Fi
+; (experimental)" is on in its setup.
+;
+; HARDWARE IDS ARE NOT CONFIRMED ON THE BOARD. The CIS vendor is 0x02D0
+; (Broadcom). The device ID 0xA9BF is what the BCM4345 family reports on
+; other boards; 0x4345 is the ID Linux also matches for this chip. The
+; BCM43752 reports 0xAAE8 (Linux SDIO_DEVICE_ID_BROADCOM_43752; 0xAAE7 is
+; the 43751, which takes the same firmware). The W2 board test records the
+; real list (pnputil /enum-devices /connected); if it differs, add it below. If sdbus makes one device per function, both
+; bind here and the instance on function 2 stays idle.
+;
+; The firmware files are not part of this package; see README.md and
+; install-firmware.ps1. Stage (below) is 0: nothing touches the card until
+; it is raised.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = bcmwlsdio.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+bcmwlsdio.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%BCMWLSDIO.DeviceDesc% = BCMWLSDIO_Inst,SD\VID_02D0&PID_A9BF
+%BCMWLSDIO.DeviceDesc% = BCMWLSDIO_Inst,SD\VID_02D0&PID_4345
+%BCMWLSDIO.43752Desc% = BCMWLSDIO_Inst,SD\VID_02D0&PID_AAE8
+%BCMWLSDIO.43752Desc% = BCMWLSDIO_Inst,SD\VID_02D0&PID_AAE7
+
+[BCMWLSDIO_Inst.NT]
+CopyFiles = BCMWLSDIO_CopyFiles
+
+[BCMWLSDIO_CopyFiles]
+bcmwlsdio.sys
+
+[BCMWLSDIO_Inst.NT.HW]
+AddReg = BCMWLSDIO_Inst.NT.HW.AddReg
+
+[BCMWLSDIO_Inst.NT.HW.AddReg]
+; Stage: 0 open the SD bus interface only, 1 also identify the chip,
+; 2 also download and start the firmware. FLG_ADDREG_NOCLOBBER (0x2) keeps
+; a value already set on the board across driver updates.
+HKR,,"Stage",0x00010003,0
+; Blocks per block-mode CMD53 on function 1 (64-byte blocks).
+HKR,,"MaxBlocks",0x00010003,32
+; 1: allow block mode on function 2. Off until the board shows that
+; sdbus programs F2's block size for a request from function 1.
+HKR,,"F2BlockMode",0x00010003,0
+; Read back the firmware and NVRAM after writing them.
+HKR,,"Verify",0x00010003,1
+HKR,,"FirmwareDir",0x00000002,"\SystemRoot\System32\drivers\brcm"
+
+[BCMWLSDIO_Inst.NT.Services]
+AddService = bcmwlsdio,0x00000002,BCMWLSDIO_Service
+
+[BCMWLSDIO_Service]
+DisplayName   = %BCMWLSDIO.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\bcmwlsdio.sys
+
+[BCMWLSDIO_Inst.NT.Wdf]
+KmdfService = bcmwlsdio, BCMWLSDIO_wdfsect
+
+[BCMWLSDIO_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName          = "woa-rk3576"
+DiskName              = "Broadcom SDIO Wi-Fi Installation Disk"
+BCMWLSDIO.DeviceDesc  = "Broadcom BCM43456 Wi-Fi (SDIO, bring-up)"
+BCMWLSDIO.43752Desc   = "Broadcom BCM43752 Wi-Fi (SDIO, bring-up)"
+BCMWLSDIO.SvcDesc     = "Broadcom SDIO Wi-Fi bring-up driver"

@@ -150,6 +150,19 @@ Environment:
 // MSHC_INTMASK/MINTSTS/RINTSTS fields
 //
 #define MSHC_INT_SDIO(n)                            (0x1 << (16 + (n)))   // SDIO slot interrupt
+
+//
+// Rockchip wires the SDIO card interrupt to bit 8 of the SDIO field, so
+// RINTSTS/INTMASK bit 24 (mainline dw_mmc-rockchip.c: host->sdio_irq = 8).
+//
+#define MSHC_RK_SDIO_IRQ_INDEX                      8
+#define MSHC_INT_SDIO_RK                            MSHC_INT_SDIO(MSHC_RK_SDIO_IRQ_INDEX)
+
+//
+// RK3576 sdio: mmc@2a320000 (rk3576.dtsi), the controller the TaishanPi 3M's
+// AP6256 Wi-Fi is on.  The SD slot is sdmmc: mmc@2a310000.
+//
+#define RK3576_SDIO_PHYS_BASE                       0x2A320000ULL
 #define MSHC_INT_EBE                                (0x1 << 15)           // End-bit error (read)/Write no CRC
 #define MSHC_INT_ACD                                (0x1 << 14)           // Auto command done
 #define MSHC_INT_SBE                                (0x1 << 13)           // Start-bit error
@@ -430,6 +443,7 @@ typedef struct _MSHC_IDMAC_DESCRIPTOR {
 //
 #define SDCMD_GO_IDLE_STATE             0
 #define SDCMD_SEND_RELATIVE_ADDR        3
+#define SDCMD_IO_SEND_OP_COND           5
 #define SDCMD_VOLTAGE_SWITCH            11
 #define SDCMD_STOP_TRANSMISSION         12
 #define SDCMD_SEND_STATUS               13
@@ -493,6 +507,8 @@ typedef struct _MSHC_PLATFORM_CAPABILITIES {
     ULONG SupportHs200;
     ULONG No18vRegulator;
     ULONG BrokenCd;
+    ULONG NonRemovable;
+    ULONG CapSdioIrq;
 } MSHC_PLATFORM_CAPABILITIES, *PMSHC_PLATFORM_CAPABILITIES;
 
 typedef enum _MSHC_PLATFORM_TYPE {
@@ -539,6 +555,22 @@ struct _MSHC_EXTENSION {
     PMSHC_PLATFORM_OPERATIONS PlatformOperations;
 
     //
+    // This slot's own copy of its platform info; PlatformInfo points here
+    // once MshcSlotInitialize has found the list entry.  The list entry is
+    // freed in MshcCleanup, and sdport disconnects the interrupts only after
+    // Cleanup returns (SdhostFdoFreeDeviceResources, sdport 22621.608), so
+    // nothing reachable from the ISR may point into the list.
+    //
+    MSHC_PLATFORM_INFO PlatformInfoCopy;
+
+    //
+    // Set by MshcCleanup before it tears anything down.  Every sdport
+    // callback that can still arrive afterwards (the ISR first of all)
+    // returns at once when it is set.
+    //
+    volatile LONG Shutdown;
+
+    //
     // Slot location
     //
     ULONG SlotId;
@@ -562,9 +594,70 @@ struct _MSHC_EXTENSION {
     ULONG RkCardClockHz;
 
     //
+    // RK3576: TRUE on the SDIO controller (sdio: mmc@2a320000), which takes
+    // its card clock from CCLK_SRC_SDIO and carries SDIO card interrupts.
+    // Everything SDIO-specific in this driver is gated on it, so the SD slot
+    // behaves exactly as before.
+    //
+    BOOLEAN IsSdio;
+
+    //
+    // SDIO bring-up breadcrumbs (sdiodiag.cpp), written to
+    // HKLM\SYSTEM\CurrentControlSet\Services\dwcmshc\SdioDiag and flushed.
+    // Only the SDIO controller records them.
+    //
+    struct {
+        PIO_WORKITEM WorkItem;
+        volatile LONG FlushPending;
+        volatile LONG WorkersActive;
+        volatile LONG Commands;
+        volatile LONG Cmd5Count;
+        volatile LONG Cmd52Count;
+        volatile LONG Cmd53Count;
+        volatile LONG CmdErrors;
+        volatile LONG DataErrors;
+        volatile LONG SdioInterrupts;
+        volatile LONG CardIntEnables;
+        volatile LONG CardIntDisables;
+        volatile LONG BusOps;
+        volatile LONG CardDetectCalls;
+        ULONG LastCmd;
+        ULONG LastArg;
+        ULONG LastResp0;
+        ULONG LastErrorRintsts;
+        ULONG Cmd5Resp;
+        ULONG Cmd3Rca;
+        ULONG LastBusOpType;
+        ULONG ClockKhz;
+        ULONG BusWidth;
+
+        //
+        // Version 2 (branch dwcmshc-sdio-d1): the request ownership guard
+        // and the IRQL guard below.
+        //
+        volatile LONG RefusedCompletions;   // request sdport does not own now
+        volatile LONG LocalTimeouts;        // local command never completed
+        volatile LONG StaleLocalDpcs;       // local DPC after its request ended
+        volatile LONG DeferredKicks;        // breadcrumb update above DISPATCH
+        ULONG LastRefusedCmd;
+        ULONG LastRefusedStatus;
+    } Diag;
+
+    //
     // Current request state
     //
     PSDPORT_REQUEST OutstandingRequest;
+
+    //
+    // The request sdport handed to MshcSlotIssueRequest and has not had back
+    // yet.  Only this pointer is ever passed to SdPortCompleteRequest, and it
+    // is cleared as it is passed, so a request is completed to sdport once
+    // and a request sdport does not own (a miniport-local one on the stack)
+    // never reaches it.  sdport takes its slot from a private field past the
+    // public SDPORT_REQUEST, and a stack request has garbage there.
+    //
+    PSDPORT_REQUEST SdportRequest;
+
     ULONG CurrentEvents;
     ULONG CurrentErrors;
     ULONG CurrentTransferRemainingLength;
@@ -574,6 +667,22 @@ struct _MSHC_EXTENSION {
     //
     KDPC LocalRequestDpc;
     LONG LocalRequestPending;
+
+    //
+    // The local request being issued by MshcIssueRequestSynchronously (it
+    // lives on that function's stack), NULL otherwise, and the number of
+    // LocalRequestDpc runs looking at it.  MshcIssueRequestSynchronously
+    // clears the pointer and waits for the count to drop before it returns,
+    // so nothing touches the stack request after its frame is gone.
+    //
+    PSDPORT_REQUEST volatile LocalRequest;
+    volatile LONG LocalDpcActive;
+
+    //
+    // The sdport request whose completion waits in the busy work item.
+    //
+    PSDPORT_REQUEST volatile BusyRequest;
+    volatile LONG BusyWorkerActive;
 
     //
     // FIFO configuration for the current transfer
@@ -792,11 +901,41 @@ MshcCompleteRequest(
     _In_ NTSTATUS Status
     );
 
+//
+// SDIO bring-up breadcrumbs (sdiodiag.cpp)
+//
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+MshcSdioDiagInit(
+    _In_ PMSHC_EXTENSION MshcExtension,
+    _In_ PDEVICE_OBJECT MiniportFdo
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID
+MshcSdioDiagKick(
+    _In_ PMSHC_EXTENSION MshcExtension
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+MshcSdioDiagCleanup(
+    _In_ PMSHC_EXTENSION MshcExtension
+    );
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 VOID
 MshcCompleteRequestBusyWorker(
     _In_opt_ PDEVICE_OBJECT DeviceObject,
     _In_ PVOID Context
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID
+MshcCompleteRequestAfterBusy(
+    _In_ PMSHC_EXTENSION MshcExtension,
+    _In_ PSDPORT_REQUEST Request
     );
 
 _IRQL_requires_(DISPATCH_LEVEL)

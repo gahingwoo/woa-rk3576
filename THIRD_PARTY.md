@@ -59,6 +59,14 @@ made under that licence:
 Each driver is built as its own binary, so the repository only distributes
 them side by side.
 
+## Code followed from other projects
+
+`drivers/net/bcmwlsdio` (the BCM43456 Wi-Fi driver) is written here, under
+GPL-2.0-only. Its chip and protocol files follow OpenBSD's `bwfm`
+(Copyright Broadcom Corporation and Patrick Wildt, ISC licence), whose
+notice is kept in `bwl_regs.h`; Linux brcmfmac (ISC) was used to check it.
+See the driver's `LICENSING.md`.
+
 ## Firmware not carried
 
 `drivers/bluetooth/bcm4345bt` needs Broadcom's BCM4345C5 patchram, which is
@@ -70,6 +78,13 @@ redistribution in object code for use with Cypress parts. The driver's
 and checks its SHA-256. Microsoft's SerialHCIBus sample (MS-PL) was read for
 the BthX interface; no code from it is used, since MS-PL and GPL-2.0 cannot
 be combined.
+
+`drivers/net/bcmwlsdio` needs `brcmfmac43456-sdio.bin`, `.txt` (the AP6256
+NVRAM) and `.clm_blob`. They are not in this repository either: Armbian's
+copies have no stated licence, and Raspberry Pi's build is under a Synaptics
+binary licence (object code only, for Synaptics chips). Its
+`install-firmware.ps1` downloads them on the board at pinned commits and
+checks their SHA-256; docs/dev/wifi.md has the details.
 
 ## Not imported
 

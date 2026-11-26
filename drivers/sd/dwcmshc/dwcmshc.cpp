@@ -51,6 +51,25 @@ static PLIST_ENTRY gPlatformInfoList;
 static FAST_MUTEX gPlatformInfoListLock;
 
 //
+// sdport's own DriverUnload, chained from MshcDriverUnload.
+//
+static PDRIVER_UNLOAD gSdportDriverUnload;
+static DRIVER_UNLOAD MshcDriverUnload;
+
+static
+VOID
+MshcDriverUnload(
+    _In_ PDRIVER_OBJECT DriverObject
+    )
+{
+    if (gSdportDriverUnload != NULL) {
+        gSdportDriverUnload(DriverObject);
+    }
+
+    WPP_CLEANUP(DriverObject);
+}
+
+//
 // Supported controllers
 //
 static MSHC_PLATFORM_DRIVER_DATA SupportedPlatforms[] = {
@@ -177,6 +196,15 @@ DriverEntry(
     // Hook up the IRP dispatch routines.
     //
     Status = SdPortInitialize(DriverObject, RegistryPath, &InitializationData);
+    if (NT_SUCCESS(Status) && !gCrashdumpMode) {
+        //
+        // sdport installs its own unload routine (SdhostUnload).  Run it,
+        // then tear WPP down, once the image is really going away.
+        //
+        gSdportDriverUnload = DriverObject->DriverUnload;
+        DriverObject->DriverUnload = MshcDriverUnload;
+    }
+
     if (!NT_SUCCESS(Status)) {
         MSHC_LOG_ERROR(
             DriverLogHandle,
@@ -288,6 +316,7 @@ MshcSlotInitialize(
     //
     MshcExtension->PhysicalAddress = (PVOID)PhysicalBase.QuadPart;
     MshcExtension->BaseAddress = VirtualBase;
+    MshcExtension->IsSdio = ((ULONGLONG)PhysicalBase.QuadPart == RK3576_SDIO_PHYS_BASE);
 
     //
     // Check whether the driver is in crashdump mode.
@@ -301,6 +330,11 @@ MshcSlotInitialize(
 
         // Initialize the DPC that handles local request completions.
         KeInitializeDpc(&MshcExtension->LocalRequestDpc, MshcLocalRequestDpc, MshcExtension);
+
+        // SDIO controller only: registry breadcrumbs for the Wi-Fi bring-up.
+        if (MshcExtension->IsSdio) {
+            MshcSdioDiagInit(MshcExtension, MiniportFdo);
+        }
 
     } else {
         //
@@ -356,6 +390,17 @@ MshcSlotInitialize(
             PlatformCapabilities->FifoDepth =
                 ((Fifoth & MSHC_FIFOTH_RX_WMARK_MASK) >> MSHC_FIFOTH_RX_WMARK_SHIFT) + 1;
         }
+    }
+
+    //
+    // Work from a private copy from here on (see PlatformInfoCopy).
+    //
+    if (PlatformCapabilities != NULL) {
+        RtlCopyMemory(&MshcExtension->PlatformInfoCopy,
+                      MshcExtension->PlatformInfo,
+                      sizeof(MSHC_PLATFORM_INFO));
+        MshcExtension->PlatformInfo = &MshcExtension->PlatformInfoCopy;
+        PlatformCapabilities = &MshcExtension->PlatformInfo->Capabilities;
     }
 
     if (!CrashdumpMode) {
@@ -540,8 +585,8 @@ MshcSlotIssueBusOperation(
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
 
-    // If SlotInitialize() failed, it's not safe to continue...
-    if (!MshcExtension->Initialized) {
+    // If SlotInitialize() failed, or Cleanup has run, it's not safe to continue...
+    if (!MshcExtension->Initialized || MshcExtension->Shutdown) {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
@@ -552,6 +597,15 @@ MshcSlotIssueBusOperation(
         MshcExtension,
         "Type:%!BUSOPERATIONTYPE!",
         BusOperation->Type);
+
+    if (MshcExtension->IsSdio) {
+        InterlockedIncrement(&MshcExtension->Diag.BusOps);
+        MshcExtension->Diag.LastBusOpType = (ULONG)BusOperation->Type;
+        if (BusOperation->Type == SdSetBusWidth) {
+            MshcExtension->Diag.BusWidth = (ULONG)BusOperation->Parameters.BusWidth;
+        }
+        MshcSdioDiagKick(MshcExtension);
+    }
 
     Status = STATUS_NOT_SUPPORTED;
 
@@ -668,9 +722,18 @@ MshcSlotGetCardDetectState(
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
 
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return FALSE;
+    }
+
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
     Present = MshcIsCardInserted(MshcExtension);
+
+    if (MshcExtension->IsSdio) {
+        InterlockedIncrement(&MshcExtension->Diag.CardDetectCalls);
+        MshcSdioDiagKick(MshcExtension);
+    }
 
     MSHC_LOG_EXIT(MshcExtension->LogHandle, MshcExtension, "%!bool!", Present);
 
@@ -687,6 +750,10 @@ MshcSlotGetWriteProtectState(
     BOOLEAN WriteProtected;
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
+
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return FALSE;
+    }
 
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
@@ -716,6 +783,29 @@ MshcSlotInterrupt(
     BOOLEAN Handled;
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
+
+    //
+    // After MshcCleanup (sdport disconnects the interrupt only after it), or
+    // on a slot that never initialised, there is nothing to service: the
+    // log and the platform info may be gone.
+    //
+    *Events = 0;
+    *Errors = 0;
+    *CardChange = FALSE;
+    *SdioInterrupt = FALSE;
+    *Tuning = FALSE;
+
+    if (MshcExtension->Shutdown) {
+        return FALSE;
+    }
+
+    if (!MshcExtension->Initialized) {
+        if (MshcExtension->BaseAddress != NULL) {
+            MshcWriteRegister(MshcExtension, MSHC_INTMASK, 0);
+            MshcWriteRegister(MshcExtension, MSHC_RINTSTS, 0xFFFFFFFF);
+        }
+        return FALSE;
+    }
 
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
@@ -864,8 +954,35 @@ MshcSlotInterrupt(
     }
 
     if (Rintsts & MSHC_INT_CD) {
-        *CardChange = !MshcExtension->PlatformInfo->Capabilities.BrokenCd;
+        *CardChange = !MshcExtension->PlatformInfo->Capabilities.BrokenCd &&
+                      !MshcExtension->PlatformInfo->Capabilities.NonRemovable;
         Rintsts &= ~MSHC_INT_CD;
+    }
+
+    //
+    // SDIO card interrupt (DAT1).  RINTSTS shows it whether or not it is
+    // masked, so only an enabled one counts.  It stays asserted until the
+    // function driver clears its source, so mask it here and let sdport turn
+    // it back on with ToggleEvents(SDPORT_EVENT_CARD_INTERRUPT) once the
+    // function driver has acknowledged it, as the Microsoft sdhc sample does.
+    //
+    if (MshcExtension->IsSdio && (Rintsts & MSHC_INT_SDIO_RK)) {
+        if (MshcReadRegister(MshcExtension, MSHC_INTMASK) & MSHC_INT_SDIO_RK) {
+            MshcDisableInterrupts(MshcExtension, MSHC_INT_SDIO_RK, 0);
+            *SdioInterrupt = TRUE;
+            InterlockedIncrement(&MshcExtension->Diag.SdioInterrupts);
+        }
+    }
+    Rintsts &= ~MSHC_INT_SDIO_RK;
+
+    if (MshcExtension->IsSdio && (Rintsts & MSHC_INT_ERROR)) {
+        MshcExtension->Diag.LastErrorRintsts = Rintsts;
+        if (Rintsts & MSHC_INT_CMD_ERROR) {
+            InterlockedIncrement(&MshcExtension->Diag.CmdErrors);
+        }
+        if (Rintsts & MSHC_INT_DATA_ERROR) {
+            InterlockedIncrement(&MshcExtension->Diag.DataErrors);
+        }
     }
 
     MshcConvertIntStatusToStandardEvents(Rintsts, Idsts, Events, Errors);
@@ -876,7 +993,13 @@ MshcSlotInterrupt(
               (*SdioInterrupt == TRUE) ||
               (*Tuning == TRUE);
 
-    if (Handled && !gCrashdumpMode) {
+    //
+    // Only request events go to the local DPC.  A card change or an SDIO card
+    // interrupt is sdport's business whether or not a local command is on the
+    // bus, and queueing the local DPC for one only gives it another chance to
+    // run after the local request has ended.
+    //
+    if (Handled && !gCrashdumpMode && ((*Events != 0) || (*Errors != 0))) {
         if (InterlockedCompareExchange(&MshcExtension->LocalRequestPending, 0, 0)) {
             //
             // We may not get a DPC from sdport when issuing local requests.
@@ -891,7 +1014,7 @@ MshcSlotInterrupt(
             // Actually ensure we don't get a DpcForIsr at the same time.
             // Let sdport sense card changes but not anything else.
             //
-            Handled = (*CardChange == TRUE);
+            Handled = (*CardChange == TRUE) || (*SdioInterrupt == TRUE);
             *Events = 0;
             *Errors = 0;
         }
@@ -912,6 +1035,10 @@ MshcSlotIssueRequest(
     NTSTATUS Status;
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
+
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return STATUS_DEVICE_NOT_READY;
+    }
 
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
@@ -937,6 +1064,34 @@ MshcSlotIssueRequest(
             (Request->Command.TransferDirection == SdTransferDirectionRead ? "Read" : "Write"),
             Request->Command.BlockCount,
             Request->Command.Length);
+    }
+
+    if (MshcExtension->IsSdio &&
+        ((Request->Type == SdRequestTypeCommandNoTransfer) ||
+         (Request->Type == SdRequestTypeCommandWithTransfer))) {
+        InterlockedIncrement(&MshcExtension->Diag.Commands);
+        MshcExtension->Diag.LastCmd = Request->Command.Index;
+        MshcExtension->Diag.LastArg = Request->Command.Argument;
+        switch (Request->Command.Index) {
+        case SDCMD_IO_SEND_OP_COND:
+            InterlockedIncrement(&MshcExtension->Diag.Cmd5Count);
+            break;
+        case SDCMD_IO_RW_DIRECT:
+            InterlockedIncrement(&MshcExtension->Diag.Cmd52Count);
+            break;
+        case SDCMD_IO_RW_EXTENDED:
+            InterlockedIncrement(&MshcExtension->Diag.Cmd53Count);
+            break;
+        }
+    }
+
+    //
+    // A request that is not the miniport's own local one came from sdport:
+    // it is the one SdPortCompleteRequest may be given back.
+    //
+    if (Request != MshcExtension->LocalRequest) {
+        InterlockedExchangePointer(
+            (PVOID volatile *)&MshcExtension->SdportRequest, Request);
     }
 
     //
@@ -982,6 +1137,10 @@ MshcSlotGetResponse(
     PULONG Response;
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
+
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return;
+    }
 
     MSHC_LOG_ENTER(MshcExtension->LogHandle, MshcExtension, "()");
 
@@ -1049,6 +1208,16 @@ MshcSlotGetResponse(
         MshcExtension->CardRca = Response[0] >> 16;
     }
 
+    if (MshcExtension->IsSdio) {
+        MshcExtension->Diag.LastResp0 = Response[0];
+        if (Command->Index == SDCMD_IO_SEND_OP_COND) {
+            MshcExtension->Diag.Cmd5Resp = Response[0];
+        } else if (Command->Index == SDCMD_SEND_RELATIVE_ADDR) {
+            MshcExtension->Diag.Cmd3Rca = Response[0] >> 16;
+        }
+        MshcSdioDiagKick(MshcExtension);
+    }
+
     MSHC_LOG_EXIT(MshcExtension->LogHandle, MshcExtension, "()");
 }
 
@@ -1067,6 +1236,10 @@ MshcSlotToggleEvents(
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
 
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return;
+    }
+
     MSHC_LOG_ENTER(
         MshcExtension->LogHandle,
         MshcExtension,
@@ -1084,8 +1257,20 @@ MshcSlotToggleEvents(
     //
     Intsts |= MSHC_INT_HTO;
 
-    if (MshcExtension->PlatformInfo->Capabilities.BrokenCd) {
+    if (MshcExtension->PlatformInfo->Capabilities.BrokenCd ||
+        MshcExtension->PlatformInfo->Capabilities.NonRemovable) {
         Intsts &= ~MSHC_INT_CD;
+    }
+
+    //
+    // sdport calls ToggleEvents at DIRQL (from its ISR, and through
+    // KeSynchronizeExecution), so only count here; no breadcrumb update,
+    // which queues a work item.
+    //
+    if (MshcExtension->IsSdio && (EventMask & SDPORT_EVENT_CARD_INTERRUPT)) {
+        Intsts |= MSHC_INT_SDIO_RK;
+        InterlockedIncrement(Enable ? &MshcExtension->Diag.CardIntEnables
+                                    : &MshcExtension->Diag.CardIntDisables);
     }
 
     if (Enable) {
@@ -1110,6 +1295,10 @@ MshcSlotClearEvents(
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
 
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return;
+    }
+
     MSHC_LOG_ENTER(
         MshcExtension->LogHandle,
         MshcExtension,
@@ -1117,6 +1306,10 @@ MshcSlotClearEvents(
         EventMask);
 
     MshcConvertStandardEventsToIntStatus(EventMask, 0xFFFF, &Intsts, &Idsts);
+
+    if (MshcExtension->IsSdio && (EventMask & SDPORT_EVENT_CARD_INTERRUPT)) {
+        Intsts |= MSHC_INT_SDIO_RK;
+    }
 
     MshcAcknowledgeInterrupts(MshcExtension, Intsts, Idsts);
 
@@ -1135,6 +1328,10 @@ MshcRequestDpc(
     PMSHC_EXTENSION MshcExtension;
 
     MshcExtension = (PMSHC_EXTENSION)PrivateExtension;
+
+    if (MshcExtension->Shutdown || !MshcExtension->Initialized) {
+        return;
+    }
 
     //
     // WORKAROUND:
@@ -1281,27 +1478,55 @@ MshcCleanup(
     _In_ PSD_MINIPORT Miniport
     )
 {
+    LARGE_INTEGER Delay;
+    ULONG Waits;
+
     MSHC_LOG_ENTER(DriverLogHandle, NULL, "()");
+
+    //
+    // sdport calls Cleanup first in SdhostFdoFreeDeviceResources and
+    // disconnects the controller and card-detect interrupts only after it
+    // returns, so the ISR (and whatever sdport still has queued) can run
+    // after this.  Stop every callback and quiet the controller before
+    // anything is freed.
+    //
+    for (ULONG Index = 0; Index < Miniport->SlotCount; Index++) {
+        PMSHC_EXTENSION MshcExtension =
+            (PMSHC_EXTENSION)Miniport->SlotExtensionList[Index]->PrivateExtension;
+
+        InterlockedExchange(&MshcExtension->Shutdown, 1);
+
+        if (MshcExtension->BaseAddress != NULL) {
+            MshcWriteRegister(MshcExtension, MSHC_INTMASK, 0);
+            MshcWriteRegister(MshcExtension, MSHC_IDINTEN, 0);
+            MshcEnableGlobalInterrupt(MshcExtension, FALSE);
+            MshcAcknowledgeInterrupts(MshcExtension, MSHC_INT_ALL, MSHC_IDINT_ALL);
+        }
+    }
 
     if (!gCrashdumpMode) {
         ExAcquireFastMutex(&gPlatformInfoListLock);
     }
 
-    if (!IsListEmpty(gPlatformInfoList)) {
-        for (PLIST_ENTRY Entry = gPlatformInfoList->Flink;
-             Entry != gPlatformInfoList;
-             Entry = Entry->Flink) {
+    //
+    // Take the next link before freeing the entry: reading Entry->Flink of a
+    // freed entry walked freed pool.
+    //
+    for (PLIST_ENTRY Entry = gPlatformInfoList->Flink, Next;
+         Entry != gPlatformInfoList;
+         Entry = Next) {
 
-            PMSHC_PLATFORM_INFO_LIST_ENTRY PlatformInfoEntry =
-                CONTAINING_RECORD(Entry, MSHC_PLATFORM_INFO_LIST_ENTRY, ListEntry);
+        PMSHC_PLATFORM_INFO_LIST_ENTRY PlatformInfoEntry =
+            CONTAINING_RECORD(Entry, MSHC_PLATFORM_INFO_LIST_ENTRY, ListEntry);
 
-            if (PlatformInfoEntry->MiniportFdo != Miniport->ConfigurationInfo.DeviceObject) {
-                continue;
-            }
+        Next = Entry->Flink;
 
-            RemoveEntryList(Entry);
-            ExFreePoolWithTag(PlatformInfoEntry, MSHC_ALLOC_TAG);
+        if (PlatformInfoEntry->MiniportFdo != Miniport->ConfigurationInfo.DeviceObject) {
+            continue;
         }
+
+        RemoveEntryList(Entry);
+        ExFreePoolWithTag(PlatformInfoEntry, MSHC_ALLOC_TAG);
     }
 
     if (!gCrashdumpMode) {
@@ -1312,19 +1537,43 @@ MshcCleanup(
         PMSHC_EXTENSION MshcExtension =
             (PMSHC_EXTENSION)Miniport->SlotExtensionList[Index]->PrivateExtension;
 
-        if (MshcExtension->CompleteRequestBusyWorkItem) {
-            IoFreeWorkItem(MshcExtension->CompleteRequestBusyWorkItem);
+        //
+        // A busy work item still queued or running keeps its work item: free
+        // it only once it is idle, and leak it rather than free it under a
+        // running worker.
+        //
+        if (MshcExtension->CompleteRequestBusyWorkItem != NULL) {
+            Delay.QuadPart = -10LL * 10000LL;
+            for (Waits = 0; Waits < 200; Waits++) {
+                if (InterlockedCompareExchange(&MshcExtension->BusyWorkerActive, 0, 0) == 0) {
+                    break;
+                }
+                (VOID)KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+            }
+
+            if (InterlockedCompareExchange(&MshcExtension->BusyWorkerActive, 0, 0) == 0) {
+                IoFreeWorkItem(MshcExtension->CompleteRequestBusyWorkItem);
+            }
+            MshcExtension->CompleteRequestBusyWorkItem = NULL;
+        }
+
+        if (MshcExtension->IsSdio) {
+            MshcSdioDiagCleanup(MshcExtension);
         }
 
         MshcRockchipCleanup(MshcExtension);
 
-        MshcLogCleanup(MshcExtension);
+        if (!gCrashdumpMode) {
+            MshcLogCleanup(MshcExtension);
+        }
     }
 
-    if (IsListEmpty(gPlatformInfoList)) {
-        PDEVICE_OBJECT Fdo = (PDEVICE_OBJECT)Miniport->ConfigurationInfo.DeviceObject;
-        WPP_CLEANUP(Fdo->DriverObject);
-    }
+    //
+    // WPP is torn down in MshcDriverUnload, not here.  Doing it when the last
+    // controller went away left a driver image that was still loaded (a
+    // device restart, or the other controller starting later) logging
+    // through a dead WPP context.
+    //
 }
 
 //
@@ -1347,6 +1596,13 @@ MshcResetHost(
     if (Request != NULL) {
         MSHC_LOG_WARN(MshcExtension->LogHandle, MshcExtension, "Aborted outstanding request.");
     }
+
+    //
+    // sdport resets the host after a failed or timed-out request, and it may
+    // have ended that request itself (its own timer).  Whatever was on the
+    // bus is not to be completed to sdport after this.
+    //
+    InterlockedExchangePointer((PVOID volatile *)&MshcExtension->SdportRequest, NULL);
 
     //
     // Better reset everything no matter the requested type, just in case.
@@ -1614,7 +1870,16 @@ MshcSetClock(
         }
 
         Clkena |= MSHC_CLKENA_CCLK_ENABLE(MshcExtension->SlotId);
-        Clkena |= MSHC_CLKENA_CCLK_LOW_POWER(MshcExtension->SlotId);
+
+        //
+        // Clock auto-gating stops the card clock while the bus is idle, and
+        // a 4-bit SDIO card can only signal its interrupt on DAT1 while the
+        // clock runs (mainline dw_mci_enable_sdio_irq clears LOW_PWR for the
+        // same reason).  Keep it for the SD slot only.
+        //
+        if (!MshcExtension->IsSdio) {
+            Clkena |= MSHC_CLKENA_CCLK_LOW_POWER(MshcExtension->SlotId);
+        }
         MshcWriteRegister(MshcExtension, MSHC_CLKENA, Clkena);
 
         Status = MshcCiuUpdateClock(MshcExtension, 0);
@@ -1624,6 +1889,7 @@ MshcSetClock(
     }
 
     MshcExtension->BusFrequencyKhz = FrequencyKhz;
+    MshcExtension->Diag.ClockKhz = FrequencyKhz;
 
     return STATUS_SUCCESS;
 }
@@ -2178,9 +2444,23 @@ MshcSendCommand(
 
     if (Command->Index == SDCMD_GO_IDLE_STATE ||
         Command->Index == SDCMD_STOP_TRANSMISSION ||
-        Command->Index == SDCMD_GO_INACTIVE_STATE ||
-        Command->Index == SDCMD_IO_RW_DIRECT) {
+        Command->Index == SDCMD_GO_INACTIVE_STATE) {
         Cmd |= MSHC_CMD_STOP_ABORT_CMD;
+    }
+
+    //
+    // CMD52 is an abort only when it writes the CCCR ABORT register (0x06)
+    // of function 0, which is the only case mainline dw_mmc flags
+    // (dw_mci_prepare_command).  On the SD slot keep the old behaviour, which
+    // flagged every CMD52; no SD memory card sends one.
+    //
+    if (Command->Index == SDCMD_IO_RW_DIRECT) {
+        if (!MshcExtension->IsSdio ||
+            ((Command->Argument & 0x80000000UL) != 0 &&
+             ((Command->Argument >> 28) & 0x7) == 0 &&
+             ((Command->Argument >> 9) & 0x1FFFF) == 0x06)) {
+            Cmd |= MSHC_CMD_STOP_ABORT_CMD;
+        }
     }
 
     if (Command->Index == SDCMD_VOLTAGE_SWITCH) {
@@ -2537,14 +2817,25 @@ MshcCompleteRequest(
          (Request->Command.ResponseType == SdResponseTypeR5B) ||
          (Request->Command.TransferDirection == SdTransferDirectionWrite))) {
         if (MshcIsDataBusy(MshcExtension)) {
-            if ((MshcExtension->CompleteRequestBusyWorkItem != NULL) && (KeGetCurrentIrql() == DISPATCH_LEVEL)) {
+            //
+            // The work item takes the request it was queued for, not
+            // whatever OutstandingRequest is by the time it runs.  A local
+            // request waits here instead: it lives on a stack that may be
+            // gone before a work item gets to it.
+            //
+            if ((MshcExtension->CompleteRequestBusyWorkItem != NULL) &&
+                (KeGetCurrentIrql() == DISPATCH_LEVEL) &&
+                (Request != MshcExtension->LocalRequest) &&
+                (InterlockedCompareExchangePointer(
+                    (PVOID volatile *)&MshcExtension->BusyRequest, Request, NULL) == NULL)) {
+                InterlockedIncrement(&MshcExtension->BusyWorkerActive);
                 IoQueueWorkItem(
                     MshcExtension->CompleteRequestBusyWorkItem,
                     MshcCompleteRequestBusyWorker,
                     CriticalWorkQueue,
                     MshcExtension);
             } else {
-                MshcCompleteRequestBusyWorker(NULL, MshcExtension);
+                MshcCompleteRequestAfterBusy(MshcExtension, Request);
             }
             return;
         }
@@ -2602,12 +2893,37 @@ MshcCompleteRequest(
             "Card removed - failing outstanding request!");
     }
 
-    LONG LocalRequestPending =
-        InterlockedCompareExchange(&MshcExtension->LocalRequestPending, 0, 1);
-
-    if (!LocalRequestPending) {
-        SdPortCompleteRequest(Request, Request->Status);
+    //
+    // A local request ends here: MshcIssueRequestSynchronously is polling
+    // for LocalRequestPending to drop.
+    //
+    if (Request == MshcExtension->LocalRequest) {
+        InterlockedExchange(&MshcExtension->LocalRequestPending, 0);
+        return;
     }
+
+    //
+    // Anything else goes back to sdport only if it is the request sdport
+    // gave us and has not had back.  sdport finds the slot through a field
+    // past the public SDPORT_REQUEST and completes the request in a DPC, so
+    // a pointer it does not own, or one it owns but already had back, ends
+    // in a read through a bogus slot (0xD1 in SdhostCompleteRequest).
+    //
+    if ((Request != NULL) &&
+        (InterlockedCompareExchangePointer(
+            (PVOID volatile *)&MshcExtension->SdportRequest, NULL, Request) == Request)) {
+        SdPortCompleteRequest(Request, Request->Status);
+        return;
+    }
+
+    InterlockedIncrement(&MshcExtension->Diag.RefusedCompletions);
+    MshcExtension->Diag.LastRefusedCmd = (Request != NULL) ? Request->Command.Index : 0xFFFFFFFF;
+    MshcExtension->Diag.LastRefusedStatus = (Request != NULL) ? (ULONG)Request->Status : 0;
+    MSHC_LOG_ERROR(
+        MshcExtension->LogHandle,
+        MshcExtension,
+        "Refusing to complete request 0x%p to sdport: not the one it issued",
+        Request);
 }
 
 _Use_decl_annotations_
@@ -2620,16 +2936,43 @@ MshcCompleteRequestBusyWorker(
     UNREFERENCED_PARAMETER(DeviceObject);
 
     PMSHC_EXTENSION MshcExtension;
-    NTSTATUS Status;
+    PSDPORT_REQUEST Request;
 
     MshcExtension = (PMSHC_EXTENSION)Context;
 
+    Request = (PSDPORT_REQUEST)InterlockedExchangePointer(
+        (PVOID volatile *)&MshcExtension->BusyRequest, NULL);
+    if ((Request != NULL) && !MshcExtension->Shutdown) {
+        MshcCompleteRequestAfterBusy(MshcExtension, Request);
+    }
+
+    //
+    // Last touch of the extension: MshcCleanup waits for this before it
+    // frees the work item.
+    //
+    InterlockedDecrement(&MshcExtension->BusyWorkerActive);
+}
+
+_Use_decl_annotations_
+VOID
+MshcCompleteRequestAfterBusy(
+    PMSHC_EXTENSION MshcExtension,
+    PSDPORT_REQUEST Request
+    )
+{
+    NTSTATUS Status;
+
     Status = MshcWaitDataIdle(MshcExtension);
 
-    MshcCompleteRequest(
-        MshcExtension,
-        MshcExtension->OutstandingRequest,
-        Status);
+    //
+    // Busy is over (or timed out), so this cannot loop back here: either
+    // the status is now an error or the data line reads idle.
+    //
+    if (NT_SUCCESS(Status) && MshcIsDataBusy(MshcExtension)) {
+        Status = STATUS_IO_TIMEOUT;
+    }
+
+    MshcCompleteRequest(MshcExtension, Request, Status);
 }
 
 _Use_decl_annotations_
@@ -2727,6 +3070,39 @@ MshcCreateIdmacDescriptorTable(
     return STATUS_SUCCESS;
 }
 
+//
+// Retire a local request before the stack frame it lives in goes away:
+// nothing may refer to it after this returns.  OutstandingRequest is kept on
+// an error completion (for ResetHost) and on a timeout nothing completed it
+// at all, so drop it here if it is still this request; then wait for any
+// LocalRequestDpc that already picked it up.
+//
+static
+VOID
+MshcEndLocalRequest(
+    _In_ PMSHC_EXTENSION MshcExtension,
+    _In_ PSDPORT_REQUEST Request
+    )
+{
+    ULONG Waits;
+
+    InterlockedExchange(&MshcExtension->LocalRequestPending, 0);
+    InterlockedExchangePointer((PVOID volatile *)&MshcExtension->LocalRequest, NULL);
+    InterlockedCompareExchangePointer(
+        (PVOID volatile *)&MshcExtension->OutstandingRequest, NULL, Request);
+
+    if (!gCrashdumpMode) {
+        (VOID)KeRemoveQueueDpc(&MshcExtension->LocalRequestDpc);
+
+        for (Waits = 0; Waits < 100000; Waits++) {
+            if (InterlockedCompareExchange(&MshcExtension->LocalDpcActive, 0, 0) == 0) {
+                break;
+            }
+            SdPortWait(1);
+        }
+    }
+}
+
 _Use_decl_annotations_
 NTSTATUS
 MshcIssueRequestSynchronously(
@@ -2741,10 +3117,17 @@ MshcIssueRequestSynchronously(
 
     const ULONG PollWaitUs = 10;
 
+    //
+    // Mark the request as local before it can complete, so that
+    // MshcCompleteRequest ends it here and never hands it to sdport.
+    //
+    InterlockedExchangePointer((PVOID volatile *)&MshcExtension->LocalRequest, Request);
     InterlockedExchange(&MshcExtension->LocalRequestPending, 1);
 
     Status = MshcSlotIssueRequest(MshcExtension, Request);
     if (Status != STATUS_PENDING) {
+        Request->Status = Status;
+        MshcEndLocalRequest(MshcExtension, Request);
         return Status;
     }
 
@@ -2781,12 +3164,17 @@ MshcIssueRequestSynchronously(
         SdPortWait(PollWaitUs);
     }
 
-    InterlockedExchange(&MshcExtension->LocalRequestPending, 0);
-
     if ((TimeoutUs != 0) && (Retry == 0)) {
         MSHC_LOG_ERROR(MshcExtension->LogHandle, MshcExtension, "Timeout");
         Request->Status = STATUS_IO_TIMEOUT;
+        InterlockedIncrement(&MshcExtension->Diag.LocalTimeouts);
     }
+
+    //
+    // The request ends now whatever state it is in.  The error recovery
+    // below issues local commands of its own, so it comes after this.
+    //
+    MshcEndLocalRequest(MshcExtension, Request);
 
     if (ErrorRecovery && !NT_SUCCESS(Request->Status)) {
         SDPORT_BUS_OPERATION BusOperation;
@@ -2824,15 +3212,35 @@ MshcLocalRequestDpc(
 
     PMSHC_EXTENSION MshcExtension = (PMSHC_EXTENSION)DeferredContext;
 
+    //
+    // Count this run before looking at the local request, so that
+    // MshcEndLocalRequest, which clears the pointer first and then waits for
+    // the count, cannot return while the request is in use here.
+    //
+    InterlockedIncrement(&MshcExtension->LocalDpcActive);
+
     Request = (PSDPORT_REQUEST)InterlockedCompareExchangePointer(
-        (PVOID volatile*)&MshcExtension->OutstandingRequest, NULL, NULL);
+        (PVOID volatile*)&MshcExtension->LocalRequest, NULL, NULL);
 
-    Events = InterlockedCompareExchange((PLONG)&MshcExtension->CurrentEvents, 0, 0);
-    Errors = InterlockedCompareExchange((PLONG)&MshcExtension->CurrentErrors, 0, 0);
+    //
+    // Only the local request on the bus.  This DPC is queued from the ISR
+    // while a local command is pending, and can run after it has ended,
+    // when OutstandingRequest is gone or belongs to sdport again.
+    //
+    if ((Request != NULL) &&
+        InterlockedCompareExchange(&MshcExtension->LocalRequestPending, 0, 0) &&
+        (InterlockedCompareExchangePointer(
+            (PVOID volatile*)&MshcExtension->OutstandingRequest, NULL, NULL) == Request)) {
 
-    if (Request != NULL) {
+        Events = InterlockedCompareExchange((PLONG)&MshcExtension->CurrentEvents, 0, 0);
+        Errors = InterlockedCompareExchange((PLONG)&MshcExtension->CurrentErrors, 0, 0);
+
         MshcRequestDpc(DeferredContext, Request, Events, Errors);
+    } else {
+        InterlockedIncrement(&MshcExtension->Diag.StaleLocalDpcs);
     }
+
+    InterlockedDecrement(&MshcExtension->LocalDpcActive);
 }
 
 //
@@ -3133,7 +3541,8 @@ MshcIsCardInserted(
 {
     ULONG Cdetect;
 
-    if (MshcExtension->PlatformInfo->Capabilities.BrokenCd) {
+    if (MshcExtension->PlatformInfo->Capabilities.BrokenCd ||
+        MshcExtension->PlatformInfo->Capabilities.NonRemovable) {
         return TRUE;
     }
 
@@ -3200,6 +3609,8 @@ MshcQueryAcpiPlatformCapabilities(
     AcpiDevicePropertiesQueryIntegerValue(Properties, "mmc-hs200-1_8v", &Capabilities->SupportHs200);
     AcpiDevicePropertiesQueryIntegerValue(Properties, "no-1-8-v", &Capabilities->No18vRegulator);
     AcpiDevicePropertiesQueryIntegerValue(Properties, "broken-cd", &Capabilities->BrokenCd);
+    AcpiDevicePropertiesQueryIntegerValue(Properties, "non-removable", &Capabilities->NonRemovable);
+    AcpiDevicePropertiesQueryIntegerValue(Properties, "cap-sdio-irq", &Capabilities->CapSdioIrq);
 
     Status = STATUS_SUCCESS;
 
@@ -3366,7 +3777,20 @@ MshcLogCleanup(
     PMSHC_EXTENSION MshcExtension
     )
 {
-    WppRecorderLogDelete(MshcExtension->LogHandle);
+    RECORDER_LOG LogHandle = MshcExtension->LogHandle;
+    RECORDER_LOG DefaultLog = WppRecorderLogGetDefault();
+
+    //
+    // Anything that still logs for this slot after Cleanup (sdport keeps the
+    // interrupt connected a little longer) goes to the driver's default log,
+    // which lives until MshcDriverUnload.  The default log is never deleted
+    // here: MshcLogInit falls back to it when it cannot create one.
+    //
+    MshcExtension->LogHandle = DefaultLog;
+
+    if ((LogHandle != NULL) && (LogHandle != DefaultLog)) {
+        WppRecorderLogDelete(LogHandle);
+    }
 }
 
 _Use_decl_annotations_
