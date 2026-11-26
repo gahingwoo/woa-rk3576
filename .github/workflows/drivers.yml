@@ -1,0 +1,173 @@
+name: Driver package
+
+# The RK3576 Windows driver package: one zip, rk3576-drivers-arm64.zip, with
+# every Windows driver for the three boards, one version, one install.cmd and
+# a manifest saying which board gets which driver (tools/rk3576-drivers).
+# Maskrom Studio installs the board's list from it.
+#
+# Nothing is built here: the package is put together from the test-signed
+# packages the other builds made, so what it carries is what those builds
+# checked.
+#   this repository   woa-drivers-signed-arm64 of the latest successful
+#                     WinPE (ARM64) run of main: the same driver packages
+#                     the WinPE image carries, and woa-audio\
+#   wddm-mali-g52     wddm-mali-g52-driver-arm64 of its latest successful CI
+#                     run of main (maliwddm with its UMD, malivop)
+#   woa-rk3576-npu    rknpu-windows-arm64 of its latest successful CI run of
+#                     main (rknpu)
+# The run ids, commits and the SHA-256 of each input go into manifest.json.
+#
+# Downloading another repository's artifacts needs a token that may read its
+# Actions; DRIVER_SOURCES_TOKEN (a fine-grained token with Actions: read on
+# the two repositories) is used when it is set, the workflow's own token
+# otherwise.
+#
+# On main the zip goes onto the rolling "ci" pre-release with its line in
+# SHA256SUMS.txt (ci-release.sh keeps the other workflows' assets).
+
+on:
+  workflow_run:
+    workflows: ['WinPE (ARM64)']
+    types: [completed]
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - 'tools/rk3576-drivers/**'
+      - '.github/workflows/drivers.yml'
+  pull_request:
+    paths:
+      - 'tools/rk3576-drivers/**'
+      - '.github/workflows/drivers.yml'
+  # The GPU and NPU drivers live in other repositories: pick up their new
+  # builds once a day.
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  package:
+    name: rk3576-drivers-arm64.zip
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find the builds to take the drivers from
+        id: runs
+        env:
+          GH_TOKEN: ${{ secrets.DRIVER_SOURCES_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          latest() {  # repo workflow-file
+            gh run list -R "$1" -w "$2" -b main -s success -L 1 --json databaseId,headSha \
+              -q '.[0] | "\(.databaseId) \(.headSha)"'
+          }
+          read -r woa_run woa_sha < <(latest "$GITHUB_REPOSITORY" winpe.yml)
+          read -r gpu_run gpu_sha < <(latest gahingwoo/wddm-mali-g52 ci.yml)
+          read -r npu_run npu_sha < <(latest gahingwoo/woa-rk3576-npu ci.yml)
+          for v in woa_run gpu_run npu_run; do
+            [ -n "${!v}" ] || { echo "::error::no successful run for $v"; exit 1; }
+          done
+          {
+            echo "woa_run=$woa_run"; echo "woa_sha=$woa_sha"
+            echo "gpu_run=$gpu_run"; echo "gpu_sha=$gpu_sha"
+            echo "npu_run=$npu_run"; echo "npu_sha=$npu_sha"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Download them
+        env:
+          GH_TOKEN: ${{ secrets.DRIVER_SOURCES_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          gh run download ${{ steps.runs.outputs.woa_run }} -R "$GITHUB_REPOSITORY" -n woa-drivers-signed-arm64 -D in/woa
+          gh run download ${{ steps.runs.outputs.gpu_run }} -R gahingwoo/wddm-mali-g52 -n wddm-mali-g52-driver-arm64 -D in/gpu
+          gh run download ${{ steps.runs.outputs.npu_run }} -R gahingwoo/woa-rk3576-npu -n rknpu-windows-arm64 -D in/npu
+          (cd in/npu && sha256sum -c rknpu-windows-arm64.zip.sha256)
+          find in -maxdepth 3 | sort
+
+      - name: Assemble
+        env:
+          WOA_RUN: ${{ steps.runs.outputs.woa_run }}
+          WOA_SHA: ${{ steps.runs.outputs.woa_sha }}
+          GPU_RUN: ${{ steps.runs.outputs.gpu_run }}
+          GPU_SHA: ${{ steps.runs.outputs.gpu_sha }}
+          NPU_RUN: ${{ steps.runs.outputs.npu_run }}
+          NPU_SHA: ${{ steps.runs.outputs.npu_sha }}
+        run: |
+          set -euo pipefail
+          # ci-<this commit>; a release attaches the package under its own version.
+          version="ci-${GITHUB_SHA::7}"
+          extra=()
+          # A WinPE run from before woa-audio went into its artifact.
+          [ -d in/woa/woa-audio ] || extra+=(--without-audio)
+          gpuin=$(find in/gpu -name driver -type d -printf '%h\n' | head -1)
+          python3 -I tools/rk3576-drivers/assemble.py \
+            --table tools/rk3576-drivers/drivers.tsv \
+            --install tools/rk3576-drivers/install.cmd \
+            --readme tools/rk3576-drivers/README.md \
+            --readme tools/rk3576-drivers/README.zh-CN.md \
+            --woa in/woa --gpu "$gpuin" --npu in/npu/rknpu-windows-arm64.zip \
+            --version "$version" \
+            --source "package=$GITHUB_REPOSITORY@$GITHUB_SHA run $GITHUB_RUN_ID" \
+            --source "woa-rk3576=$GITHUB_REPOSITORY@$WOA_SHA WinPE run $WOA_RUN" \
+            --source "wddm-mali-g52=gahingwoo/wddm-mali-g52@$GPU_SHA CI run $GPU_RUN" \
+            --source "woa-rk3576-npu=gahingwoo/woa-rk3576-npu@$NPU_SHA CI run $NPU_RUN, rknpu-windows-arm64.zip $(cut -d' ' -f1 in/npu/rknpu-windows-arm64.zip.sha256)" \
+            "${extra[@]}" --out out
+          unzip -l out/rk3576-drivers-arm64.zip
+          sha256sum out/rk3576-drivers-arm64.zip
+
+      - name: Check the package
+        run: |
+          set -euo pipefail
+          mkdir chk && cd chk
+          unzip -q ../out/rk3576-drivers-arm64.zip
+          cd rk3576-drivers
+          sha256sum -c --quiet SHA256SUMS.txt
+          python3 -I - <<'PY'
+          import json, os
+          m = json.load(open('manifest.json'))
+          for b in m['boards']:
+              want = [d['dir'] for d in m['drivers'] if b in d['default']]
+              got = [l.strip() for l in open(f'boards/{b}.txt') if l.strip()]
+              assert want == got, (b, want, got)
+              for d in want:
+                  assert os.listdir(f'drivers/{d}'), d
+              # every board boots from its storage with these
+              for core in ('dwcsdhc', 'dwcmshc', 'maliwddm', 'vdpu383'):
+                  assert core in want, (b, core)
+          print('manifest and board lists agree')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rk3576-drivers-arm64
+          path: out/rk3576-drivers-arm64.zip
+          if-no-files-found: error
+
+  release:
+    name: Rolling "ci" release (driver package)
+    needs: package
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: woa-ci-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: rk3576-drivers-arm64
+          path: rel
+      - name: Update the ci release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/ci-release.sh '^rk3576-drivers-arm64.*\.zip$' rel/rk3576-drivers-arm64.zip

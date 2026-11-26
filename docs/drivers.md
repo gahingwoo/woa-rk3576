@@ -7,6 +7,12 @@ replace one that is already running. The same rules apply to the drivers of
 this repository, [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)
 and [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu).
 
+## All of them at once
+
+The [driver package](../tools/rk3576-drivers/README.md)
+(`rk3576-drivers-arm64.zip` on the releases) holds every driver for the
+three boards and an `install.cmd` that installs the board's list.
+
 ## Before anything: the clock
 
 Sync the clock first (`w32tm /resync /force`). The TaishanPi 3M's RTC holds

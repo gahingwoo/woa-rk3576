@@ -6,6 +6,11 @@
 [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52) 和
 [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) 的驱动都按这些规则来。
 
+## 一次装全部
+
+[驱动包](../tools/rk3576-drivers/README.zh-CN.md)（发布页上的 `rk3576-drivers-arm64.zip`）里有三块板子的全部驱动，
+它的 `install.cmd` 会装好这块板子要的那些。
+
 ## 先校准时钟
 
 先同步时间（`w32tm /resync /force`）。泰山派 3M 的 RTC 里没有有效时间，pnputil 会拒绝"签名时间在未来"的驱动目录，
