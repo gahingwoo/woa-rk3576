@@ -76,6 +76,7 @@
     <ClCompile Include="driver.c" />
     <ClCompile Include="sdbus.c" />
     <ClCompile Include="files.c" />
+    <ClCompile Include="pool.c" />
     <ClCompile Include="bwl_sdio.c" />
     <ClCompile Include="bwl_chip.c" />
     <ClCompile Include="bwl_bringup.c" />
@@ -100,8 +101,17 @@
     Without this the package directory holds only the INF, and inf2cat's
     signability test fails with 22.9.1 "bcmwlsdio.sys ... is missing".
   -->
+  <!-- The WDM lower filter the INF installs below the FDO (bwlsdflt\bwlsdflt.c). -->
+  <ItemGroup>
+    <ProjectReference Include="bwlsdflt\bwlsdflt.vcxproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemGroup>
+
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
+    <FilesToPackage Include="$(MSBuildProjectDirectory)\bwlsdflt\$(Platform)\$(Configuration)\bwlsdflt.sys" />
     <FilesToPackage Include="@(Inf->'%(CopyOutput)')" Condition="'@(Inf)'!=''" />
   </ItemGroup>
 

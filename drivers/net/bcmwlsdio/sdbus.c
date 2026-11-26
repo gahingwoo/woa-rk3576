@@ -108,7 +108,7 @@ BwlSdSetProperty(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ SDBUS_PROPERTY Prop,
 static BOOLEAN
 IoAllowed(_In_ PBWL_DEVICE_CONTEXT Ctx)
 {
-    return Ctx->SdOpen && (Ctx->Stopping == 0 || Ctx->Stopping == 2);
+    return Ctx->SdOpen && !Ctx->Gone && (Ctx->Stopping == 0 || Ctx->Stopping == 2);
 }
 
 /* CMD52: R/W 31, function 30:28, RAW 27, address 25:9, data 7:0 */
@@ -165,6 +165,17 @@ SdCmd53(void *C, unsigned Fn, u32 Addr, int Incr, int Write, int Block, u8 *Buf,
     NTSTATUS status;
 
     if (!IoAllowed(ctx) || Len == 0) {
+        return -1;
+    }
+    /*
+     * The core passes the bounce buffer, or a part of it, and nothing else
+     * (bwl.h). Anything else would let the SD host DMA into memory this
+     * driver does not own: refuse it and count it.
+     */
+    if (ctx->Bounce == NULL || Buf < ctx->Bounce || Len > BWL_BOUNCE_MIN ||
+        (SIZE_T)(Buf - ctx->Bounce) > BWL_BOUNCE_MIN - Len) {
+        ctx->Cmd53OutsideBounce++;
+        ctx->Cmd53Errors++;
         return -1;
     }
     bs = Fn == 2 ? ctx->Bwl.F2BlockSize : ctx->Bwl.F1BlockSize;

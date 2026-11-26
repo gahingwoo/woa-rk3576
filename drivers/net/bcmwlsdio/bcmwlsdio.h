@@ -46,13 +46,13 @@
 typedef struct _BWL_DEVICE_CONTEXT {
     WDFDEVICE Device;
     WDFWORKITEM BringUp;
-    WDFMEMORY BounceMemory;
-    PUCHAR Bounce;
+    PUCHAR Bounce;              /* BWL_BOUNCE_MIN bytes, non-paged, from BwlBufAlloc */
 
     SDBUS_INTERFACE_STANDARD Sd;
     BOOLEAN SdOpen;
-    UCHAR Function;             /* SDP_FUNCTION_NUMBER of this PDO */
+    UCHAR Function;             /* SDP_FUNCTION_NUMBER of this PDO, 0xFF until known */
     volatile LONG Stopping;
+    volatile LONG Gone;         /* surprise-removed: no card access from here on */
 
     ULONG Stage;
     ULONG MaxBlocks;
@@ -67,6 +67,8 @@ typedef struct _BWL_DEVICE_CONTEXT {
     NTSTATUS LastSdStatus;
     ULONG LastSdArg;
     ULONG LastR5Flags;
+    ULONG Cmd53OutsideBounce;   /* a CMD53 buffer not inside the bounce buffer: refused */
+    ULONG GuardErrors;          /* pool.c: buffers found written past their end */
 
     LONG StepSeq;
     bwl_dev Bwl;
@@ -83,9 +85,15 @@ NTSTATUS BwlSdGetProperty(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ SDBUS_PROPERTY Prop
 NTSTATUS BwlSdSetProperty(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ SDBUS_PROPERTY Property,
                           _In_reads_bytes_(Length) PVOID Buffer, _In_ ULONG Length);
 
-/* files.c */
+/* files.c: the file in a BwlBufAlloc buffer (paged) of exactly its size; free with BwlBufFree. */
 NTSTATUS BwlLoadFile(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG MaxBytes,
-                     _Out_ WDFMEMORY *Memory, _Out_ PUCHAR *Data, _Out_ PULONG Length);
+                     _Out_ PUCHAR *Data, _Out_ PULONG Length);
+
+/* pool.c: guarded buffers, see there */
+PVOID BwlBufAlloc(_In_ POOL_FLAGS Flags, _In_ SIZE_T Size, _In_ PCSTR Name);
+ULONG BwlBufCheck(_In_ PVOID Buf);
+BOOLEAN BwlBufVerify(_In_opt_ PBWL_DEVICE_CONTEXT Ctx, _In_ PVOID Buf, _In_ PCSTR Where);
+VOID BwlBufFree(_In_opt_ PBWL_DEVICE_CONTEXT Ctx, _In_opt_ PVOID Buf, _In_ PCSTR Where);
 
 /* driver.c: breadcrumbs, PASSIVE_LEVEL */
 VOID BwlCrumb(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCSTR Step);

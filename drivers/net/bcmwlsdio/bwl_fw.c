@@ -66,6 +66,9 @@ BwlNvramConvert(const u8 *Src, u32 SrcLen, u8 *Dst, u32 DstCap)
     }
     /* bwfm: pad so that at least one NUL follows, to a 4-byte boundary. */
     pad = ((len + 1 + 3) & ~3u) - len;
+    if (len + pad + 4 > DstCap) {
+        return BWL_E_SPACE;     /* cannot happen with DstCap >= SrcLen + BWL_NVRAM_SLACK */
+    }
     BwlMemSet(Dst + len, 0, pad);
     len += pad;
     token = (len / 4) & 0xFFFFu;

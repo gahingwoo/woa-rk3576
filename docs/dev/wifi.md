@@ -284,6 +284,9 @@ Written by the driver:
 | `BcdcIoType`, `MacAddress`, `ClmChunks`, `ClmStatus`, `ClmResult`, `FwVersion`, `FwVersionNumber`, `FwCmdStatus` | control channel results |
 | `Cmd52Count`, `Cmd53Count`, `Cmd52Errors`, `Cmd53Errors`, `LastSdStatus`, `LastSdArg`, `LastR5Flags` | bus counters |
 | `FramesTx`, `FramesRx`, `EventsRx`, `LastEvent`, `RxErrors`, `RxAborts`, `GlomRx`, `MailboxData`, `IntStatus`, `Polls` | frame counters |
+| `Cmd53OutsideBounce` | CMD53s refused because their buffer was not inside the bounce buffer (should be 0) |
+| `BounceGuardOk` | 1: nothing was written past the bounce buffer during the bring-up |
+| `PoolGuardErrors`, `PoolGuardBuffer`, `PoolGuardWhere`, `PoolGuardSize`, `PoolGuardOffset` | a driver buffer written past its end (pool.c); absent if none |
 
 ## Board session for W2 and W3
 
@@ -326,6 +329,59 @@ with `LastSdStatus` and `LastSdArg` say which command sdbus refused (an
 above); `ErrorDetail` is the address or register. Backing out: set `Stage`
 0, or turn the firmware option off (Windows then sees no SDIO controller),
 or `pnputil /delete-driver <oem>.inf /uninstall`.
+
+## BAD_POOL_CALLER at device removal (0xC2/0x99): sdport, fixed by bwlsdflt
+
+Removing any bcmwlsdio device (disable, driver update, uninstall) stopped
+Windows with 0xC2, P1 0x99, an address ending in 8. It happens at Stage 0
+too, where the driver only opens SDBUS. With the public symbols for
+ntoskrnl, Wdf01000 and sdport 22621:
+
+- When the FDO starts, KMDF (`FxPkgFdo::QueryForReenumerationInterface`)
+  queries GUID_REENUMERATE_SELF_INTERFACE_STANDARD from the device below it.
+  sdport answers (`SdhostPdoGetReenumerationInterface`) with a 0x18-byte
+  pool block, tag `SdIc`, as the interface context.
+- At IRP_MN_REMOVE_DEVICE, KMDF (`FxPkgFdo::ReleaseReenumerationInterface`)
+  calls the interface's dereference. `SdhostReenumerationInterfaceDereference`
+  checks the context's signature and then frees `Context - 0x18`.
+- That address is never 16-byte aligned, and that is the only check
+  `ExFreePoolWithTag` makes before raising 0x99.
+
+Every KMDF function driver on an sdport SDIO function hits this.
+`bwlsdflt.sys` (bwlsdflt/) fixes it. It is a WDM lower filter that the INF
+puts below the FDO (`LowerFilters`). It completes that one query
+unanswered, so KMDF has nothing to release; KMDF uses the interface only
+for `WdfDeviceSetFailed(WdfDeviceFailedAttemptRestart)`. The filter cannot
+be KMDF: a KMDF filter would make the same query. Each refusal is logged
+as `bwlsdflt: refused GUID_REENUMERATE_SELF_INTERFACE_STANDARD`.
+
+Installing the package adds the filter, which means a reinstall, which
+means removing the running filterless devices: that removal can still
+crash once. Install it offline from the rescue Windows, or with the SDIO
+Wi-Fi option off.
+
+To catch a pool writer if anything like this comes back (run elevated,
+then restart; the KD listener reports 0xC1/0xC4/0xD6 at the faulting
+instruction):
+
+    verifier /flags 0x809 /driver bcmwlsdio.sys sdbus.sys dwcmshc.sys
+
+0x1 special pool, 0x8 pool tracking, 0x800 miscellaneous checks; on
+bcmwlsdio.sys this also turns on the KMDF verifier. A second round adds
+0x80 (DMA checks) and sdport.sys: `verifier /flags 0x889 /driver
+bcmwlsdio.sys sdbus.sys dwcmshc.sys sdport.sys`. sdport.sys also carries
+the eMMC boot disk, so keep the rescue Windows at hand; there, undo it
+offline by deleting `VerifyDrivers` and `VerifyDriverLevel` under
+`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management`
+of the loaded main hive. Online: `verifier /reset`, restart.
+
+Test for the fix: `pnputil /disable-device "<instance>"` on one SD
+function device (`SD\VID_02D0&PID_A9BF&FN_n\...`). Without bwlsdflt it
+crashed, even at Stage 0. With bwlsdflt it must not crash, and the KD log
+shows the refusal at start and `FN<n> teardown: ...` at removal. This
+removes only bcmwlsdio's FDO and the filter above sdport's child PDO; the
+SD host (dwcmshc, sdport) stays up. A disabled device is not started at the
+next boot; `pnputil /enable-device` brings it back.
 
 ## Licences
 

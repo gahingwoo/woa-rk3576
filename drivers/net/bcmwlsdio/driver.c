@@ -8,7 +8,13 @@
  * PnP: PrepareHardware opens the SDBUS interface, SelfManagedIoInit
  * queues the bring-up on a work item (it takes seconds and must not hold
  * up the PnP start), SelfManagedIoSuspend stops it and halts the chip's
- * CPU, ReleaseHardware closes the interface.
+ * CPU, ReleaseHardware closes the interface. SurpriseRemoval stops all
+ * card access; the device's cleanup frees the bounce buffer. Every
+ * teardown step logs "FN<n> teardown: ..." to the debugger, so that a
+ * crash during removal shows which function's instance was going away.
+ *
+ * Every buffer is a pool.c buffer (guarded, allocated by this driver), so
+ * that Driver Verifier's special pool for bcmwlsdio.sys covers them.
  *
  * Everything is reported under the device's registry key (Device
  * Parameters) and flushed; docs/dev/wifi.md lists the values.
@@ -27,6 +33,8 @@ static EVT_WDF_DEVICE_RELEASE_HARDWARE BwlEvtReleaseHardware;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_INIT BwlEvtSelfManagedIoInit;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_SUSPEND BwlEvtSelfManagedIoSuspend;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_CLEANUP BwlEvtSelfManagedIoCleanup;
+static EVT_WDF_DEVICE_SURPRISE_REMOVAL BwlEvtSurpriseRemoval;
+static EVT_WDF_OBJECT_CONTEXT_CLEANUP BwlEvtDeviceCleanup;
 static EVT_WDF_WORKITEM BwlEvtBringUp;
 
 /* ------------------------------------------------------------ registry */
@@ -73,7 +81,7 @@ BwlPutString(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ PCSTR Value)
     PWCHAR buf;
     ULONG i;
 
-    buf = (PWCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (PUT_MAX + 1) * sizeof(WCHAR), BWL_POOL_TAG);
+    buf = (PWCHAR)BwlBufAlloc(POOL_FLAG_PAGED, (PUT_MAX + 1) * sizeof(WCHAR), "registry text");
     if (buf == NULL) {
         return;
     }
@@ -84,7 +92,7 @@ BwlPutString(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ PCSTR Value)
     }
     buf[i] = 0;
     BwlPutWString(Ctx, Name, buf);
-    ExFreePoolWithTag(buf, BWL_POOL_TAG);
+    BwlBufFree(NULL, buf, "registry text");     /* NULL: pool.c's report writes through here */
 }
 
 static ULONG
@@ -117,6 +125,8 @@ BwlCrumb(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCSTR Step)
     WDFKEY key;
     ULONG i;
 
+    /* The debugger line first: it must not depend on the registry being writable. */
+    BWL_LOG("FN%u step: %s", Ctx->Function, Step);
     if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
         return;
     }
@@ -138,7 +148,6 @@ BwlCrumb(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCSTR Step)
     (VOID)WdfRegistryAssignULong(key, &n, (ULONG)InterlockedIncrement(&Ctx->StepSeq));
     (VOID)ZwFlushKey(WdfRegistryWdmGetHandle(key));
     WdfRegistryClose(key);
-    BWL_LOG("step: %s", Step);
 }
 
 static VOID
@@ -153,6 +162,7 @@ PutCounters(_In_ PBWL_DEVICE_CONTEXT Ctx)
     BwlPutULong(Ctx, L"LastSdStatus", (ULONG)Ctx->LastSdStatus);
     BwlPutULong(Ctx, L"LastSdArg", Ctx->LastSdArg);
     BwlPutULong(Ctx, L"LastR5Flags", Ctx->LastR5Flags);
+    BwlPutULong(Ctx, L"Cmd53OutsideBounce", Ctx->Cmd53OutsideBounce);
     BwlPutULong(Ctx, L"FramesTx", s->FramesTx);
     BwlPutULong(Ctx, L"FramesRx", s->FramesRx);
     BwlPutULong(Ctx, L"EventsRx", s->EventsRx);
@@ -261,7 +271,7 @@ RecordChip(_In_ PBWL_DEVICE_CONTEXT Ctx)
 static VOID
 RecordConsole(_In_ PBWL_DEVICE_CONTEXT Ctx)
 {
-    PCHAR buf = (PCHAR)ExAllocatePool2(POOL_FLAG_PAGED, PUT_MAX + 1, BWL_POOL_TAG);
+    PCHAR buf = (PCHAR)BwlBufAlloc(POOL_FLAG_PAGED, PUT_MAX + 1, "console");
 
     if (buf == NULL) {
         return;
@@ -269,13 +279,12 @@ RecordConsole(_In_ PBWL_DEVICE_CONTEXT Ctx)
     if (BwlConsoleRead(&Ctx->Bwl, buf, PUT_MAX + 1) > 0) {
         BwlPutString(Ctx, L"FwConsole", buf);
     }
-    ExFreePoolWithTag(buf, BWL_POOL_TAG);
+    BwlBufFree(Ctx, buf, "console");
 }
 
 static VOID
 BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
 {
-    WDFMEMORY fwMem = NULL, nvMem = NULL, clmMem = NULL, convMem = NULL;
     PUCHAR fw = NULL, nvTxt = NULL, clm = NULL, conv = NULL;
     ULONG fwLen = 0, nvTxtLen = 0, clmLen = 0;
     WCHAR name[64];
@@ -285,7 +294,6 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
     u32 v, chunks = 0, clmStatus = 0, outLen = 0;
     int fws = 0, r, n;
     USHORT blk = 64;
-    WDF_OBJECT_ATTRIBUTES attr;
     NTSTATUS status;
     bwl_dev *d = &Ctx->Bwl;
 
@@ -342,14 +350,14 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
     /* The three files */
     BwlCrumb(Ctx, "files");
     (VOID)RtlStringCchPrintfW(name, RTL_NUMBER_OF(name), L"brcmfmac%S-sdio.bin", base);
-    status = BwlLoadFile(Ctx, name, BWL_FW_MAX_BYTES, &fwMem, &fw, &fwLen);
+    status = BwlLoadFile(Ctx, name, BWL_FW_MAX_BYTES, &fw, &fwLen);
     if (NT_SUCCESS(status)) {
         (VOID)RtlStringCchPrintfW(name, RTL_NUMBER_OF(name), L"brcmfmac%S-sdio.txt", base);
-        status = BwlLoadFile(Ctx, name, BWL_NVRAM_MAX_BYTES, &nvMem, &nvTxt, &nvTxtLen);
+        status = BwlLoadFile(Ctx, name, BWL_NVRAM_MAX_BYTES, &nvTxt, &nvTxtLen);
     }
     if (NT_SUCCESS(status)) {
         (VOID)RtlStringCchPrintfW(name, RTL_NUMBER_OF(name), L"brcmfmac%S-sdio.clm_blob", base);
-        status = BwlLoadFile(Ctx, name, BWL_CLM_MAX_BYTES, &clmMem, &clm, &clmLen);
+        status = BwlLoadFile(Ctx, name, BWL_CLM_MAX_BYTES, &clm, &clmLen);
     }
     BwlPutULong(Ctx, L"FileStatus", (ULONG)status);
     if (!NT_SUCCESS(status)) {
@@ -365,10 +373,9 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
         BwlPutString(Ctx, L"FwFileVersion", ver);
     }
 
-    WDF_OBJECT_ATTRIBUTES_INIT(&attr);
-    attr.ParentObject = Ctx->Device;
-    status = WdfMemoryCreate(&attr, PagedPool, BWL_POOL_TAG, nvTxtLen + BWL_NVRAM_SLACK, &convMem, (PVOID *)&conv);
-    if (!NT_SUCCESS(status)) {
+    /* BwlNvramConvert writes up to nvTxtLen + BWL_NVRAM_SLACK bytes, never more (bwl.h). */
+    conv = (PUCHAR)BwlBufAlloc(POOL_FLAG_PAGED, nvTxtLen + BWL_NVRAM_SLACK, "nvram");
+    if (conv == NULL) {
         d->Step = "memory";
         Fail(Ctx, BWL_E_SPACE);
         goto out;
@@ -447,10 +454,12 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
     BwlCrumb(Ctx, "firmware running");
 
 out:
-    if (convMem) WdfObjectDelete(convMem);
-    if (clmMem) WdfObjectDelete(clmMem);
-    if (nvMem) WdfObjectDelete(nvMem);
-    if (fwMem) WdfObjectDelete(fwMem);
+    BwlBufFree(Ctx, conv, "bring-up: nvram");
+    BwlBufFree(Ctx, clm, "bring-up: clm_blob");
+    BwlBufFree(Ctx, nvTxt, "bring-up: nvram text");
+    BwlBufFree(Ctx, fw, "bring-up: firmware");
+    /* The bounce buffer stays until the device goes; check it now, while the breadcrumbs can say so. */
+    BwlPutULong(Ctx, L"BounceGuardOk", BwlBufVerify(Ctx, Ctx->Bounce, "bring-up: bounce") ? 1 : 0);
 }
 
 static VOID
@@ -474,6 +483,10 @@ StopBringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
     if (Ctx->BringUp != NULL) {
         WdfWorkItemFlush(Ctx->BringUp);
     }
+    if (Ctx->Gone) {
+        BWL_LOG("FN%u teardown: surprise-removed, chip left as it is", Ctx->Function);
+        return;
+    }
     if (Ctx->Bwl.NumCores != 0) {
         InterlockedExchange(&Ctx->Stopping, 2);
         (VOID)BwlChipSetPassive(&Ctx->Bwl);
@@ -481,6 +494,9 @@ StopBringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
         (VOID)BwlFuncEnable(&Ctx->Bwl, 1, 0, 0);
         InterlockedExchange(&Ctx->Stopping, 1);
         BwlCrumb(Ctx, "stopped: CPU halted, F1/F2 off");
+    }
+    if (Ctx->Bounce != NULL && !BwlBufVerify(Ctx, Ctx->Bounce, "teardown: bounce")) {
+        BwlCrumb(Ctx, "teardown: bounce buffer guard broken");
     }
 }
 
@@ -504,6 +520,13 @@ BwlEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
 
     status = BwlSdOpen(ctx);
     BwlPutULong(ctx, L"SdOpenStatus", (ULONG)status);
+    if (NT_SUCCESS(status)) {
+        UCHAR fn = 0;
+
+        if (NT_SUCCESS(BwlSdGetProperty(ctx, SDP_FUNCTION_NUMBER, &fn, sizeof(fn)))) {
+            ctx->Function = fn;
+        }
+    }
     BwlCrumb(ctx, NT_SUCCESS(status) ? "SDBUS open" : "SDBUS open failed");
     /* The device still starts, so that the breadcrumbs can be read. */
     return STATUS_SUCCESS;
@@ -515,6 +538,7 @@ BwlEvtReleaseHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Translated)
     PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
 
     UNREFERENCED_PARAMETER(Translated);
+    BWL_LOG("FN%u teardown: release hardware", ctx->Function);
     StopBringUp(ctx);
     BwlSdClose(ctx);
     return STATUS_SUCCESS;
@@ -534,14 +558,49 @@ BwlEvtSelfManagedIoInit(_In_ WDFDEVICE Device)
 static NTSTATUS
 BwlEvtSelfManagedIoSuspend(_In_ WDFDEVICE Device)
 {
-    StopBringUp(BwlGetContext(Device));
+    PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
+
+    BWL_LOG("FN%u teardown: self-managed I/O suspend", ctx->Function);
+    StopBringUp(ctx);
     return STATUS_SUCCESS;
 }
 
 static VOID
 BwlEvtSelfManagedIoCleanup(_In_ WDFDEVICE Device)
 {
-    StopBringUp(BwlGetContext(Device));
+    PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
+
+    BWL_LOG("FN%u teardown: self-managed I/O cleanup", ctx->Function);
+    StopBringUp(ctx);
+}
+
+/* The card is gone: no more CMD52/CMD53, not even the CPU halt in StopBringUp. */
+static VOID
+BwlEvtSurpriseRemoval(_In_ WDFDEVICE Device)
+{
+    PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
+
+    BWL_LOG("FN%u teardown: surprise removal", ctx->Function);
+    InterlockedExchange(&ctx->Gone, 1);
+}
+
+/*
+ * The device object is being deleted: the work item has been flushed
+ * (SelfManagedIoSuspend/Cleanup) and the interface closed (ReleaseHardware)
+ * if the device ever started. Close again in case it did not, then free the
+ * bounce buffer, checking its guard on the way.
+ */
+static VOID
+BwlEvtDeviceCleanup(_In_ WDFOBJECT Object)
+{
+    PBWL_DEVICE_CONTEXT ctx = BwlGetContext((WDFDEVICE)Object);
+
+    BWL_LOG("FN%u teardown: device cleanup", ctx->Function);
+    BwlSdClose(ctx);
+    if (ctx->Bounce != NULL) {
+        BwlBufFree(NULL, ctx->Bounce, "device cleanup: bounce");
+        ctx->Bounce = NULL;
+    }
 }
 
 static NTSTATUS
@@ -562,23 +621,23 @@ BwlEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     pnp.EvtDeviceSelfManagedIoInit = BwlEvtSelfManagedIoInit;
     pnp.EvtDeviceSelfManagedIoSuspend = BwlEvtSelfManagedIoSuspend;
     pnp.EvtDeviceSelfManagedIoCleanup = BwlEvtSelfManagedIoCleanup;
+    pnp.EvtDeviceSurpriseRemoval = BwlEvtSurpriseRemoval;
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnp);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attr, BWL_DEVICE_CONTEXT);
+    attr.EvtCleanupCallback = BwlEvtDeviceCleanup;
     status = WdfDeviceCreate(&DeviceInit, &attr, &device);
     if (!NT_SUCCESS(status)) {
         return status;
     }
     ctx = BwlGetContext(device);
     ctx->Device = device;
+    ctx->Function = 0xFF;
 
-    /* Every CMD53 goes through this buffer: non-paged, for the MDLs. */
-    WDF_OBJECT_ATTRIBUTES_INIT(&attr);
-    attr.ParentObject = device;
-    status = WdfMemoryCreate(&attr, NonPagedPoolNx, BWL_POOL_TAG, BWL_BOUNCE_MIN, &ctx->BounceMemory,
-                             (PVOID *)&ctx->Bounce);
-    if (!NT_SUCCESS(status)) {
-        return status;
+    /* Every CMD53 goes through this buffer: non-paged, for the MDLs. Freed in BwlEvtDeviceCleanup. */
+    ctx->Bounce = (PUCHAR)BwlBufAlloc(POOL_FLAG_NON_PAGED, BWL_BOUNCE_MIN, "bounce");
+    if (ctx->Bounce == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     WDF_WORKITEM_CONFIG_INIT(&wic, BwlEvtBringUp);
