@@ -641,6 +641,23 @@ struct _MSHC_EXTENSION {
         LONG64 DmaIssueTick;
         LONG64 TickFrequency;
         volatile LONG DataErrors;           // requests completed with an error
+
+        //
+        // Where a DMA request's time goes (version 4).  QPC ticks:
+        // issue -> first ISR that sees DTO -> MshcCompleteRequest, and the
+        // gap from that completion to the next command sdport issues, with
+        // the commands that are not data transfers counted on the way.
+        //
+        volatile LONG Isrs;                 // ISR calls that had something to do
+        volatile LONG64 DtoTick;            // QPC of the DTO the ISR saw, 0 = none yet
+        volatile LONG64 IssueToDtoTicks;
+        volatile LONG64 DtoToCompleteTicks;
+        LONG64 LastDmaCompleteTick;         // 0 = no gap being timed
+        volatile LONG64 GapTicks;
+        LONG64 GapMaxTicks;
+        volatile LONG Gaps;
+        volatile LONG GapBuckets[5];        // < 1 ms, < 10 ms, < 50 ms, < 200 ms, longer
+        volatile LONG CommandsInGaps;       // non-data commands issued between DMA requests
     } Xfer;
 
     //

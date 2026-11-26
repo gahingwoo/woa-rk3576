@@ -971,6 +971,15 @@ MshcSlotInterrupt(
     //
     MshcAcknowledgeInterrupts(MshcExtension, Rintsts, Idsts);
 
+    InterlockedIncrement(&MshcExtension->Xfer.Isrs);
+    if ((Rintsts & MSHC_INT_DTO) &&
+        (MshcExtension->Xfer.DmaIssueTick != 0) &&
+        (MshcExtension->Xfer.DtoTick == 0)) {
+        InterlockedExchange64(
+            &MshcExtension->Xfer.DtoTick,
+            KeQueryPerformanceCounter(NULL).QuadPart);
+    }
+
     Request = (PSDPORT_REQUEST)InterlockedCompareExchangePointer(
                 (PVOID volatile *)&MshcExtension->OutstandingRequest, NULL, NULL);
     if (Request != NULL) {
@@ -2447,6 +2456,32 @@ MshcSendCommand(
     // Initialize transfer parameters if this command is a data command.
     //
     Command = &Request->Command;
+
+    //
+    // Time from the last DMA completion to this command: non-data commands
+    // count as being in the gap, the next data command ends it.
+    //
+    if (MshcExtension->Xfer.LastDmaCompleteTick != 0) {
+        if ((Command->TransferType == SdTransferTypeNone) ||
+            (Command->TransferType == SdTransferTypeUndefined)) {
+            InterlockedIncrement(&MshcExtension->Xfer.CommandsInGaps);
+        } else {
+            LONG64 Gap = KeQueryPerformanceCounter(NULL).QuadPart -
+                         MshcExtension->Xfer.LastDmaCompleteTick;
+            LONG64 Ms = (MshcExtension->Xfer.TickFrequency > 0) ?
+                        Gap * 1000 / MshcExtension->Xfer.TickFrequency : 0;
+            ULONG Bucket = (Ms < 1) ? 0 : (Ms < 10) ? 1 : (Ms < 50) ? 2 : (Ms < 200) ? 3 : 4;
+
+            MshcExtension->Xfer.LastDmaCompleteTick = 0;
+            InterlockedAdd64(&MshcExtension->Xfer.GapTicks, Gap);
+            if (Gap > MshcExtension->Xfer.GapMaxTicks) {
+                MshcExtension->Xfer.GapMaxTicks = Gap;
+            }
+            InterlockedIncrement(&MshcExtension->Xfer.Gaps);
+            InterlockedIncrement(&MshcExtension->Xfer.GapBuckets[Bucket]);
+        }
+    }
+
     if ((Command->TransferType != SdTransferTypeNone) &&
         (Command->TransferType != SdTransferTypeUndefined)) {
 
@@ -2463,6 +2498,7 @@ MshcSendCommand(
             if (Length > MshcExtension->Xfer.MaxDmaLength) {
                 MshcExtension->Xfer.MaxDmaLength = Length;
             }
+            InterlockedExchange64(&MshcExtension->Xfer.DtoTick, 0);
             MshcExtension->Xfer.DmaIssueTick = KeQueryPerformanceCounter(NULL).QuadPart;
         } else {
             InterlockedIncrement(&MshcExtension->Xfer.PioRequests);
@@ -2999,10 +3035,16 @@ MshcCompleteRequest(
             InterlockedIncrement(&MshcExtension->Xfer.DataErrors);
         } else if ((Request->Command.TransferMethod == SdTransferMethodSgDma) &&
                    (MshcExtension->Xfer.DmaIssueTick != 0)) {
-            InterlockedAdd64(
-                &MshcExtension->Xfer.DmaTicks,
-                KeQueryPerformanceCounter(NULL).QuadPart - MshcExtension->Xfer.DmaIssueTick);
+            LONG64 Now = KeQueryPerformanceCounter(NULL).QuadPart;
+            LONG64 Dto = InterlockedExchange64(&MshcExtension->Xfer.DtoTick, 0);
+
+            InterlockedAdd64(&MshcExtension->Xfer.DmaTicks, Now - MshcExtension->Xfer.DmaIssueTick);
+            if (Dto != 0) {
+                InterlockedAdd64(&MshcExtension->Xfer.IssueToDtoTicks, Dto - MshcExtension->Xfer.DmaIssueTick);
+                InterlockedAdd64(&MshcExtension->Xfer.DtoToCompleteTicks, Now - Dto);
+            }
             MshcExtension->Xfer.DmaIssueTick = 0;
+            MshcExtension->Xfer.LastDmaCompleteTick = Now;
         }
         MshcSdioDiagKick(MshcExtension);
     }
