@@ -18,7 +18,7 @@ controller and is left to UEFI; this driver does not handle it.
 
 - **Unified full-duplex (TR) engine** in [hw.c](hw.c): every transfer clocks N
   frames, sending TX and receiving RX simultaneously. Read clocks zeros and
-  keeps RX; Write sends TX and drops RX; full-duplex does both. Verified against
+  keeps RX; Write sends TX and drops RX; full-duplex does both. Verified against Linux
   `drivers/spi/spi-rockchip.c`.
 - **Polled**, with the TX/RX gap bounded to the FIFO depth to avoid RX overflow.
 - **CS via SER**, asserted for the whole transfer.
