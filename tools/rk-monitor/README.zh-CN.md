@@ -12,10 +12,12 @@ NPU 忙碌度。左键单击打开弹出窗口，每秒刷新一次：
 |---|---|---|
 | CPU | `A53, cores 0-3`、`A72, cores 4-7`：占用和频率，带 60 秒历史 | `\Processor(*)\% Processor Time`、`\Processor Information(*)\Processor Frequency` |
 | CPU | 每个热区一行 | `\Thermal Zone Information(*)\High Precision Temperature`（单位为十分之一开尔文）。不用 WMI 的 `MSAcpi_ThermalZoneTemperature`，它在这些板子上返回的是过时的缓存值 |
-| GPU | 利用率，按引擎类型，带历史 | `\GPU Engine(*)\Utilization Percentage`，像任务管理器那样按引擎求和 |
-| GPU | 显存 | `\GPU Adapter Memory(*)\Shared Usage` 和 `Dedicated Usage`，所有适配器 |
+| GPU | 利用率，按引擎类型，带历史 | `\GPU Engine(*)\Utilization Percentage`，像任务管理器那样按引擎求和，只算 Mali |
+| GPU | 显存 | `\GPU Adapter Memory(*)\Shared Usage` 和 `Dedicated Usage`，只算 Mali |
 | GPU | 忙碌度、温度、频率、降频 | 来自 maliwddm 的 `\RK3576 GPU(*)\% busy`、`Temperature (C)`、`Clock (MHz)`、`Throttled` |
 | NPU | `core0`、`core1`：忙碌百分比和每秒任务数，带历史 | 来自 rknpu.sys 的 `\RK3576 NPU(*)\% Busy Time`、`Jobs/sec` |
+
+GPU 这几行只统计 Mali 适配器（通过 DXGI 按名字找到）。没装 maliwddm 时 Windows 用的是微软基本渲染驱动，它在 CPU 上画图，它的引擎计数器不是 GPU 的，所以弹窗会显示 "Mali driver not installed"。
 
 簇的划分来自 Windows 报告的效率等级；如果它对所有核心只报告一个等级，并且共有 8 个核心，就把 0-3 号核心当作
 A53，4-7 号当作 A72。

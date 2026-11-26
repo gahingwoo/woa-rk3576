@@ -14,10 +14,12 @@ NPU busy. A left click opens the popup, refreshed every second:
 |---|---|---|
 | CPU | `A53, cores 0-3`, `A72, cores 4-7`: use and clock, with a 60 second history | `\Processor(*)\% Processor Time`, `\Processor Information(*)\Processor Frequency` |
 | CPU | one row per thermal zone | `\Thermal Zone Information(*)\High Precision Temperature` (tenths of a kelvin). Not WMI's `MSAcpi_ThermalZoneTemperature`, which returns a stale cached value on these boards |
-| GPU | utilization, per engine type, with history | `\GPU Engine(*)\Utilization Percentage`, summed per engine as Task Manager does |
-| GPU | memory | `\GPU Adapter Memory(*)\Shared Usage` and `Dedicated Usage`, all adapters |
+| GPU | utilization, per engine type, with history | `\GPU Engine(*)\Utilization Percentage`, summed per engine as Task Manager does, Mali adapter only |
+| GPU | memory | `\GPU Adapter Memory(*)\Shared Usage` and `Dedicated Usage`, Mali adapter only |
 | GPU | busy, temperature, clock, throttling | `\RK3576 GPU(*)\% busy`, `Temperature (C)`, `Clock (MHz)`, `Throttled` from maliwddm |
 | NPU | `core0`, `core1`: % busy and jobs per second, with history | `\RK3576 NPU(*)\% Busy Time`, `Jobs/sec` from rknpu.sys |
+
+GPU rows count only the Mali adapter, found by name through DXGI. Without maliwddm Windows runs Microsoft's Basic Render Driver, which draws on the CPU; its engine counters are not the GPU's, so the popup says "Mali driver not installed" instead.
 
 The clusters come from the efficiency classes Windows reports; when it
 reports one class for every core and there are 8, cores 0-3 are taken as
