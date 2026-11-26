@@ -20,6 +20,9 @@ while IFS= read -r vcx; do
     missing=""
     is_lib=0
     grep -q '<ConfigurationType>StaticLibrary</ConfigurationType>' "$vcx" && is_lib=1
+    # A driver that ships inside another driver's package (its INF installs
+    # it, e.g. bcmwlsdio's lower filter) says so, and has no INF of its own.
+    grep -q 'check-structure: packaged by ' "$vcx" && is_lib=1
     has_src=0
     for pat in '*.c' '*.cpp' '*.asm' 'arm64/*.asm'; do
         compgen -G "$dir/$pat" >/dev/null && has_src=1

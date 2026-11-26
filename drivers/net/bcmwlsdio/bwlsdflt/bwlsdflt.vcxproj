@@ -3,6 +3,7 @@
   bwlsdflt.sys: WDM lower filter installed by bcmwlsdio.inf under the SDIO function
   devices (see bwlsdflt.c). No INF of its own: bcmwlsdio.vcxproj builds it
   and puts it in its package.
+  check-structure: packaged by ../bcmwlsdio.vcxproj
 
       msbuild drivers\net\bcmwlsdio\bwlsdflt\bwlsdflt.vcxproj /p:Configuration=Release /p:Platform=ARM64
 -->
