@@ -514,7 +514,7 @@ MshcSlotInitialize(
         Capabilities->Supported.SDR104 = 1;
     }
 
-    if (!PlatformCapabilities->SupportHs200) {
+    if (PlatformCapabilities->SupportHs200) {
         Capabilities->Supported.HS200 = 1;
     }
 
@@ -2340,8 +2340,14 @@ MshcConvertStandardEventsToIntStatus(
                         MSHC_INT_FRUN);
         }
 
+        //
+        // IDMAC errors are IDSTS/IDINTEN bits.  They used to land in the
+        // RINTSTS/INTMASK value, where AIS, NIS, CES, DUI and FBE are DRTO,
+        // RTO, RXDR, TXDR and CMD: enabling the error events unmasked the
+        // FIFO data request interrupts, and clearing them cleared CMD done.
+        //
         if (Errors & SDPORT_ERROR_ADMA_ERROR) {
-            *Intsts |= (MSHC_IDINT_AIS | MSHC_IDINT_CES | MSHC_IDINT_DUI | MSHC_IDINT_FBE);
+            *Idsts |= (MSHC_IDINT_AIS | MSHC_IDINT_CES | MSHC_IDINT_DUI | MSHC_IDINT_FBE);
         }
     }
 }
