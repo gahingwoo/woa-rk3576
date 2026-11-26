@@ -1,10 +1,10 @@
 # Wi-Fi driver for the TaishanPi 3M (BCM43456 over SDIO): design
 
-Status, 2026-11-24: W1 (firmware) is on edk2-rk3576 `main`, W2 (`dwcmshc`
-as the SDIO host) and W3 (`drivers/net/bcmwlsdio`, this page's first code
-stage) are on woa-rk3576 branch `tspi3m-wifi-driver`. **None of W1 to W3
-has run on a board yet.** W3's chip and protocol code passes host tests
-against a simulated chip (`tools/bwltest`), with the real firmware files.
+Status, 2026-11-26: W1 to W3 are on woa-rk3576 `main` and passed on the
+TaishanPi 3M (BCM43456 rev 9, firmware 7.45.96.2 running, CLM loaded, no
+SDIO errors). W4, the Wi-Fi adapter for Windows (WiFiCx 1.0, Stage 3), is
+on branch `bcmwlsdio-wificx`: tested on the host against a simulated chip
+and access points (`tools/bwltest`), built by CI, **not run on a board**.
 
 [docs/WIFI.md](../WIFI.md) has the hardware, the firmware option and the
 W1/W2 board tests. This page is the plan from W3 on: the driver model, the
@@ -44,20 +44,16 @@ over the data path and the driver installs the keys), and it wants BSS
 lists with the raw IEs. Both are available from the firmware (`sup_wpa=0`,
 `wsec_key`; escan results carry the IEs).
 
-**Decision.** WiFiCx is the end point (W6), because it is what Windows 11
+**Decision.** WiFiCx is the end point (now W4), because it is what Windows 11
 drivers are written to, and because it builds on NetAdapterCx, which this
 repository already uses for `dwc_eqos`. What the request called "WDI
-integration" is done there: WiFiCx carries WDI's commands, so W6 implements
+integration" is done there: WiFiCx carries WDI's commands, so W4 implements
 the WDI command and task set, through WiFiCx rather than through a WDI NDIS
 miniport.
 
-**Before WiFiCx, an Ethernet-style adapter (W5).** Everything below the
-Windows Wi-Fi interface (SDIO, firmware, control channel, events, data
-frames) is the same in both. Bringing it up first under a plain NetAdapterCx
-Ethernet adapter, with the network chosen from the registry and joined by
-the firmware's own supplicant, gives a usable connection and a test bench
-months earlier, and shrinks W6 to the Windows-facing layer. The adapter
-object, its rings and the SDIO code carry over to W6 unchanged.
+**No Ethernet-style step.** The plan had one (W5) before WiFiCx; it was
+dropped on 2026-11-26 because aic8800usb's WiFiCx 1.0 front end already
+existed and fits this core: W4 below goes straight to WiFiCx.
 
 Why not WDI first: it means an NDIS miniport (not KMDF NetAdapter), a TLV
 parser and generator, and Microsoft's IHV-only WDI documentation set, all
@@ -67,8 +63,8 @@ is not reusable.
 ## Architecture
 
 ```
-  Windows Wi-Fi UI, netsh wlan, WlanSvc             (W6)
-  WiFiCx (wificx.sys) / NetAdapterCx                (W5: NetAdapterCx only)
+  Windows Wi-Fi UI, netsh wlan, WlanSvc
+  WiFiCx (wificx.sys) / NetAdapterCx                (W4, Stage 3)
   -----------------------------------------------
   bcmwlsdio.sys (KMDF)
     driver.c      PnP, power, bring-up work item, registry breadcrumbs
@@ -81,8 +77,9 @@ is not reusable.
     bwl_fw.c      NVRAM conversion, CLM chunks, version strings
     bwl_proto.c   SDPCM frames, BCDC commands and data header, firmware events
     bwl_ctl.c     control channel (polled in W3), iovars, clmload
-    (W4) bwl_rx.c / bwl_tx.c  frame scheduler, credits, glom, interrupts
-    (W5) bwl_scan.c / bwl_join.c  escan, join, PSK, link state
+    bwl_wlan.c    station: escan, join, keys, events, rate and RSSI (W4)
+    bwl_data.c    BSS records, elements, 802.11 <-> Ethernet, frame FIFO (W4)
+  wificx.cpp, netadapter.c  WDI commands, NetAdapterCx queues (W4)
   -----------------------------------------------
   sdbus.sys   (inbox) SDIO card init, CIS, one PDO per card or function
   sdport.sys  (inbox)
@@ -175,84 +172,39 @@ Acceptance on the board (W3 passes when all hold):
 
 Board steps: see [Board session for W2 and W3](#board-session-for-w2-and-w3).
 
-### W4: control channel and events, interrupt driven
+### W4: the Wi-Fi adapter (WiFiCx 1.0), Stage 3 (code done)
 
-- Card interrupt: `DeviceGeneratesInterrupts` with a passive-level callback
-  first (simplest locking), DPC level later. In the callback: read
-  intstatus, acknowledge, mailbox, drain frames, `AcknowledgeInterrupt`.
-- A receive path that handles everything the firmware sends: read-ahead by
-  `nextlen`, superframes (glom), the flow-control bits, credit updates, RX
-  abort and resync; control replies matched to waiting requests by ID,
-  several in flight.
-- Firmware events: the event mask (`event_msgs`), dispatch by type, a ring
-  of recent events in the breadcrumbs.
-- `C_UP`, `mpc` 0, country (`country`), and `escan` with its
-  `E_ESCAN_RESULT` stream parsed into BSS records (SSID, BSSID, channel,
-  RSSI, IEs).
-- A small user-mode tool (`tools/bwlctl`) talking to a device interface of
-  the driver: run a scan, print the results, read counters, dump the
-  firmware console. It is the test bench for W5.
+This replaces the earlier W4 to W6 plan (an Ethernet-style adapter first):
+Windows 11 23H2 has WiFiCx 1.0, and aic8800usb already had a WiFiCx 1.0
+front end (`docs/dev/wificx.md` on branch `aic8800-wificx`), so bcmwlsdio
+uses the same one.
 
-Acceptance: `bwlctl scan` lists the home network and the neighbours with
-plausible RSSI and channels, repeatedly (n = 20 scans, no stuck command, no
-lost event, no RX abort); the console shows no trap; scans continue across
-a 30 minute idle period. Board steps: install, `bwlctl scan` 20 times,
-`bwlctl stats`, compare with `iw dev wlan0 scan` from Armbian on the same
-board in the same place.
-
-### W5: scan and connect with WPA2-PSK, data path (Ethernet-style adapter)
-
-- Join: `wsec` AES, `wpa_auth` WPA2-PSK, `sup_wpa` 1 (firmware supplicant),
-  the PMK from the passphrase (`C_SET_WSEC_PMK`, firmware hashes it),
-  `C_SET_SSID` (or `join` with the BSSID from the scan); wait for
-  `E_SET_SSID` success, `E_PSK_SUP` keyed and `E_LINK` up; reconnect on
-  `E_DEAUTH`/`E_LINK` down.
-- The adapter: NetAdapterCx, media type 802.3, MAC from `cur_etheraddr`. TX:
-  BCDC header + SDPCM data frame, F2 credits from the firmware, priority
-  from the frame. RX: data channel frames to the RX ring. Link state from
-  `E_LINK`. SSID and passphrase from the registry (set by `bwlctl join`);
-  the passphrase is stored as the PMK, not as text.
-- The INF moves to Class Net with `*IfType` 6 (Ethernet) for now.
-
-Acceptance: DHCP lease from the home router; `ping` the gateway 1000 times
-with under 1 % loss; a 100 MB HTTP download completes (3 MB/s or more at
-50 MHz 4-bit is the first target); the link comes back by itself after the
-access point is restarted; a reboot reconnects without user action. n = 5
-cold boots, all must pass (the eMMC experience says n = 2 proves little).
-
-### W6: WiFiCx, so that Windows shows Wi-Fi
-
-- The adapter becomes a WiFiCx adapter: `WifiDeviceInitConfig`,
-  `WifiDeviceInitialize`, the device and adapter capabilities (bands,
-  ciphers, PHY types, scan offload, the number of SSIDs per scan).
-- The WDI commands and tasks over `WIFIREQUEST`: open/close, scan task
-  (escan, BSS list with IEs), connect task (the profile from Windows),
-  disconnect, roam (firmware roaming reported as a roam indication),
-  set/delete keys, link quality, statistics.
-- Security: switch to Windows' supplicant (`sup_wpa` 0; EAPOL over the
-  data path; keys installed with `wsec_key`). WPA3-SAE later
-  (`extsae` firmware builds only; the Raspberry Pi build has it, the
-  Armbian one does not).
-- Power: D0/D3 with the firmware kept (`mpc`, PM modes), later
-  `HOST_WAKE` (GPIO0 PB0) for wake on LAN.
-
-Acceptance: Settings shows Wi-Fi with a network list; joining from the
-taskbar with a WPA2 passphrase works and the profile reconnects after
-reboot; `netsh wlan show interfaces` shows signal and rate; sleep and wake
-(Modern Standby is risky on this board, see the TSPI standby notes) does
-not lose the adapter. n = 5 boots.
-
-### Effort
-
-| Stage | Estimate |
+| Stage | |
 |---|---|
-| W3 | done in code; 1 to 3 board sessions to get it passing |
-| W4 | 1.5 to 2 weeks |
-| W5 | 2 to 3 weeks |
-| W6 | 3 to 4 weeks for a working Settings page, more for roaming, power and WPA3 |
+| 0 to 2 | as above (W3) |
+| 3 | + `event_msgs`, `mpc` 0, PM off, `roam_off` 1, infrastructure, optional `Country`, `C_UP`; then a WiFiCx device: escan for scans, `C_SET_SSID` (BSSID and channel) for open and WPA2-PSK/CCMP networks, keys with `wsec_key`, data frames over SDPCM channel 2 (BCDC), firmware events for scan results and link up/down, link rate and RSSI every 5 s |
 
-About 2 months to W6's first working connection from Settings, matching
-the earlier estimate; the risk is in W6 (WiFiCx has no public sample).
+- Needs `bcmwlwifi.inf` (Class Net) and function 1. Function 2 and 3
+  devices bind the same INF and stay idle; under `bcmwlsdio.inf` Stage 3
+  runs as 2. Stage is read when the device starts.
+- Both INFs set Stage 0 on a new install and keep an existing value:
+  installing the Wi-Fi INF does nothing until Stage is raised by hand,
+  because the SDIO path is new on the board and a bad start costs a
+  rescue boot.
+- WPA2: Windows' supplicant by default (`sup_wpa` 0, EAPOL as data frames,
+  keys from `SET_ADD_CIPHER_KEYS`). WiFiCx never gives the driver the
+  passphrase, so the firmware's supplicant (`sup_wpa` 1, `C_SET_WSEC_PMK`,
+  `E_PSK_SUP`, as brcmfmac's FWSUP) is a test path only: `FwSupplicant` 1
+  plus `Passphrase` (and optionally `FwSupSsid`) in the registry, reported
+  to Windows with the port already authorized. `FwSupCapable` says whether
+  the firmware lists `idsup`.
+- Polled at PASSIVE_LEVEL by one worker thread (every `PollMs` 2 ms while
+  frames move, `IdlePollMs` 10 ms otherwise); nothing at DIRQL. RX
+  superframes are switched off (`bus:rxglom` 0) and not taken apart.
+- Not in it: hidden networks, WPA3, PMF, TKIP, roaming offload, power
+  save, wake on WLAN, `GET_STATISTICS`.
+
+Board steps: see [Board test for W4](#board-test-for-w4).
 
 ## Registry values (W3)
 
@@ -284,6 +236,49 @@ Written by the driver:
 | `BcdcIoType`, `MacAddress`, `ClmChunks`, `ClmStatus`, `ClmResult`, `FwVersion`, `FwVersionNumber`, `FwCmdStatus` | control channel results |
 | `Cmd52Count`, `Cmd53Count`, `Cmd52Errors`, `Cmd53Errors`, `LastSdStatus`, `LastSdArg`, `LastR5Flags` | bus counters |
 | `FramesTx`, `FramesRx`, `EventsRx`, `LastEvent`, `RxErrors`, `RxAborts`, `GlomRx`, `MailboxData`, `IntStatus`, `Polls` | frame counters |
+
+Stage 3 adds (written by the driver): `ActiveMode` (1: Wi-Fi adapter),
+`NetClass`, `AddFunction`, `FunctionSource` (0 none, 1 instance ID, 2
+hardware IDs, 3 compatible IDs), `WlanInitResult`, `IoType`, `Has5GHz`,
+`FwSupCapable`, `WifiInitStatus`, `OsWdiVersion`, `Wifi*CapsStatus`,
+`AdapterStartStatus`, the `Wdi*` counters and `WdiTrace` as in
+aic8800usb's WiFiCx mode, `LinkState` (0 down, 1 joining, 2
+associated, 3 keys in), `ConnStatus`, `ConnEvent`, `DisconnectReason`,
+`LinkRateKbps`, `LinkRssi`, `RxData`, `RxEapol`, `TxData`, `TxEapol`,
+`FwKeys`, `FlowHold`, `NetTx*`, `NetRx*`, `ServiceErrors`. Settings:
+`PollMs`, `IdlePollMs`, `ConnectTimeoutMs`, `Country`, `FwSupplicant`,
+`Passphrase`, `FwSupSsid`, `WdiVersion`.
+
+## Board test for W4
+
+TaishanPi 3M, Windows 11 23H2, test signing, Ethernet for access,
+firmware with SDIO Wi-Fi on, W3 passing (Stage 2 on function 1). CI
+artifact `wifi-bringup-signed-arm64` from branch `bcmwlsdio-wificx`.
+
+1. `pnputil /add-driver bcmwlsdio\bcmwlwifi.inf /install`, then delete the
+   old bring-up package (`pnputil /enum-drivers`, `pnputil /delete-driver
+   oemNN.inf` for the old `bcmwlsdio.inf`) so only one is staged.
+2. On the function 1 device: `reg add "HKLM\SYSTEM\CurrentControlSet\Enum\<FN_1 instance>\Device Parameters" /v Stage /t REG_DWORD /d 3 /f`,
+   restart Windows.
+3. Pass: one "Broadcom BCM43456 Wi-Fi (SDIO, WiFiCx)" without a problem
+   code; `ActiveMode` 1, `FwState` `station up`, `WifiInitStatus` and every
+   `Wifi*CapsStatus` 0, `AdapterStartStatus` 0; `netsh wlan show drivers`
+   lists it. Function 2 and 3: `ActiveMode` 0, `FwState` `idle: not
+   function 1` (or `stage 0`).
+4. Taskbar Wi-Fi list: networks appear (`WdiScanTasks`, `WdiBssIndicated`).
+5. Join a WPA2-PSK network, then an open one (a phone hotspot): connected,
+   DHCP address, `ping` the gateway, a 100 MB download (note the speed);
+   `WdiKeys` 2, `LinkState` 3, `netsh wlan show interfaces` shows rate and
+   signal. Disconnect and reconnect; router off and on.
+6. Optional: the firmware's supplicant: `FwSupplicant` 1, `Passphrase`
+   (REG_SZ) on the function 1 key, restart, join that network.
+7. CM5-IO (BCM43752): the same with `install-firmware.ps1 -Chip 43752`.
+
+Reading a failure: `FwState` and `LastStep` name the step; no networks
+with `ScanResults` 0 means escan gave nothing (`WlanFwStatus`); "can't
+connect" with `RxEapol` 0 means message 1 never came, `TxEapol` 1 and no
+message 3 points at the RSN element or the message 2 path, `ConnStatus`
+holds the firmware's join status. Back out: Stage 2 (or 0), restart.
 
 ## Board session for W2 and W3
 
@@ -390,7 +385,7 @@ The firmware's trailer is a `<FW-TAG> ... Version=` line, not the 43456's
 over the three files against a simulated BCM43752.
 
 The NVRAM's `macaddr=00:90:4c:c5:12:38` is AMPAK's placeholder, the same on
-every AP6256. Before W5 the driver needs a stable per-board address (for
+every AP6256. Later the driver needs a stable per-board address (for
 example derived from the RK3576 OTP CPU ID), set with `cur_etheraddr`
 before `C_UP`.
 
@@ -436,14 +431,14 @@ matrix, `wifi`) and makes the test-signed package (`wifi-package`).
 3. The SDIO device ID (0xA9BF assumed).
 4. The controller clock: W2 starts at 25 or 50 MHz. The firmware download
    (about 480 KB) takes about a second at 25 MHz 4-bit, so this matters
-   only for W5 throughput.
+   only for throughput.
 5. RAM size and base for rev 9: 0x198000 is bwfm's and brcmfmac's value for
    chip 0x4345; the size is read from the chip.
 6. A second start without a power cycle (disable/enable): the stop path
    halts the CPU and turns F1/F2 off, but WL_REG_ON is the firmware's, so
    the chip is not reset. Restart Windows between stages until this is
    tried.
-7. WiFiCx documentation and the absence of a public sample (W6).
+7. WiFiCx documentation and the absence of a public sample (W4).
 8. The per-board MAC address (above).
 
 ## Other boards: ROCK 4D, Dragon Q6A, CM5-IO
