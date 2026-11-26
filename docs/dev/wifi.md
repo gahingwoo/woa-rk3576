@@ -330,29 +330,39 @@ above); `ErrorDetail` is the address or register. Backing out: set `Stage`
 0, or turn the firmware option off (Windows then sees no SDIO controller),
 or `pnputil /delete-driver <oem>.inf /uninstall`.
 
-## BAD_POOL_CALLER at device removal (0xC2/0x99)
+## BAD_POOL_CALLER at device removal (0xC2/0x99): sdport, fixed by bwlsdflt
 
-Seen 2026-11-26 when PnP removed the bcmwlsdio devices to switch drivers.
-With symbols for ntoskrnl, Wdf01000 and sdbus 22621 the stack reads:
-`PnpProcessQueryRemoveAndEject` > `IopRemoveDevice` > KMDF
-`FxPkgFdo::ProcessRemoveDeviceOverload` > `FxPkgPnp::CleanupStateMachines`
-> `FxPkgFdo::ReleaseReenumerationInterface` > sdbus
-`SdbusReenumerationInterfaceDereference` (tail call) > `ExFreePoolWithTag`.
-The block being freed is sdbus's own GUID_REENUMERATE_SELF_INTERFACE
-context (0x18 bytes, non-paged, tag `SdIc`), which sdbus allocates when
-KMDF starts the FDO and frees when KMDF releases the interface at
-IRP_MN_REMOVE_DEVICE. `ExFreePoolWithTag` raises 0x99 only for an address
-below kernel space or not 16-byte aligned; the address was `...2c8`, and
-sdbus had just found its signature there, so the block itself was handed
-out misaligned or its pointer was moved: pool damage that predates the
-free. No bcmwlsdio
-buffer or object is freed on that path. FN_1's teardown crumb (`stopped: CPU halted`) was not
-in the log, so the instance going away was most likely FN_2 or FN_3,
-which never touch the card (that driver logged a crumb only after a
-registry write; the driver now logs first and tags every line `FN<n>`).
+Removing any bcmwlsdio device (disable, driver update, uninstall) stopped
+Windows with 0xC2, P1 0x99, an address ending in 8. It happens at Stage 0
+too, where the driver only opens SDBUS. With the public symbols for
+ntoskrnl, Wdf01000 and sdport 22621:
 
-To catch the writer (run elevated, then restart; the KD listener reports
-0xC1/0xC4/0xD6 at the faulting instruction):
+- When the FDO starts, KMDF (`FxPkgFdo::QueryForReenumerationInterface`)
+  queries GUID_REENUMERATE_SELF_INTERFACE_STANDARD from the device below it.
+  sdport answers (`SdhostPdoGetReenumerationInterface`) with a 0x18-byte
+  pool block, tag `SdIc`, as the interface context.
+- At IRP_MN_REMOVE_DEVICE, KMDF (`FxPkgFdo::ReleaseReenumerationInterface`)
+  calls the interface's dereference. `SdhostReenumerationInterfaceDereference`
+  checks the context's signature and then frees `Context - 0x18`.
+- That address is never 16-byte aligned, and that is the only check
+  `ExFreePoolWithTag` makes before raising 0x99.
+
+Every KMDF function driver on an sdport SDIO function hits this.
+`bwlsdflt.sys` (bwlsdflt/) fixes it. It is a WDM lower filter that the INF
+puts below the FDO (`LowerFilters`). It completes that one query
+unanswered, so KMDF has nothing to release; KMDF uses the interface only
+for `WdfDeviceSetFailed(WdfDeviceFailedAttemptRestart)`. The filter cannot
+be KMDF: a KMDF filter would make the same query. Each refusal is logged
+as `bwlsdflt: refused GUID_REENUMERATE_SELF_INTERFACE_STANDARD`.
+
+Installing the package adds the filter, which means a reinstall, which
+means removing the running filterless devices: that removal can still
+crash once. Install it offline from the rescue Windows, or with the SDIO
+Wi-Fi option off.
+
+To catch a pool writer if anything like this comes back (run elevated,
+then restart; the KD listener reports 0xC1/0xC4/0xD6 at the faulting
+instruction):
 
     verifier /flags 0x809 /driver bcmwlsdio.sys sdbus.sys dwcmshc.sys
 
@@ -365,14 +375,13 @@ offline by deleting `VerifyDrivers` and `VerifyDriverLevel` under
 `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management`
 of the loaded main hive. Online: `verifier /reset`, restart.
 
-Repro without a new package: `pnputil /disable-device "<instance>"` on one
-of the SD function devices (`SD\VID_02D0&PID_A9BF&FN_n\...`). That removes
-only bcmwlsdio's FDO above sdbus's child PDO; the SD host (dwcmshc, sdport)
-and sdbus stay up, so this is not the host teardown the SD rules forbid.
-A disabled device is not started at the next boot, so a crash does not
-loop; `pnputil /enable-device` brings it back. Order: first all three at
-Stage 0 and disable FN_2 (no card access at all: a crash here clears the
-bring-up code), then FN_1 at Stage 2 after `firmware running`.
+Test for the fix: `pnputil /disable-device "<instance>"` on one SD
+function device (`SD\VID_02D0&PID_A9BF&FN_n\...`). Without bwlsdflt it
+crashed, even at Stage 0. With bwlsdflt it must not crash, and the KD log
+shows the refusal at start and `FN<n> teardown: ...` at removal. This
+removes only bcmwlsdio's FDO and the filter above sdport's child PDO; the
+SD host (dwcmshc, sdport) stays up. A disabled device is not started at the
+next boot; `pnputil /enable-device` brings it back.
 
 ## Licences
 
