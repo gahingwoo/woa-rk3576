@@ -29,7 +29,7 @@ KMDF 驱动 [vdpu383](../../drivers/video/vdpu383) 是调试用的试验台，�
 | V1 | 固件给 PD_VDEC 上电并声明 `ACPI\RKCP0383`；Windows 绑定 `vdpu383.sys`；寄存器可读 | edk2-rk3576、`drivers/video/vdpu383` | 板测（泰山派 3M） |
 | V2 | `vdpu383test` 解码存好的 H.264，与参考 MD5 一致 | `tools/vdpu383test`、`drivers/video/vdpu383/lib` | 板测：六条一致性码流与 FFmpeg 一致，0 个硬件错误 |
 | V3a | 给 `UmdVideo` 列出的进程提供带 H.264 的 `ID3D11VideoDevice`，在播放器进程里通过 vdpu383 的 `UserAccess` 接口解码 | wddm-mali-g52 `video-decode`、woa-rk3576 `vdpu383-d3d11va` | 分支 |
-| V3b | 打开解码器 IOMMU，通过 maliwddm 解码；取代 V3a | wddm-mali-g52 | 未开始 |
+| V3b | 打开解码器 IOMMU，通过 maliwddm 解码；取代 V3a | wddm-mali-g52 `c2-decode-via-kmd`、woa-rk3576 `c2-decode-via-kmd` | 仅 CI：每次调用都是发给 maliwddm 的 escape，在 vdpu383.sys 的会话里执行（驱动 README）；零拷贝（导入）2026-11-26 板测通过 |
 | V4 | Edge 上的 YouTube（avc1）和 Movies & TV 硬件播放 1080p | wddm-mali-g52 | 未开始 |
 
 调试驱动里的其他编解码器（细节和数字见它的 README）：HEVC Main 和 VP9 已用 `vdpu383test` 板测，AV1 仅 CI。解码器从一张表里读 HEVC SPS 的短期参考图像集，而 DXVA 不带这些信息，所以 HEVC 构建器（`lib/vdpu383_hevc.c`，来自 MPP 的 VDPU383 HEVC HAL）从 DXVA 重建这张表并加以检查。
@@ -37,6 +37,8 @@ KMDF 驱动 [vdpu383](../../drivers/video/vdpu383) 是调试用的试验台，�
 mainline、MPP 和厂商内核说法不一致的值，两种写法都保留了；见驱动 README 的"硬件事实和来源"。
 
 ### V3b 需要显示驱动提供什么（提议，尚未实现）
+
+目前改用会话：maliwddm 在内核里转发 UMD 的调用，而不接管整个模块（见驱动 README）。下面的方案仍是将来做调度解码节点的路线。
 
 1. 归属。`AcpiVdec` 为 1 时给调试驱动发布 `ACPI\RKCP0383`；为 2 时不发布它（`_STA` 0），并把 `\_SB.VDRS` 资源模板（MMIO 0x27B00000、GSIV 340/341、SRAM）附加到 GPU0 的 `_CRS` 后面，这样只有一个驱动映射这个模块。Vdec.asl 为此把模板放在一个具名对象里。
 2. 节点。`MW_UMD_ADAPTER_INFO.DecodeNode`（已预留）设为解码节点的序号；`UmdVideo` 为 2 时打开 profile。

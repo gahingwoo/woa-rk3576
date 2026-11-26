@@ -46,7 +46,7 @@ HEVC (mainline `rkvdec-vdpu383-hevc.c`), then VP9 and AV1 (MPP only).
 | V1 | firmware powers PD_VDEC and declares `ACPI\RKCP0383`; Windows binds `vdpu383.sys`; registers readable | edk2-rk3576, `drivers/video/vdpu383` | board-tested (TaishanPi 3M) |
 | V2 | `vdpu383test` decodes stored H.264 and matches the reference MD5 | `tools/vdpu383test`, `drivers/video/vdpu383/lib` | board-tested: six conformance streams match FFmpeg, 0 hardware errors |
 | V3a | `ID3D11VideoDevice` with H.264 for the processes named in `UmdVideo`, decoding in the player's process through vdpu383's `UserAccess` interface | wddm-mali-g52 `video-decode`, woa-rk3576 `vdpu383-d3d11va` | branch |
-| V3b | decode through maliwddm with the decoder's IOMMU on; replaces V3a | wddm-mali-g52 | not started |
+| V3b | decode through maliwddm with the decoder's IOMMU on; replaces V3a | wddm-mali-g52 `c2-decode-via-kmd`, woa-rk3576 `c2-decode-via-kmd` | CI only: every call an escape to maliwddm, made in a vdpu383.sys session (driver README, "Sessions"); zero copy (imports) board-tested 2026-11-26 |
 | V4 | Edge YouTube (avc1) and Movies & TV play 1080p in hardware | wddm-mali-g52 | not started |
 
 Other codecs in the bring-up driver (details and counts in its README):
@@ -59,6 +59,10 @@ Values that mainline, MPP and the vendor kernel disagree on are written both
 ways; see the driver README, "Hardware facts and their sources".
 
 ### What V3b needs from the display driver (proposed, not made)
+
+Superseded for now by sessions: maliwddm forwards the UMD's calls kernel
+to kernel instead of owning the block (driver README, "Sessions"). The
+plan below stays the way to a scheduled decode node.
 
 1. Ownership. `AcpiVdec` 1 publishes `ACPI\RKCP0383` for the bring-up
    driver; 2 would leave it absent (`_STA` 0) and append the `\_SB.VDRS`
