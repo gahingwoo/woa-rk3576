@@ -6,7 +6,9 @@
   "dtCompatible": "lckfb,tspi-3m-rk3576",
   "cpu": { "count": 8, "minMHz": 1600, "note": "CPU Maximum Frequency setup option: 1608 MHz default, about 2200 with Max" },
   "devmgrAllow": [
-    { "id": "USB\\VID_2C7C&PID_0125&MI_04", "why": "Quectel EC20 interface 4 has no driver (Maskrom Studio self-test whitelist)" }
+    { "id": "USB\\VID_2C7C&PID_0125&MI_04", "why": "Quectel EC20 interface 4 has no driver in QMI mode (Maskrom Studio self-test whitelist)" },
+    { "id": "USB\\VID_2C7C&PID_0125&MI_00", "why": "Quectel EC20 DM port (FF/FF/FF) in QMI and MBIM mode: ec20-ports.inf 2.0 binds only FF/00/00" },
+    { "id": "USB\\VID_2C7C&PID_0125&MI_02", "why": "Quectel EC20 DM port in RNDIS mode (interfaces move up by two)" }
   ],
   "gpu": { "clockMHz": 702, "wddmVersion": 20, "tempMaxC": 90, "note": "702 MHz needs the 775 mV GPU rail, approved for this board only" },
   "display": { "refreshHz": 60 },

@@ -1,20 +1,23 @@
 #!/bin/bash
 # ec20-mode.sh - read or set the Quectel EC20's USB network mode
-# (AT+QCFG="usbnet") from Linux: MBIM (2) so Windows' in-box mobile
-# broadband driver can use it, or QMI (0), the factory default. The Linux
-# counterpart of ec20-mode.ps1; see docs/dev/ec20.md.
+# (AT+QCFG="usbnet") from Linux: RNDIS (3) or MBIM (2) for Windows' in-box
+# drivers, or QMI (0), the factory default. The Linux counterpart of
+# ec20-mode.ps1; see docs/dev/ec20.md.
 #
 #   ec20-mode.sh status        identity, firmware, mode, USB interfaces, drivers
 #   ec20-mode.sh mbim          set usbnet 2, read back, reset, check
+#   ec20-mode.sh rndis         set usbnet 3, read back, reset, check
 #   ec20-mode.sh qmi           set usbnet 0 (revert), read back, reset, check
 #   options: -p /dev/ttyUSBn   the AT port instead of looking it up
 #            -y                do not ask
 #            -n                do not reset (takes effect at the next power cycle)
 #
 # The mode is stored in the module and survives power cycles. The AT port
-# used by default is interface 03 (ttyUSB3 on the TaishanPi 3M), which
-# ModemManager is told to ignore there, so this does not race MM on
-# interface 02. Needs root (or the dialout group) for the tty.
+# used by default is the modem port, the third class FF/00/00 interface
+# (interface 03 in QMI and MBIM mode, ttyUSB3 on the TaishanPi 3M, which
+# ModemManager is told to ignore there; interface 05 in RNDIS mode, where
+# the interfaces move up by two), then the AT port, the second one. Needs
+# root (or the dialout group) for the tty.
 #
 # Exit codes: 0 done and checked; 1 refused, cancelled or an AT command
 # failed; 2 read-back mismatch; 3 no AT port; 4 the module did not come back
@@ -51,7 +54,24 @@ tty_of() {
 	return 1
 }
 
-find_port() { tty_of 03 || tty_of 02; }
+# the interface numbers of class FF/00/00, in order: NMEA, AT, modem in
+# every usbnet mode (QMI/MBIM: 01 02 03, RNDIS/ECM: 03 04 05)
+serial_ifaces() {
+	local dev i
+	dev=$(usbdev) || return 1
+	for i in "$dev":1.*; do
+		[ -f "$i/bInterfaceClass" ] || continue
+		[ "$(cat "$i/bInterfaceClass")$(cat "$i/bInterfaceSubClass")$(cat "$i/bInterfaceProtocol")" = ff0000 ] && echo "${i##*.}"
+	done | sort -n
+}
+
+find_port() {
+	local s
+	mapfile -t s < <(serial_ifaces)
+	[ ${#s[@]} -ge 3 ] && tty_of "${s[2]}" && return 0
+	[ ${#s[@]} -ge 2 ] && tty_of "${s[1]}" && return 0
+	return 1
+}
 
 # at CMD [TIMEOUT_S]: send one command, print the reply up to the final result
 at() {
@@ -101,7 +121,7 @@ bound() { # bound DRIVER: is any interface of the module bound to it?
 mode=""
 while [ $# -gt 0 ]; do
 	case $1 in
-	status|mbim|qmi) mode=$1 ;;
+	status|mbim|qmi|rndis) mode=$1 ;;
 	-p) PORT=${2:-}; shift ;;
 	-y) YES=1 ;;
 	-n) NORESET=1 ;;
@@ -122,14 +142,17 @@ echo "AT port: $PORT"
 cur=$(read_usbnet)
 [ -n "$cur" ] || { echo "the module did not report its usbnet mode"; exit 1; }
 echo "firmware: $(at AT+QGMR | grep -v '^OK$' | head -n1)"
-echo "usbnet: $cur (0 QMI, 2 MBIM)"
+echo "usbnet: $cur (0 QMI, 2 MBIM, 3 RNDIS)"
 if [ "$mode" = status ]; then
 	show_ifaces
 	exit 0
 fi
 
-want=2 drv=cdc_mbim
-[ "$mode" = qmi ] && want=0 drv=qmi_wwan
+case $mode in
+mbim) want=2 drv=cdc_mbim ;;
+rndis) want=3 drv=rndis_host ;;
+*) want=0 drv=qmi_wwan ;;
+esac
 
 if [ "$cur" = "$want" ]; then
 	echo "already usbnet $want; nothing to set"
