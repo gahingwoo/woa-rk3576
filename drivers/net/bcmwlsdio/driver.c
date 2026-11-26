@@ -1028,13 +1028,8 @@ BwlEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
  * image was never run. Plain Zw calls only; the security cookie is set up
  * inside FxDriverEntry, so the frame that spans it has no cookie check.
  */
-#ifndef NETADAPTER_VERSION_MINOR
-#define NETADAPTER_VERSION_MAJOR 0
-#define NETADAPTER_VERSION_MINOR 0
-#endif
-#ifndef WIFI_VERSION_MINOR
-#define WIFI_VERSION_MAJOR 0
-#define WIFI_VERSION_MINOR 0
+#ifndef BWL_NETCX_MINOR
+#error "BWL_NETCX_* and BWL_WIFICX_* come from bcmwlsdio.vcxproj"
 #endif
 
 EXTERN_C NTSTATUS FxDriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath);
@@ -1080,8 +1075,8 @@ BwlPreEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
     NTSTATUS status;
 
     PreCrumb(RegistryPath,
-             L"entered; binds NetAdapterCx " BWL_WSTR(NETADAPTER_VERSION_MAJOR) L"." BWL_WSTR(NETADAPTER_VERSION_MINOR)
-             L", WiFiCx " BWL_WSTR(WIFI_VERSION_MAJOR) L"." BWL_WSTR(WIFI_VERSION_MINOR) L", KMDF 1.33",
+             L"entered; binds NetAdapterCx " BWL_WSTR(BWL_NETCX_MAJOR) L"." BWL_WSTR(BWL_NETCX_MINOR)
+             L", WiFiCx " BWL_WSTR(BWL_WIFICX_MAJOR) L"." BWL_WSTR(BWL_WIFICX_MINOR) L", KMDF 1.33",
              0xFFFFFFFFu);
     status = FxDriverEntry(DriverObject, RegistryPath);
     PreCrumb(RegistryPath, NULL, (ULONG)status);

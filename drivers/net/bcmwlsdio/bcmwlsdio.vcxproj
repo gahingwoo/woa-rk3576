@@ -78,6 +78,8 @@
       <!-- ntddsd.h and sddef.h are in Include\<ver>\km; the WDI TLV
            generator/parser (wificx.cpp) in km\wlan\2.0. -->
       <AdditionalIncludeDirectories>$(DDK_INC_PATH)wlan\2.0;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- the class extension versions the WDK targets bind (above), for PreEntry -->
+      <PreprocessorDefinitions>BWL_NETCX_MAJOR=$(NETADAPTER_VERSION_MAJOR);BWL_NETCX_MINOR=$(NETADAPTER_VERSION_MINOR);BWL_WIFICX_MAJOR=$(WIFI_VERSION_MAJOR);BWL_WIFICX_MINOR=$(WIFI_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <!-- sdbus.lib: SdBusOpenInterface and SdBusSubmitRequest.
