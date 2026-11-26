@@ -24,12 +24,19 @@ registers four bytes apart and raise the DesignWare busy-detect interrupt
 - **Port names.** The firmware's `"SerCx-FriendlyName"` (`UART4`, ...) makes
   SerCx2 publish a `GUID_DEVINTERFACE_COMPORT` interface:
   `Windows.Devices.SerialCommunication` lists it, and Win32 programs open
-  its interface path. The driver also links `\DosDevices\COMn` for UARTn and
-  writes it to `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`, for programs that take
-  a COM name only. A `REG_SZ` value `PortName` in the device's hardware key
-  (`HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP3006\<n>\Device Parameters`)
-  renames it; an empty one drops it. If the name is taken, the interface
-  still works and the log says so.
+  its interface path. Each port also gets a COM name, for programs that take
+  a COM name only: `\DosDevices\COMn` and an entry in
+  `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`. The number comes from Windows' COM
+  name arbiter (ComDB), so it never takes one another device holds (the
+  EC20 modem's COM4 on the TaishanPi 3M): the device is in the Ports class,
+  whose installer claims a free number and stores it as `PortName` in the
+  device's hardware key
+  (`HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP3006\<n>\Device Parameters`).
+  Without a stored name the driver claims COMn for UARTn if it is free, else
+  the lowest free number, and stores it. Editing `PortName` renames the
+  port; an empty one drops the COM name. If the stored name is in use by
+  another driver, the port takes a free one for that boot and the log says
+  so.
 - **Unprivileged access**: users may open the port (SDDL `BU` read/write),
   as Microsoft's SerCx2 interface page shows.
 - **Data path**: PIO. The ISR moves the receive FIFO into a 4 KiB ring and

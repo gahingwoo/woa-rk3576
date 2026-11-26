@@ -17,10 +17,13 @@ RK3576 DesignWare APB UART 的 SerCx2 控制器驱动，用于板子 40 针排�
 ## 做了什么
 
 - **端口名。** 固件的 `"SerCx-FriendlyName"`（`UART4` 等）让 SerCx2 发布 `GUID_DEVINTERFACE_COMPORT`
-  接口：`Windows.Devices.SerialCommunication` 能列出它，Win32 程序用接口路径打开。驱动还为 UARTn 建立
-  `\DosDevices\COMn`，并写到 `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`，给只认 COM 名的程序用。在设备的
-  硬件键（`HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP3006\<n>\Device Parameters`）里放一个 `REG_SZ`
-  值 `PortName` 可以改名，空字符串表示不建 COM 名。名字被占用时接口照样可用，日志里会写明。
+  接口：`Windows.Devices.SerialCommunication` 能列出它，Win32 程序用接口路径打开。每个端口还有一个 COM 名
+  （`\DosDevices\COMn` 和 `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM` 里的一项），给只认 COM 名的程序用。编号由
+  Windows 的 COM 名仲裁（ComDB）分配，不会占用别的设备已有的编号（比如泰山派 3M 上 EC20 模块的 COM4）：
+  设备属于 Ports 类，它的类安装程序认领一个空闲编号，存为设备硬件键
+  （`HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP3006\<n>\Device Parameters`）里的 `PortName`。没有存好的
+  名字时，驱动自己认领：UARTn 优先用 COMn，被占用就用最小的空闲编号，并存下来。改 `PortName` 可以改名，
+  空字符串表示不建 COM 名。存好的名字被别的驱动占用时，这次启动先用一个空闲编号，日志里会写明。
 - **普通用户可访问**：用户可以打开端口（SDDL `BU` 读写），做法和微软 SerCx2 接口文档一致。
 - **数据通路**：PIO。ISR 把接收 FIFO 搬到 4 KiB 环形缓冲区，把发送空转成 "ready"；DPC 通知 SerCx2。
   Drain 每毫秒查一次 `LSR.TEMT`。
