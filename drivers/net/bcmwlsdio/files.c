@@ -1,5 +1,5 @@
 /*
- * files.c - read a firmware file from disk into memory.
+ * files.c - read a firmware file from disk into a buffer of its exact size.
  *
  * The directory is FirmwareDir under Device Parameters, by default
  * \SystemRoot\System32\drivers\brcm, where install-firmware.ps1 puts the
@@ -13,7 +13,7 @@
 
 NTSTATUS
 BwlLoadFile(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG MaxBytes,
-            _Out_ WDFMEMORY *Memory, _Out_ PUCHAR *Data, _Out_ PULONG Length)
+            _Out_ PUCHAR *Data, _Out_ PULONG Length)
 {
     DECLARE_UNICODE_STRING_SIZE(dir, 200);
     DECLARE_UNICODE_STRING_SIZE(path, 300);
@@ -22,12 +22,10 @@ BwlLoadFile(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG MaxBytes,
     OBJECT_ATTRIBUTES oa;
     IO_STATUS_BLOCK iosb;
     FILE_STANDARD_INFORMATION info;
-    WDF_OBJECT_ATTRIBUTES attr;
     HANDLE file = NULL;
-    PVOID buf = NULL;
+    PUCHAR buf = NULL;
     NTSTATUS status;
 
-    *Memory = NULL;
     *Data = NULL;
     *Length = 0;
 
@@ -60,9 +58,11 @@ BwlLoadFile(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG MaxBytes,
         status = STATUS_INVALID_IMAGE_FORMAT;
     }
     if (NT_SUCCESS(status)) {
-        WDF_OBJECT_ATTRIBUTES_INIT(&attr);
-        attr.ParentObject = Ctx->Device;
-        status = WdfMemoryCreate(&attr, PagedPool, BWL_POOL_TAG, (size_t)info.EndOfFile.QuadPart, Memory, &buf);
+        /* Exactly the file's size: a write past it shows in the guard (pool.c). */
+        buf = (PUCHAR)BwlBufAlloc(POOL_FLAG_PAGED, (SIZE_T)info.EndOfFile.QuadPart, "file");
+        if (buf == NULL) {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+        }
     }
     if (NT_SUCCESS(status)) {
         status = ZwReadFile(file, NULL, NULL, NULL, &iosb, buf, (ULONG)info.EndOfFile.QuadPart, NULL, NULL);
@@ -70,10 +70,9 @@ BwlLoadFile(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG MaxBytes,
             status = STATUS_END_OF_FILE;
         }
         if (!NT_SUCCESS(status)) {
-            WdfObjectDelete(*Memory);
-            *Memory = NULL;
+            BwlBufFree(Ctx, buf, "file read failed");
         } else {
-            *Data = (PUCHAR)buf;
+            *Data = buf;
             *Length = (ULONG)info.EndOfFile.QuadPart;
             BWL_LOG("%wZ: %lu bytes", &path, *Length);
         }
