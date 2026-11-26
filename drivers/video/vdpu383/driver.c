@@ -970,8 +970,9 @@ V383GateLeave(
 }
 
 /* One call to the exporter (vdpu383_import.h). Status stays
- * STATUS_NOT_FOUND when no display driver has registered. */
-static VOID
+ * STATUS_NOT_FOUND when no display driver has registered; FALSE when there
+ * is not even the callback object (maliwddm never started its exporter). */
+static BOOLEAN
 V383ExporterCall(
     _In_ ULONG Op,
     _Inout_ PVDPU383_IMPORT_REQUEST Req
@@ -987,9 +988,10 @@ V383ExporterCall(
     RtlInitUnicodeString(&name, VDPU383_IMPORT_CALLBACK_NAME);
     InitializeObjectAttributes(&oa, &name, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
     if (!NT_SUCCESS(ExCreateCallback(&cb, &oa, FALSE, FALSE)))
-        return;
+        return FALSE;
     ExNotifyCallback(cb, Req, (PVOID)(ULONG_PTR)Op);
     ObDereferenceObject(cb);
+    return TRUE;
 }
 
 /* The exporter forgets the import: no revoke for it after this returns.
@@ -1007,7 +1009,7 @@ V383ImportRelease(
     r.Token = Token;
     r.ProcessId = PsGetCurrentProcessId();
     r.Cookie = Handle;
-    V383ExporterCall(VDPU383_IMPORT_OP_RELEASE, &r);
+    (VOID)V383ExporterCall(VDPU383_IMPORT_OP_RELEASE, &r);
 }
 
 /* ---------------------------------------------------- DMA buffers */
@@ -1539,6 +1541,55 @@ V383ImportRevoke(
 }
 
 /*
+ * The last import that failed, in Device Parameters, for a board with no
+ * debugger (README.md): LastImportStage (V383_IMPORT_STAGE_*),
+ * LastImportStatus, LastImportPages (asked for), LastImportExporterPages
+ * and LastImportExporterStatus (the exporter's answer), LastImportHandle
+ * (0: a new import), LastImportPid, ImportFailures, Imports. Written for
+ * the first 16 failures and every 64th after; PASSIVE_LEVEL, no lock held.
+ */
+#define V383_IMPORT_STAGE_PARAMS        1   /* IOMMU off, token 0, pages 0 or over 256 MiB */
+#define V383_IMPORT_STAGE_NOMEM         2   /* the PFN array or the record */
+#define V383_IMPORT_STAGE_HANDLE        3   /* refresh: no such import, another size, another token */
+#define V383_IMPORT_STAGE_IOVA          4   /* no free run of IO addresses */
+#define V383_IMPORT_STAGE_NO_EXPORTER   5   /* no callback object: maliwddm's exporter is not running */
+#define V383_IMPORT_STAGE_EXPORTER      6   /* the exporter refused (its status) */
+#define V383_IMPORT_STAGE_PAGES         7   /* the exporter's page count is not the one asked for */
+#define V383_IMPORT_STAGE_MMU           8   /* the IOMMU entries (a page table, an address over 40 bits) */
+
+static VOID
+V383ImportNote(
+    _In_ PDEVICE_CONTEXT Ctx,
+    _In_ ULONG Stage,
+    _In_ NTSTATUS Status,
+    _In_ ULONG Pages,
+    _In_ ULONG Handle,
+    _In_ const VDPU383_IMPORT_REQUEST *R
+    )
+{
+    WDFKEY key;
+    ULONG n = ++Ctx->ImportFailures;
+
+    V383_LOG("import of %u pages (handle %u) failed at stage %u: 0x%08x (exporter 0x%08x, %u pages)",
+             Pages, Handle, Stage, Status, R->Status, R->Pages);
+    if (n > 16 && n % 64)
+        return;
+    if (!V383OpenParams(Ctx, KEY_WRITE, &key))
+        return;
+    V383PutULong(key, L"LastImportStage", Stage);
+    V383PutULong(key, L"LastImportStatus", (ULONG)Status);
+    V383PutULong(key, L"LastImportPages", Pages);
+    V383PutULong(key, L"LastImportExporterPages", R->Pages);
+    V383PutULong(key, L"LastImportExporterStatus", (ULONG)R->Status);
+    V383PutULong(key, L"LastImportHandle", Handle);
+    V383PutULong(key, L"LastImportPid", (ULONG)(ULONG_PTR)PsGetCurrentProcessId());
+    V383PutULong(key, L"ImportFailures", n);
+    V383PutULong(key, L"Imports", Ctx->Imports);
+    (VOID)ZwFlushKey(WdfRegistryWdmGetHandle(key));
+    WdfRegistryClose(key);
+}
+
+/*
  * IOCTL_VDPU383_IMPORT, in the caller's context (the exporter checks the
  * process its token was given to). A new import reserves its IO addresses
  * and goes into the list dead, so the address check refuses it until its
@@ -1559,7 +1610,7 @@ V383Import(
     PPFN_NUMBER pfns;
     PLIST_ENTRY e;
     ULONG64 token;
-    ULONG pages, handle;
+    ULONG pages, handle, stage = V383_IMPORT_STAGE_PARAMS;
     BOOLEAN created = FALSE, imported = FALSE;
     NTSTATUS status;
 
@@ -1574,13 +1625,20 @@ V383Import(
     token = in->token;
     pages = in->pages;
     handle = in->handle;
-    if (!Ctx->IommuOn)
+    RtlZeroMemory(&r, sizeof(r));
+    if (!Ctx->IommuOn) {
+        V383ImportNote(Ctx, stage, STATUS_NOT_SUPPORTED, pages, handle, &r);
         return STATUS_NOT_SUPPORTED;
-    if (token == 0 || pages == 0 || pages > ((256u * 1024 * 1024) >> PAGE_SHIFT))
+    }
+    if (token == 0 || pages == 0 || pages > ((256u * 1024 * 1024) >> PAGE_SHIFT)) {
+        V383ImportNote(Ctx, stage, STATUS_INVALID_PARAMETER, pages, handle, &r);
         return STATUS_INVALID_PARAMETER;
+    }
     pfns = (PPFN_NUMBER)ExAllocatePool2(POOL_FLAG_NON_PAGED, (SIZE_T)pages * sizeof(PFN_NUMBER), V383_POOL_TAG);
-    if (!pfns)
+    if (!pfns) {
+        V383ImportNote(Ctx, V383_IMPORT_STAGE_NOMEM, STATUS_INSUFFICIENT_RESOURCES, pages, handle, &r);
         return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     V383GateEnter(Ctx);
     if (handle) {
@@ -1593,6 +1651,7 @@ V383Import(
             }
         }
         WdfWaitLockRelease(Ctx->AllocLock);
+        stage = V383_IMPORT_STAGE_HANDLE;
         if (!a || a->Size != ((SIZE_T)pages << PAGE_SHIFT)) {
             status = STATUS_INVALID_HANDLE;
             goto fail;
@@ -1605,6 +1664,7 @@ V383Import(
             goto done;
         }
     } else {
+        stage = V383_IMPORT_STAGE_NOMEM;
         a = (PV383_ALLOC)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*a), V383_POOL_TAG);
         if (!a) {
             status = STATUS_INSUFFICIENT_RESOURCES;
@@ -1615,6 +1675,7 @@ V383Import(
         a->Iova = TRUE;
         a->Size = (SIZE_T)pages << PAGE_SHIFT;
         a->Owner = fo;
+        stage = V383_IMPORT_STAGE_IOVA;
         ExAcquireFastMutex(&Ctx->MmuLock);
         a->Dma = V383IovaAlloc(Ctx, pages);
         ExReleaseFastMutex(&Ctx->MmuLock);
@@ -1631,7 +1692,6 @@ V383Import(
         created = TRUE;
     }
 
-    RtlZeroMemory(&r, sizeof(r));
     r.Token = token;
     r.ProcessId = PsGetCurrentProcessId();
     r.Cookie = a->Handle;
@@ -1639,16 +1699,20 @@ V383Import(
     r.RevokeContext = Ctx;
     r.Pfns = pfns;
     r.MaxPages = pages;
-    V383ExporterCall(VDPU383_IMPORT_OP_IMPORT, &r);
+    stage = V383_IMPORT_STAGE_EXPORTER;
+    if (!V383ExporterCall(VDPU383_IMPORT_OP_IMPORT, &r))
+        stage = V383_IMPORT_STAGE_NO_EXPORTER;
     if (!NT_SUCCESS(r.Status)) {
         status = r.Status;
         goto fail;
     }
     imported = TRUE;
     if (r.Pages != pages) {
+        stage = V383_IMPORT_STAGE_PAGES;
         status = STATUS_INVALID_PARAMETER;
         goto fail;
     }
+    stage = V383_IMPORT_STAGE_MMU;
     ExAcquireFastMutex(&Ctx->MmuLock);
     status = V383MmuEnter(Ctx, a->Dma, pfns, 0, pages);
     /* a previous mapping of these addresses may still be in the TLB */
@@ -1673,7 +1737,6 @@ done:
     return STATUS_SUCCESS;
 
 fail:
-    Ctx->ImportFailures++;
     if (created) {
         WdfWaitLockAcquire(Ctx->AllocLock, NULL);
         RemoveEntryList(&a->Link);
@@ -1689,7 +1752,7 @@ fail:
         ExFreePoolWithTag(a, V383_POOL_TAG);
     }
     ExFreePoolWithTag(pfns, V383_POOL_TAG);
-    V383_LOG("import of %u pages (handle %u) failed: 0x%08x", pages, handle, status);
+    V383ImportNote(Ctx, stage, status, pages, handle, &r);
     return status;
 }
 

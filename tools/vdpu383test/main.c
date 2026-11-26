@@ -170,6 +170,30 @@ static void print_status_bits(unsigned s)
 
 /* --------------------------------------------------------------- info */
 
+/* The driver's note of the last failed import (README.md), from its
+ * Device Parameters; nothing printed when there is none. */
+static void print_last_import(void)
+{
+#ifdef _WIN32
+    static const wchar_t key[] = L"SYSTEM\\CurrentControlSet\\Enum\\ACPI\\RKCP0383\\0\\Device Parameters";
+    static const wchar_t *const names[] = { L"LastImportStage", L"LastImportStatus", L"LastImportPages",
+                                            L"LastImportExporterStatus", L"LastImportExporterPages",
+                                            L"LastImportHandle", L"LastImportPid" };
+    static const char *const stages[] = { "?", "parameters or IOMMU off", "no memory", "refresh of an unknown import",
+                                          "no free IO addresses", "no exporter (maliwddm did not start it)",
+                                          "exporter refused", "page count differs", "IOMMU entries" };
+    DWORD v[7], i;
+
+    for (i = 0; i < 7; i++) {
+        DWORD n = sizeof(v[i]);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, key, names[i], RRF_RT_REG_DWORD, NULL, &v[i], &n) != ERROR_SUCCESS)
+            return;
+    }
+    printf("last failed import  stage %lu (%s), status 0x%08lx; %lu pages asked, exporter 0x%08lx with %lu pages; "
+           "handle %lu, process %lu\n", v[0], stages[v[0] < 9 ? v[0] : 0], v[1], v[2], v[3], v[4], v[5], v[6]);
+#endif
+}
+
 static int cmd_info(void)
 {
     VDPU383_INFO in;
@@ -202,6 +226,8 @@ static int cmd_info(void)
     if (in.interface_version >= 3)
         printf("imports             %u made or refreshed, %u taken back by the display driver, %u failed\n",
                in.imports, in.revokes, in.import_failures);
+    if (in.interface_version >= 3 && in.import_failures)
+        print_last_import();
     printf("warm-up at D0 entry: ran %u timed_out %u irq 0x%08x status 0x%08x (", in.warmup.ran,
            in.warmup.timed_out, in.warmup.irq, in.warmup.status);
     print_status_bits(in.warmup.status & 0xFFFF);

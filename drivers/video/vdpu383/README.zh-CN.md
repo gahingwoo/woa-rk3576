@@ -74,6 +74,7 @@ RK3576 H.264/HEVC/VP9/AV1 解码器（RKVDEC，Rockchip 的叫法是 VDPU383）�
 | `FirstRunResult`, `FirstRunStatus` | 本次会话的第一次解码（0 = 正常） |
 | `IommuSetting`, `IommuOn`, `MmuDte0`, `MmuEnableStatus0/1` | 读到的 `Iommu` 值、分页是否打开、目录寄存器、打开后的状态（位 0 = 分页） |
 | `LastMmuFaultAddr` | 最近一次 IOMMU 故障的 IO 地址 |
+| `LastImportStage`, `LastImportStatus`, `LastImportPages`, `LastImportExporterStatus`, `LastImportExporterPages`, `LastImportHandle`, `LastImportPid`, `ImportFailures`, `Imports` | 最近一次失败的 `IOCTL_VDPU383_IMPORT`（前 16 次，之后每 64 次一次）。Stage：1 参数或 IOMMU 关，2 内存不足，3 刷新未知导入，4 无空闲 IO 地址，5 无导出方（maliwddm 未启动），6 导出方拒绝（见其状态与 maliwddm 的 `VdecLast*`），7 页数不符，8 IOMMU 表项 |
 
 ## 安装
 
