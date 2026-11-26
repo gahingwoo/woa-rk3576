@@ -274,7 +274,22 @@ artifact `wifi-bringup-signed-arm64` from branch `bcmwlsdio-wificx`.
    (REG_SZ) on the function 1 key, restart, join that network.
 7. CM5-IO (BCM43752): the same with `install-firmware.ps1 -Chip 43752`.
 
-Reading a failure: before the device exists (DriverEntry, DeviceAdd)
+The binary binds NetAdapterCx 2.1 and WiFiCx 1.0 (the KMDF stub does it
+before DriverEntry, under either INF). A Windows build must register at
+least those: `reg query HKLM\SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\NetAdapterCx\Versions /s`
+and `...\WifiCx\Versions /s` (the TaishanPi 3M's 22631 lists 2.1 and
+1.1). A 2.2 build bugchecked there before DriverEntry.
+
+Reading a failure: `PreEntry` (same key as below) is written by the
+image's entry point before any WDF code, with the versions it binds;
+`PreEntryStatus` is 0xFFFFFFFF until the KMDF stub returns. `PreEntry`
+without `EarlyTrace` means the stub failed (a class extension bind);
+neither means the image never ran. For a bind failure also look at the
+System event log (Wdf01000 and WdfLdr sources), and with the kernel
+debugger attached set `DbgPrintOn` 1 under `Control\Wdf\Kmdf\Diagnostics`
+for the loader's messages, or `VerifierOn` 1 and `VerboseOn` 1 under
+`Services\bcmwlsdio\Parameters\Wdf` for KMDF's verifier. Before the device
+exists (DriverEntry, DeviceAdd)
 nothing can go to Device Parameters, so the driver appends each early step
 to `EarlyTrace` in `HKLM\SYSTEM\CurrentControlSet\Services\bcmwlsdio\Parameters`,
 flushed (one line per step, every instance; started afresh at each boot).

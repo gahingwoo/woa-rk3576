@@ -1018,6 +1018,76 @@ BwlEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     return status;
 }
 
+/*
+ * The image's real entry point (the linker's /ENTRY): before anything of
+ * WDF runs, record in Services\bcmwlsdio\Parameters that this image was
+ * entered and which class extension versions it asks for (PreEntry), then
+ * call the KMDF stub's FxDriverEntry, which binds KMDF, NetAdapterCx and
+ * WiFiCx and then calls DriverEntry; its result goes to PreEntryStatus.
+ * PreEntry without EarlyTrace: a bind failed in the stub. Neither: the
+ * image was never run. Plain Zw calls only; the security cookie is set up
+ * inside FxDriverEntry, so the frame that spans it has no cookie check.
+ */
+#ifndef NETADAPTER_VERSION_MINOR
+#define NETADAPTER_VERSION_MAJOR 0
+#define NETADAPTER_VERSION_MINOR 0
+#endif
+#ifndef WIFI_VERSION_MINOR
+#define WIFI_VERSION_MAJOR 0
+#define WIFI_VERSION_MINOR 0
+#endif
+
+EXTERN_C NTSTATUS FxDriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath);
+DRIVER_INITIALIZE BwlPreEntry;
+
+static VOID
+PreCrumb(_In_ PUNICODE_STRING RegistryPath, _In_opt_ PCWSTR Text, _In_ ULONG Status)
+{
+    WCHAR path[300];
+    UNICODE_STRING p, n;
+    OBJECT_ATTRIBUTES oa;
+    HANDLE key;
+
+    if (!NT_SUCCESS(RtlStringCchCopyNW(path, RTL_NUMBER_OF(path), RegistryPath->Buffer,
+                                       RegistryPath->Length / sizeof(WCHAR))) ||
+        !NT_SUCCESS(RtlStringCchCatW(path, RTL_NUMBER_OF(path), L"\\Parameters"))) {
+        return;
+    }
+    RtlInitUnicodeString(&p, path);
+    InitializeObjectAttributes(&oa, &p, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    if (!NT_SUCCESS(ZwCreateKey(&key, KEY_WRITE, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL))) {
+        return;
+    }
+    if (Text != NULL) {
+        RtlInitUnicodeString(&n, L"PreEntry");
+        (VOID)ZwSetValueKey(key, &n, 0, REG_SZ, (PVOID)Text, (ULONG)(wcslen(Text) + 1) * sizeof(WCHAR));
+        RtlInitUnicodeString(&n, L"EarlyTrace");
+        (VOID)ZwDeleteValueKey(key, &n);
+    }
+    RtlInitUnicodeString(&n, L"PreEntryStatus");
+    (VOID)ZwSetValueKey(key, &n, 0, REG_DWORD, &Status, sizeof(Status));
+    (VOID)ZwFlushKey(key);
+    ZwClose(key);
+}
+
+#define BWL_WSTR2(x) L ## #x
+#define BWL_WSTR(x) BWL_WSTR2(x)
+
+__declspec(safebuffers)
+NTSTATUS
+BwlPreEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
+{
+    NTSTATUS status;
+
+    PreCrumb(RegistryPath,
+             L"entered; binds NetAdapterCx " BWL_WSTR(NETADAPTER_VERSION_MAJOR) L"." BWL_WSTR(NETADAPTER_VERSION_MINOR)
+             L", WiFiCx " BWL_WSTR(WIFI_VERSION_MAJOR) L"." BWL_WSTR(WIFI_VERSION_MINOR) L", KMDF 1.33",
+             0xFFFFFFFFu);
+    status = FxDriverEntry(DriverObject, RegistryPath);
+    PreCrumb(RegistryPath, NULL, (ULONG)status);
+    return status;
+}
+
 NTSTATUS
 DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 {

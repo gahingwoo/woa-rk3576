@@ -50,14 +50,17 @@
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
     <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
     <!--
-      NetAdapterCx 2.2 and WiFiCx 1.0: what Windows 11 22H2/23H2 (22621)
-      has for a WiFiCx client (docs/dev/wificx.md). Both bind when the
-      driver loads, under either INF; the bring-up (bcmwlsdio.inf, Class
-      System) simply never calls them.
+      NetAdapterCx 2.1 and WiFiCx 1.0. The KMDF stub binds both before
+      DriverEntry, under either INF (the bring-up, Class System, never
+      calls them), and a version the system does not register fails the
+      load. The TaishanPi 3M's 23H2 (22631, netadaptercx.sys and wificx.sys
+      10.0.22621.2215) registers NetAdapterCx 2.1 and WiFiCx 1.1 only
+      (Control\Wdf\Kmdf\<cx>\Versions); 2.2 did not load there.
+      Keep these at or below what that board lists.
     -->
     <NetAdapterDriver>true</NetAdapterDriver>
     <NETADAPTER_VERSION_MAJOR>2</NETADAPTER_VERSION_MAJOR>
-    <NETADAPTER_VERSION_MINOR>2</NETADAPTER_VERSION_MINOR>
+    <NETADAPTER_VERSION_MINOR>1</NETADAPTER_VERSION_MINOR>
     <WifiDriver>true</WifiDriver>
     <WIFI_VERSION_MAJOR>1</WIFI_VERSION_MAJOR>
     <WIFI_VERSION_MINOR>0</WIFI_VERSION_MINOR>
@@ -80,6 +83,9 @@
       <!-- sdbus.lib: SdBusOpenInterface and SdBusSubmitRequest.
            WificxTLVGenParse.lib: Microsoft's WDI TLV generator/parser (C++);
            libcntpr.lib: the __security_push/pop_cookie it references. -->
+      <!-- BwlPreEntry writes a breadcrumb without WDF, then calls the KMDF
+           stub's FxDriverEntry (which binds KMDF and the class extensions). -->
+      <EntryPointSymbol>BwlPreEntry</EntryPointSymbol>
       <AdditionalDependencies>$(DDK_LIB_PATH)sdbus.lib;$(DDK_LIB_PATH)ntstrsafe.lib;$(DDK_LIB_PATH)wlan\2.0\WificxTLVGenParse.lib;$(DDK_LIB_PATH)libcntpr.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
