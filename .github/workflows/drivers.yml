@@ -223,6 +223,7 @@ jobs:
           }
           $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board nosuch -Plan
           if ($LASTEXITCODE -ne 2) { throw "an unknown board should exit 2, got $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0
 
   release:
     name: Rolling "ci" release (driver package)
