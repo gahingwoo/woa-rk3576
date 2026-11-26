@@ -95,6 +95,8 @@ jobs:
               $T/dxva_check.c $L/vdpu383_h264.c $L/vdpu383_cabac.c $L/vdpu383_hevc.c $L/vdpu383_hevc_cabac.c \
               $L/vdpu383_vp9.c $L/vdpu383_vp9_probs.c $L/vdpu383_av1.c $L/vdpu383_av1_cdf.c
           ./vdpu383test selftest
+          # the driver's session rules (vdpu383_check.h) on the null device
+          ./vdpu383test --null sessiontest
           # the library alone, freestanding: no libc headers, no floats
           gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -mgeneral-regs-only -Wall -Wextra -Werror \
               -c $L/vdpu383_h264.c -o /dev/null
@@ -120,10 +122,11 @@ jobs:
           while read -r name frames; do
             curl -sfL --retry 3 -o "$name.bit" "https://fate-suite.ffmpeg.org/hevc-conformance/$name.bit"
             for mode in "" --dxva-only; do
-              out=$(../vdpu383test --null decode "$name.bit" $mode)
+              out=$(../vdpu383test --null --session decode "$name.bit" $mode)
               echo "$out" | grep -E '^(rps check|pictures|RASL)' | sed "s/^/$name ${mode:-sps}: /"
               echo "$out" | grep -q "frames out $frames," || { echo "$name: expected $frames frames"; fail=1; }
               echo "$out" | grep -q "with the SPS's sets 0 differ; rebuilt from DXVA 0 differ, 0 had no table" || fail=1
+              echo "$out" | grep -q "session check: 0 decodes refused" || { echo "$name: session check"; fail=1; }
             done
           done <<'LIST'
           RPS_A_docomo_4 44
@@ -155,10 +158,11 @@ jobs:
                  ffmpeg -nostdin -v error -i "$name.webm" -c copy -copyinkf -f ivf "$name.ivf" ;;
             esac
             for mode in "" --dxva-only; do
-              out=$(../vdpu383test --null decode "$name.ivf" $mode) || { echo "$name: exit $?"; fail=1; }
+              out=$(../vdpu383test --null --session decode "$name.ivf" $mode) || { echo "$name: exit $?"; fail=1; }
               echo "$out" | grep -E '^(vp9|address check)' | sed "s/^/$name ${mode:-parser}: /"
               echo "$out" | grep -q "frames out $frames," || { echo "$name: expected $frames frames"; fail=1; }
               echo "$out" | grep -q "address check: 0 frames" || fail=1
+              echo "$out" | grep -q "session check: 0 decodes refused" || { echo "$name: session check"; fail=1; }
             done
           done <<'LIST'
           vp90-2-00-quantizer-00 2
@@ -197,10 +201,11 @@ jobs:
           while read -r dir name frames; do
             curl -sfL --retry 3 -o "$name.ivf" "https://fate-suite.ffmpeg.org/$dir/$name.ivf"
             for mode in "" --dxva-only "--dxva-only --av1-synth 1"; do
-              out=$(../vdpu383test --null decode "$name.ivf" $mode) || { echo "$name: exit $?"; fail=1; }
+              out=$(../vdpu383test --null --session decode "$name.ivf" $mode) || { echo "$name: exit $?"; fail=1; }
               echo "$out" | grep -E '^(av1|address check)' | sed "s/^/$name ${mode:-parser}: /"
               echo "$out" | grep -q "frames out $frames," || { echo "$name: expected $frames frames"; fail=1; }
               echo "$out" | grep -q "address check: 0 frames" || fail=1
+              echo "$out" | grep -q "session check: 0 decodes refused" || { echo "$name: session check"; fail=1; }
             done
           done <<'LIST'
           av1-test-vectors av1-1-b8-02-allintra 39
