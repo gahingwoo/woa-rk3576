@@ -67,6 +67,39 @@ def read_table(path):
     return rows
 
 
+def inf_source_files(inf):
+    """The file names an INF's [SourceDisksFiles*] sections list."""
+    raw = open(inf, 'rb').read()
+    enc = 'utf-16' if raw[:2] in (b'\xff\xfe', b'\xfe\xff') else 'latin-1'
+    out, sec = set(), ''
+    for line in raw.decode(enc).splitlines():
+        line = line.split(';', 1)[0].strip()
+        if line.startswith('[') and line.endswith(']'):
+            sec = line[1:-1].strip().lower()
+        elif sec.startswith('sourcedisksfiles') and '=' in line:
+            out.add(line.split('=', 1)[0].strip())
+    return out
+
+
+def complete_driver(src_dir, dst):
+    """Copy what the folder's INFs list but the extension filter left out
+    (malivk.json, the Vulkan ICD manifest, was the first); return the names
+    still missing. pnputil refuses a package with any of them missing."""
+    missing = []
+    have = {f.lower() for f in os.listdir(dst)}
+    for inf in sorted(f for f in os.listdir(dst) if f.lower().endswith('.inf')):
+        for name in sorted(inf_source_files(os.path.join(dst, inf))):
+            if name.lower() in have:
+                continue
+            p = os.path.join(src_dir, name)
+            if os.path.isfile(p):
+                shutil.copy2(p, os.path.join(dst, name))
+                have.add(name.lower())
+            else:
+                missing.append(f'{inf} lists {name}')
+    return missing
+
+
 def copy_driver(src_dir, dst, only=None, skip=None):
     os.makedirs(dst, exist_ok=True)
     n = 0
@@ -137,6 +170,8 @@ def main():
             n = copy_driver(src, dst, only=('malivop',)) if d == 'malivop' else copy_driver(src, dst, skip=('malivop',))
         else:
             n = copy_driver(src, dst)
+        if n:
+            problems += [f'{d}: {m}, not in {src}' for m in complete_driver(src, dst)]
         files = [f.lower() for f in os.listdir(dst)] if n else []
         need = ['.inf', '.cat'] + ([] if d in NULL_DRIVERS else ['.sys'])
         for ext in need:

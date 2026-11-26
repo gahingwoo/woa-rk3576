@@ -44,7 +44,7 @@ def touch(path, data=b'x'):
         f.write(data)
 
 
-def make_inputs(top, skip_sys=None):
+def make_inputs(top, skip_sys=None, skip_gpu_file=None):
     woa = os.path.join(top, 'woa')
     gpu = os.path.join(top, 'gpu')
     for d, _, _, frm, _ in table_rows():
@@ -56,9 +56,13 @@ def make_inputs(top, skip_sys=None):
             if d not in NULLS and d != skip_sys:
                 touch(os.path.join(p, d + '.sys'))
     touch(os.path.join(woa, 'woa-drivers', 'signer.cer'))
-    for n in ('maliwddm.inf', 'maliwddm.cat', 'maliwddm.sys', 'maliumd.dll',
+    for n in ('maliwddm.cat', 'maliwddm.sys', 'maliumd.dll', 'malivk.json',
               'malivop.inf', 'malivop.cat'):
-        touch(os.path.join(gpu, 'driver', n))
+        if n != skip_gpu_file:
+            touch(os.path.join(gpu, 'driver', n))
+    # An INF that lists a file the extension filter does not take (the Vulkan ICD manifest).
+    touch(os.path.join(gpu, 'driver', 'maliwddm.inf'),
+          b'[SourceDisksFiles]\r\nmaliwddm.sys = 1\r\nmaliumd.dll = 1 ; UMD\r\nmalivk.json = 1\r\n')
     touch(os.path.join(gpu, 'wddm-mali-g52-test.cer'))
     npu = os.path.join(top, 'npu.zip')
     with zipfile.ZipFile(npu, 'w') as z:
@@ -107,6 +111,18 @@ class Assemble(unittest.TestCase):
             r, _ = run(top, *make_inputs(top, skip_sys='es8323'))
             self.assertNotEqual(r.returncode, 0)
             self.assertIn('es8323: no .sys', r.stdout)
+
+    def test_inf_listed_file_is_packed(self):
+        with tempfile.TemporaryDirectory() as top:
+            r, out = run(top, *make_inputs(top))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertTrue(os.path.isfile(os.path.join(out, 'rk3576-drivers', 'drivers', 'maliwddm', 'malivk.json')))
+
+    def test_inf_listed_file_missing_fails(self):
+        with tempfile.TemporaryDirectory() as top:
+            r, _ = run(top, *make_inputs(top, skip_gpu_file='malivk.json'))
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn('maliwddm: maliwddm.inf lists malivk.json', r.stdout)
 
     def test_null_inf_names_amzn0001(self):
         with open(os.path.join(HERE, '..', '..', 'drivers', 'null', 'rk3576-null.inf'), encoding='ascii') as f:
