@@ -25,12 +25,14 @@ A switch reads the mode, asks, sets it, reads it back, resets the module
 (AT+CFUN=1,1: it drops off USB for 20 to 40 s), waits for the AT port to
 answer again, reads the mode back once more and lists the USB functions.
 For MBIM it then checks that a CDC MBIM function (02/0E) is bound to the
-in-box driver (service cxwmbclass on 23H2, wmbclass on older builds).
+in-box driver (service cxwmbclass on 23H2, wmbclass on older builds) and
+waits up to 100 s for the mobile broadband interface.
 
 Exit codes: 0 done and checked; 1 cancelled or an AT command failed;
 2 the read-back did not match; 3 no AT COM port; 4 the module did not come
 back in time; 5 the mode is set but the MBIM function is missing or has no
-driver.
+driver; 6 the MBIM function is bound but the module never answers MBIM OPEN,
+so Windows creates no mobile broadband interface.
 
 .PARAMETER Port
 The AT port, for example COM6, instead of looking it up.
@@ -102,34 +104,52 @@ function Find-AtPort {
 }
 
 function Invoke-At {
-    # Sends one command, returns its lines up to the final result code.
-    param([string]$Cmd, [int]$TimeoutMs = 5000, [switch]$NoReply)
+    # Sends one command and reads until its final result code (OK, ERROR,
+    # +CME ERROR, +CMS ERROR, NO CARRIER) or the timeout. Returns an object:
+    # Final = that result line ($null on timeout), Lines = the other lines.
+    # The echo, blank lines and URCs that arrive in between (+QIND, +QUSIM,
+    # +CPIN, RDY, ...) do not end the read; a caller matches its own lines.
+    param([string]$Cmd, [int]$TimeoutMs = 10000, [switch]$NoReply)
     $sp = New-Object System.IO.Ports.SerialPort $script:AtPort, 115200, 'None', 8, 'One'
     $sp.DtrEnable = $true; $sp.RtsEnable = $true
-    $sp.ReadTimeout = 200; $sp.NewLine = "`r"
+    $sp.ReadTimeout = 200
     $sp.Open()
     try {
+        Start-Sleep -Milliseconds 100
         $sp.DiscardInBuffer()
         $sp.Write("$Cmd`r")
-        if ($NoReply) { Start-Sleep -Milliseconds 300; return @() }
-        $buf = ''; $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
-        while ([DateTime]::UtcNow -lt $deadline) {
+        if ($NoReply) { Start-Sleep -Milliseconds 300; return [pscustomobject]@{ Final = $null; Lines = @() } }
+        $buf = ''; $lines = New-Object System.Collections.ArrayList; $final = $null
+        $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+        while ($null -eq $final -and [DateTime]::UtcNow -lt $deadline) {
             try { $buf += $sp.ReadExisting() } catch {}
-            if ($buf -match '(?m)^(OK|ERROR|\+CME ERROR:.*|\+CMS ERROR:.*)\r?$') { break }
-            Start-Sleep -Milliseconds 50
+            # take complete lines only; a partial line stays in $buf
+            while ($buf -match '^([^\r\n]*)[\r\n]+') {
+                $line = $Matches[1].Trim(); $buf = $buf.Substring($Matches[0].Length)
+                if (-not $line -or $line -eq $Cmd) { continue }
+                if ($line -match '^(OK|ERROR|NO CARRIER|\+CME ERROR:.*|\+CMS ERROR:.*)$') { $final = $line; break }
+                [void]$lines.Add($line)
+            }
+            if ($null -eq $final) { Start-Sleep -Milliseconds 50 }
         }
-        $lines = @($buf -split "[`r`n]+" | Where-Object { $_ -and $_ -ne $Cmd })
-        return $lines
+        return [pscustomobject]@{ Final = $final; Lines = @($lines) }
     } finally { $sp.Close(); $sp.Dispose() }
 }
 
-function Test-Ok { param($Lines) return (@($Lines) -contains 'OK') }
+function Test-Ok { param($Reply) return ($Reply.Final -eq 'OK') }
 
 function Read-UsbNet {
     $r = Invoke-At 'AT+QCFG="usbnet"'
-    foreach ($l in $r) { if ($l -match '"usbnet",\s*(\d+)') { return [int]$Matches[1] } }
-    Write-Host ('AT+QCFG="usbnet" gave: ' + ($r -join ' | '))
+    foreach ($l in $r.Lines) { if ($l -match '^\+QCFG:\s*"usbnet",\s*(\d+)') { return [int]$Matches[1] } }
+    Write-Host ('AT+QCFG="usbnet" gave: ' + (@($r.Lines) + @($r.Final) -join ' | '))
     return $null
+}
+
+function Get-MbnInterface {
+    # The WWAN service's view: $true once it created a mobile broadband
+    # interface, which needs the module to have answered MBIM OPEN.
+    $o = (netsh mbn show interfaces) -join "`n"
+    return ($o -match '(?m)^\s*Name\s*:')
 }
 
 function Show-Functions {
@@ -155,14 +175,18 @@ Write-Host "AT port: $script:AtPort"
 
 $cur = Read-UsbNet
 if ($null -eq $cur) { Write-Host 'The module did not report its usbnet mode.'; exit 1 }
-$rev = (Invoke-At 'AT+QGMR') | Where-Object { $_ -ne 'OK' } | Select-Object -First 1
+$rev = @((Invoke-At 'AT+QGMR').Lines | Where-Object { $_ -match '^EC|^EG|^EM|R\d\dA' })[0]
 Write-Host ("Firmware: $rev")
 Write-Host ("usbnet: $cur, " + $ModeName[$cur])
 
 if ($Status) {
     $f = Show-Functions
     $m = @($f | Where-Object { $_.Role -eq 'MBIM' })
-    if ($m.Count) { Write-Host ("MBIM function: " + $m[0].Status + ", service " + $m[0].Service) }
+    if ($m.Count) {
+        Write-Host ("MBIM function: " + $m[0].Status + " (problem " + $m[0].Problem + "), service " + $m[0].Service)
+        if (Get-MbnInterface) { Write-Host 'Mobile broadband interface: present (netsh mbn show interfaces)' }
+        else { Write-Host 'Mobile broadband interface: none. The WWAN service creates it only after the module answers MBIM OPEN.' }
+    }
     exit 0
 }
 
@@ -171,9 +195,15 @@ if ($cur -eq $want) {
     Write-Host ("Already in " + $ModeName[$want] + " mode; nothing to set.")
 } else {
     if (-not $PSCmdlet.ShouldProcess("EC20 on $script:AtPort", "set usbnet $want (" + $ModeName[$want] + "), stored in the module, then reset it")) { exit 1 }
-    if (-not (Test-Ok (Invoke-At "AT+QCFG=`"usbnet`",$want"))) { Write-Host 'The module refused the mode.'; exit 1 }
+    $r = Invoke-At "AT+QCFG=`"usbnet`",$want" -TimeoutMs 15000
+    # The read-back decides, not the reply: on the TaishanPi (2026-11-26) the
+    # set worked while the reply was not recognised, and the reset was skipped.
     $rb = Read-UsbNet
-    if ($rb -ne $want) { Write-Host "Read-back before the reset: $rb, expected $want. This firmware may not support it."; exit 2 }
+    if ($rb -ne $want) {
+        if ($r.Final -and $r.Final -ne 'OK') { Write-Host ("The module refused the mode: " + $r.Final); exit 1 }
+        Write-Host "Read-back before the reset: $rb, expected $want. This firmware may not support it."; exit 2
+    }
+    if ($r.Final -ne 'OK') { Write-Host ("The set gave '" + $r.Final + "' but the read-back shows $rb; going on.") }
     Write-Host "Set and read back: $rb"
     if ($NoReset) { Write-Host 'Not reset (-NoReset): the mode takes effect at the next power cycle.'; exit 0 }
 }
@@ -206,11 +236,33 @@ if ($want -eq 2) {
         Write-Host 'cannot group the two MBIM interfaces. Switch back with -Revert and report this.'
         exit 5
     }
+    $mbimSilent = @('No mobile broadband interface: the module did not answer MBIM OPEN, and cxwmbclass',
+        'stopped the device (code 43). Restarting the device only repeats the 80 s cycle.',
+        'See docs/dev/ec20.md, "MBIM on this firmware".')
+    if ($m[0].Service -match '^(cx)?wmbclass$' -and $m[0].Problem -eq 43) {
+        $mbimSilent | ForEach-Object { Write-Host $_ }
+        exit 6
+    }
     if ($m[0].Status -ne 'OK' -or $m[0].Service -notmatch '^(cx)?wmbclass$') {
         Write-Host ('The MBIM function is ' + $m[0].Status + ' with service "' + $m[0].Service + '", not OK on the in-box MBIM driver.')
         exit 5
     }
-    Write-Host ('MBIM is bound to ' + $m[0].Service + '. Settings > Network & internet > Cellular should be there now.')
+    # Bound is not enough: cxwmbclass sends MBIM OPEN at start, retries at
+    # 12 s and 36 s, sends CLOSE at 72 s and fails the device (code 43) at
+    # about 80 s if the module never answers. Wait for one or the other.
+    Write-Host 'Waiting for the WWAN service to create the mobile broadband interface (up to 100 s)...'
+    $mid = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like "USB\VID_$Vid&PID_$Pid_&MI_04*" })[0]
+    $deadline = (Get-Date).AddSeconds(100); $ok = $false
+    while ((Get-Date) -lt $deadline) {
+        if (Get-MbnInterface) { $ok = $true; break }
+        if ($mid) { $d = Get-PnpDevice -InstanceId $mid.InstanceId -ErrorAction SilentlyContinue; if ($d -and $d.ConfigManagerErrorCode -ne 0) { break } }
+        Start-Sleep -Seconds 3
+    }
+    if (-not $ok) {
+        $mbimSilent | ForEach-Object { Write-Host $_ }
+        exit 6
+    }
+    Write-Host ('MBIM is up on ' + $m[0].Service + '. Settings > Network & internet > Cellular should be there now.')
     Write-Host 'Check: netsh mbn show interfaces ; netsh mbn show readyinfo *'
 } else {
     Write-Host 'Back in QMI mode: MI_04 is again without a Windows driver (expected; regress whitelists it).'

@@ -64,7 +64,7 @@ at() {
 	end=$((SECONDS + to))
 	while [ $SECONDS -lt $end ]; do
 		IFS= read -r -t 1 line <&3 || continue
-		line=${line%$'\r'}
+		line=${line%%$'\r'*}
 		[ -z "$line" ] || [ "$line" = "$cmd" ] && continue
 		out+="$line"$'\n'
 		case $line in OK|ERROR|"+CME ERROR"*|"+CMS ERROR"*) break ;; esac
@@ -138,9 +138,15 @@ else
 		printf 'Set usbnet %s (stored in the module, Windows and Linux both see it) and reset the module? [y/N] ' "$want"
 		read -r a; [ "$a" = y ] || [ "$a" = Y ] || exit 1
 	fi
-	at "AT+QCFG=\"usbnet\",$want" | grep -qx OK || { echo "the module refused the mode"; exit 1; }
+	# the read-back decides, not the reply (a URC or a slow reply must not
+	# skip the reset); only a final ERROR with no change counts as refused
+	reply=$(at "AT+QCFG=\"usbnet\",$want" 15 | tail -n1)
 	rb=$(read_usbnet)
-	[ "$rb" = "$want" ] || { echo "read-back before the reset: $rb, expected $want"; exit 2; }
+	if [ "$rb" != "$want" ]; then
+		case $reply in ERROR|"+CME ERROR"*) echo "the module refused the mode: $reply"; exit 1 ;; esac
+		echo "read-back before the reset: $rb, expected $want"; exit 2
+	fi
+	[ "$reply" = OK ] || echo "the set gave '$reply' but the read-back shows $rb; going on"
 	echo "set and read back: $rb"
 	if [ $NORESET -eq 1 ]; then echo "not reset (-n): takes effect at the next power cycle"; exit 0; fi
 	echo "resetting the module (AT+CFUN=1,1); it leaves USB for 20 to 40 s"
