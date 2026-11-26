@@ -16,8 +16,13 @@ Expected:
 
 - watchdog **on**: the screen freezes and the board resets by itself within
   about 3 minutes (the hardware period is about 179 s; see edk2-rk3576
-  `Wdat.aslc`). The next boot's serial log says
-  "AcpiPlatform: watchdog: ... last reset WAS the watchdog".
+  `Wdat.aslc`), with no ResetSystem in the serial log before it. The next
+  boot's log says "AcpiPlatform: watchdog: ... last reset WAS the watchdog"
+  only where the chip keeps its reset record. On the TaishanPi 3M the
+  watchdog reset power-cycles the chip through the PMIC and the record is
+  lost, so the log says "last reset cause unknown"
+  (edk2-rk3576 PR #7; older firmware says "was not the watchdog" there).
+  The reset itself is the result to look for.
 - watchdog **off**: the board stays frozen until the power is cut.
 
 Then `sc delete wdthang` (the service is demand-start, so it does not load at
