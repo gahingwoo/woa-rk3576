@@ -53,7 +53,23 @@ Environment:
 // Bumped whenever the set of values changes, so a reading can be matched to
 // the build that wrote it.
 //
-#define SDIO_DIAG_VERSION   3
+#define SDIO_DIAG_VERSION   4
+
+static
+ULONG64
+SdioDiagTicksToUs(
+    _In_ PMSHC_EXTENSION MshcExtension,
+    _In_ LONG64 Ticks
+    )
+{
+    LONG64 Frequency = MshcExtension->Xfer.TickFrequency;
+
+    if ((Frequency <= 0) || (Ticks <= 0)) {
+        return 0;
+    }
+    return (ULONG64)(Ticks / Frequency) * 1000000ULL +
+           (ULONG64)(Ticks % Frequency) * 1000000ULL / (ULONG64)Frequency;
+}
 
 static
 VOID
@@ -135,14 +151,19 @@ SdioDiagWrite(
     SdioDiagSetDword(Key, L"OwnWaits", (ULONG)MshcExtension->Xfer.OwnWaits);
     SdioDiagSetDword(Key, L"OwnTimeouts", (ULONG)MshcExtension->Xfer.OwnTimeouts);
     SdioDiagSetDword(Key, L"XferErrors", (ULONG)MshcExtension->Xfer.DataErrors);
-    SdioDiagSetQword(
-        Key,
-        L"DmaMicroseconds",
-        (MshcExtension->Xfer.TickFrequency > 0) ?
-            (ULONG64)(MshcExtension->Xfer.DmaTicks / MshcExtension->Xfer.TickFrequency) * 1000000ULL +
-            (ULONG64)(MshcExtension->Xfer.DmaTicks % MshcExtension->Xfer.TickFrequency) * 1000000ULL /
-                (ULONG64)MshcExtension->Xfer.TickFrequency :
-            0);
+    SdioDiagSetQword(Key, L"DmaMicroseconds", SdioDiagTicksToUs(MshcExtension, MshcExtension->Xfer.DmaTicks));
+    SdioDiagSetQword(Key, L"IssueToDtoMicroseconds", SdioDiagTicksToUs(MshcExtension, MshcExtension->Xfer.IssueToDtoTicks));
+    SdioDiagSetQword(Key, L"DtoToCompleteMicroseconds", SdioDiagTicksToUs(MshcExtension, MshcExtension->Xfer.DtoToCompleteTicks));
+    SdioDiagSetQword(Key, L"GapMicroseconds", SdioDiagTicksToUs(MshcExtension, MshcExtension->Xfer.GapTicks));
+    SdioDiagSetQword(Key, L"GapMaxMicroseconds", SdioDiagTicksToUs(MshcExtension, MshcExtension->Xfer.GapMaxTicks));
+    SdioDiagSetDword(Key, L"Gaps", (ULONG)MshcExtension->Xfer.Gaps);
+    SdioDiagSetDword(Key, L"GapsUnder1ms", (ULONG)MshcExtension->Xfer.GapBuckets[0]);
+    SdioDiagSetDword(Key, L"GapsUnder10ms", (ULONG)MshcExtension->Xfer.GapBuckets[1]);
+    SdioDiagSetDword(Key, L"GapsUnder50ms", (ULONG)MshcExtension->Xfer.GapBuckets[2]);
+    SdioDiagSetDword(Key, L"GapsUnder200ms", (ULONG)MshcExtension->Xfer.GapBuckets[3]);
+    SdioDiagSetDword(Key, L"GapsLonger", (ULONG)MshcExtension->Xfer.GapBuckets[4]);
+    SdioDiagSetDword(Key, L"CommandsInGaps", (ULONG)MshcExtension->Xfer.CommandsInGaps);
+    SdioDiagSetDword(Key, L"Isrs", (ULONG)MshcExtension->Xfer.Isrs);
 
     if (!MshcExtension->IsSdio) {
         ZwClose(Key);
