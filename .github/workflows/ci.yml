@@ -1036,8 +1036,13 @@ jobs:
               Write-Host ("   {0,-14} {1}" -f $sig.Status, (Split-Path $sig.Path -Leaf))
               if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
             }
-            foreach ($f in "$n.inf", "$n.sys", "$n.cat") {
+            $need = @("$n.inf", "$n.sys", "$n.cat")
+            if ($n -eq 'bcmwlsdio') { $need += 'bcmwlwifi.inf', 'bcmwlwifi.cat' }
+            foreach ($f in $need) {
               if (-not (Test-Path (Join-Path $d $f))) { throw "$n package: $f missing" }
+            }
+            Get-ChildItem $d -Filter *.inf | ForEach-Object {
+              Write-Host ("   {0}: {1}" -f $_.Name, ((Select-String -Path $_.FullName -Pattern '^DriverVer').Line))
             }
           }
           Copy-Item drivers\net\bcmwlsdio\install-firmware.ps1, drivers\net\bcmwlsdio\README.md $pkg -Force

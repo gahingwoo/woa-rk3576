@@ -5,7 +5,8 @@ GPL-2.0-only, the licence in the [LICENSE](../../../LICENSE) file at the
 repository root.
 
 The chip and protocol files (`bwl_regs.h`, `bwl_sdio.c`, `bwl_chip.c`,
-`bwl_bringup.c`, `bwl_fw.c`, `bwl_proto.c`, `bwl_ctl.c`) follow OpenBSD's
+`bwl_bringup.c`, `bwl_fw.c`, `bwl_proto.c`, `bwl_ctl.c`, `bwl_wlan.c`,
+`bwl_data.c`) follow OpenBSD's
 `bwfm` driver (`sys/dev/ic/bwfm.c`, `bwfmreg.h`,
 `sys/dev/sdmmc/if_bwfm_sdio.c`, `if_bwfm_sdio.h`): its register values,
 structure layouts and the order of its bring-up steps. `bwfm` is
@@ -22,8 +23,13 @@ table (`bwl_chip.c`) takes its RAM base and save/restore check from both
 message-busy control, "AOS no decode") from brcmfmac, which has them and
 `bwfm` does not. No GPL-only Linux code is used.
 
+`wificx.cpp` and `netadapter.c` are aic8800usb's WiFiCx front end and
+network adapter (this repository, GPL-2.0-only) on top of this core; the
+802.11 conversions in `bwl_data.c` are aic8800usb's too.
+
 Nothing from Microsoft's driver samples is used. The driver links against
-the WDK's `sdbus.lib` and `ntstrsafe.lib`, as the other drivers here link
+the WDK's `sdbus.lib`, `ntstrsafe.lib` and `WificxTLVGenParse.lib` (the WDI
+TLV library), as the other drivers here link
 the WDK's libraries.
 
 The firmware files the driver loads are not part of this repository; see

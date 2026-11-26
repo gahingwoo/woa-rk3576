@@ -49,6 +49,18 @@
     <!-- Must be declared here: the WDK targets read it at Cpp.props time. -->
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
     <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
+    <!--
+      NetAdapterCx 2.2 and WiFiCx 1.0: what Windows 11 22H2/23H2 (22621)
+      has for a WiFiCx client (docs/dev/wificx.md). Both bind when the
+      driver loads, under either INF; the bring-up (bcmwlsdio.inf, Class
+      System) simply never calls them.
+    -->
+    <NetAdapterDriver>true</NetAdapterDriver>
+    <NETADAPTER_VERSION_MAJOR>2</NETADAPTER_VERSION_MAJOR>
+    <NETADAPTER_VERSION_MINOR>2</NETADAPTER_VERSION_MINOR>
+    <WifiDriver>true</WifiDriver>
+    <WIFI_VERSION_MAJOR>1</WIFI_VERSION_MAJOR>
+    <WIFI_VERSION_MINOR>0</WIFI_VERSION_MINOR>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -60,11 +72,15 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <!-- _KERNEL_MODE is predefined by the WDK toolset; redefining it is C4117. -->
       <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <!-- ntddsd.h and sddef.h are in Include\<ver>\km. -->
+      <!-- ntddsd.h and sddef.h are in Include\<ver>\km; the WDI TLV
+           generator/parser (wificx.cpp) in km\wlan\2.0. -->
+      <AdditionalIncludeDirectories>$(DDK_INC_PATH)wlan\2.0;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <!-- sdbus.lib: SdBusOpenInterface and SdBusSubmitRequest. -->
-      <AdditionalDependencies>$(DDK_LIB_PATH)sdbus.lib;$(DDK_LIB_PATH)ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- sdbus.lib: SdBusOpenInterface and SdBusSubmitRequest.
+           WificxTLVGenParse.lib: Microsoft's WDI TLV generator/parser (C++);
+           libcntpr.lib: the __security_push/pop_cookie it references. -->
+      <AdditionalDependencies>$(DDK_LIB_PATH)sdbus.lib;$(DDK_LIB_PATH)ntstrsafe.lib;$(DDK_LIB_PATH)wlan\2.0\WificxTLVGenParse.lib;$(DDK_LIB_PATH)libcntpr.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>
@@ -82,6 +98,14 @@
     <ClCompile Include="bwl_fw.c" />
     <ClCompile Include="bwl_proto.c" />
     <ClCompile Include="bwl_ctl.c" />
+    <ClCompile Include="bwl_wlan.c" />
+    <ClCompile Include="bwl_data.c" />
+    <ClCompile Include="netadapter.c" />
+    <!-- C++: the WiFiCx front end. No sized deallocation: with it the
+         array placement new in arrayofelements.hpp is ill-formed (C2956). -->
+    <ClCompile Include="wificx.cpp">
+      <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
   </ItemGroup>
 
   <ItemGroup>
@@ -92,6 +116,7 @@
 
   <ItemGroup>
     <Inf Include="bcmwlsdio.inf" />
+    <Inf Include="bcmwlwifi.inf" />
   </ItemGroup>
 
 

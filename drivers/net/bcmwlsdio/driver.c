@@ -1,14 +1,23 @@
 /*
  * driver.c - bcmwlsdio: KMDF function driver for the BCM43456 (AP6256)
  * SDIO Wi-Fi on the TaishanPi 3M and the BCM43752 (BW3752-50B1) on the
- * ArmSoM CM5. W3: bring-up only, see docs/dev/wifi.md. The firmware file
- * names come from the chip ID (BwlChipFwName): brcmfmac43456-sdio.* or
- * brcmfmac43752-sdio.*.
+ * ArmSoM CM5; see docs/dev/wifi.md. The firmware file names come from the
+ * chip ID (BwlChipFwName): brcmfmac43456-sdio.* or brcmfmac43752-sdio.*.
  *
- * PnP: PrepareHardware opens the SDBUS interface, SelfManagedIoInit
- * queues the bring-up on a work item (it takes seconds and must not hold
- * up the PnP start), SelfManagedIoSuspend stops it and halts the chip's
- * CPU, ReleaseHardware closes the interface.
+ * Stages 0 to 2 (bring-up): PrepareHardware opens the SDBUS interface,
+ * SelfManagedIoInit queues the bring-up on a work item (it takes seconds
+ * and must not hold up the PnP start), SelfManagedIoSuspend stops it and
+ * halts the chip's CPU, ReleaseHardware closes the interface.
+ *
+ * Stage 3 (Wi-Fi adapter, bcmwlwifi.inf, function 1 only): DeviceAdd sets
+ * the device up for NetAdapterCx and WiFiCx; PrepareHardware runs the same
+ * bring-up synchronously (WiFiCx wants the capabilities before it returns),
+ * then the firmware's station set-up, then reports the capabilities;
+ * SelfManagedIoInit starts the worker thread (wificx.cpp BwlWifiRun), which
+ * from then on is the only thread that talks to the card: WDI requests,
+ * the poller, the TX FIFO. Suspend stops the worker and leaves the
+ * firmware running; ReleaseHardware halts the chip. No work runs at DIRQL:
+ * there is no interrupt, the card is polled at PASSIVE_LEVEL.
  *
  * Everything is reported under the device's registry key (Device
  * Parameters) and flushed; docs/dev/wifi.md lists the values.
@@ -27,7 +36,17 @@ static EVT_WDF_DEVICE_RELEASE_HARDWARE BwlEvtReleaseHardware;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_INIT BwlEvtSelfManagedIoInit;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_SUSPEND BwlEvtSelfManagedIoSuspend;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_CLEANUP BwlEvtSelfManagedIoCleanup;
+static EVT_WDF_DEVICE_SELF_MANAGED_IO_RESTART BwlEvtSelfManagedIoRestart;
 static EVT_WDF_WORKITEM BwlEvtBringUp;
+static EVT_WDF_OBJECT_CONTEXT_CLEANUP BwlEvtDeviceCleanup;
+static KSTART_ROUTINE BwlWorkerMain;
+
+/* {4d36e972-e325-11ce-bfc1-08002be10318}: the Net setup class */
+static const GUID BwlNetClassGuid = { 0x4d36e972, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } };
+/* DEVPKEY_Device_InstanceId */
+static const DEVPROPKEY BwlInstanceIdKey = {
+    { 0x78c34fc8, 0x104a, 0x4aca, { 0x9e, 0xa4, 0x52, 0x4d, 0x52, 0x99, 0x6e, 0x57 } }, 256
+};
 
 /* ------------------------------------------------------------ registry */
 
@@ -87,8 +106,8 @@ BwlPutString(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ PCSTR Value)
     ExFreePoolWithTag(buf, BWL_POOL_TAG);
 }
 
-static ULONG
-GetULong(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Default)
+ULONG
+BwlGetULong(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Default)
 {
     WDFKEY key;
     UNICODE_STRING n;
@@ -102,6 +121,41 @@ GetULong(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Default)
         WdfRegistryClose(key);
     }
     return v;
+}
+
+ULONG
+BwlGetAscii(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _Out_writes_(Cap) PCHAR Out, _In_ ULONG Cap)
+{
+    DECLARE_UNICODE_STRING_SIZE(v, 128);
+    UNICODE_STRING n;
+    WDFKEY key;
+    ULONG i = 0;
+
+    if (Cap == 0) {
+        return 0;
+    }
+    Out[0] = 0;
+    if (!NT_SUCCESS(OpenKey(Ctx, KEY_READ, &key))) {
+        return 0;
+    }
+    RtlInitUnicodeString(&n, Name);
+    if (NT_SUCCESS(WdfRegistryQueryUnicodeString(key, &n, NULL, &v))) {
+        for (i = 0; i + 1 < Cap && i < v.Length / sizeof(WCHAR) && v.Buffer[i]; i++) {
+            Out[i] = (CHAR)(v.Buffer[i] >= 0x20 && v.Buffer[i] < 0x7F ? v.Buffer[i] : '?');
+        }
+        Out[i] = 0;
+    }
+    WdfRegistryClose(key);
+    return i;
+}
+
+VOID
+BwlDelayMs(_In_ ULONG Ms)
+{
+    LARGE_INTEGER t;
+
+    t.QuadPart = -10000LL * (LONGLONG)Ms;
+    KeDelayExecutionThread(KernelMode, FALSE, &t);
 }
 
 /*
@@ -141,8 +195,9 @@ BwlCrumb(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCSTR Step)
     BWL_LOG("step: %s", Step);
 }
 
-static VOID
-PutCounters(_In_ PBWL_DEVICE_CONTEXT Ctx)
+#define PutCounters BwlPutCounters
+VOID
+BwlPutCounters(_In_ PBWL_DEVICE_CONTEXT Ctx)
 {
     const bwl_stats *s = &Ctx->Bwl.Stats;
 
@@ -272,7 +327,8 @@ RecordConsole(_In_ PBWL_DEVICE_CONTEXT Ctx)
     ExFreePoolWithTag(buf, BWL_POOL_TAG);
 }
 
-static VOID
+/* TRUE when the firmware runs (Stage 2 or more) and answered. */
+static BOOLEAN
 BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
 {
     WDFMEMORY fwMem = NULL, nvMem = NULL, clmMem = NULL, convMem = NULL;
@@ -287,6 +343,7 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
     USHORT blk = 64;
     WDF_OBJECT_ATTRIBUTES attr;
     NTSTATUS status;
+    BOOLEAN ok = FALSE;
     bwl_dev *d = &Ctx->Bwl;
 
     BwlCrumb(Ctx, "bring-up start");
@@ -295,13 +352,13 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
     if (Ctx->Stage == BWL_STAGE_OPEN) {
         BwlPutString(Ctx, L"FwState", "stage 0: SDBUS open, card not touched");
         BwlCrumb(Ctx, "stage 0 done");
-        return;
+        return FALSE;
     }
     if (Ctx->Function != 1) {
         /* The F2 PDO, if sdbus makes one: F1's driver instance does all the work. */
         BwlPutString(Ctx, L"FwState", "idle: not function 1");
         BwlCrumb(Ctx, "not function 1");
-        return;
+        return FALSE;
     }
 
     status = BwlSdSetProperty(Ctx, SDP_FUNCTION_BLOCK_LENGTH, &blk, sizeof(blk));
@@ -316,7 +373,7 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
     if (r) {
         d->Step = "CCCR read";
         Fail(Ctx, r);
-        return;
+        return FALSE;
     }
 
     BwlCrumb(Ctx, "attach");
@@ -324,19 +381,19 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
     RecordChip(Ctx);
     if (r) {
         Fail(Ctx, r);
-        return;
+        return FALSE;
     }
     base = BwlChipFwName(d->Chip, d->ChipRev);
     BwlPutString(Ctx, L"FwState", "identified");
     PutCounters(Ctx);
     if (Ctx->Stage < BWL_STAGE_FIRMWARE) {
         BwlCrumb(Ctx, "stage 1 done");
-        return;
+        return FALSE;
     }
     if (base == NULL) {
         d->Step = "no firmware name for this chip";
         Fail(Ctx, BWL_E_NOCHIP);
-        return;
+        return FALSE;
     }
 
     /* The three files */
@@ -438,6 +495,7 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
     BwlPutString(Ctx, L"FwVersion", text);
     if (BwlVerString(text, BwlStrLen(text), ver, sizeof(ver)) == 0) {
         BwlPutString(Ctx, L"FwVersionNumber", ver);
+        (VOID)RtlStringCbCopyA(Ctx->FwVer, sizeof(Ctx->FwVer), ver);
     }
 
     (VOID)BwlPollOnce(d);
@@ -445,12 +503,14 @@ BringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
     PutCounters(Ctx);
     BwlPutString(Ctx, L"FwState", "running");
     BwlCrumb(Ctx, "firmware running");
+    ok = TRUE;
 
 out:
     if (convMem) WdfObjectDelete(convMem);
     if (clmMem) WdfObjectDelete(clmMem);
     if (nvMem) WdfObjectDelete(nvMem);
     if (fwMem) WdfObjectDelete(fwMem);
+    return ok;
 }
 
 static VOID
@@ -460,14 +520,99 @@ BwlEvtBringUp(_In_ WDFWORKITEM WorkItem)
 
     /* 1 ms timer resolution while polling; restored when done. */
     (VOID)ExSetTimerResolution(10000, TRUE);
-    BringUp(ctx);
+    (VOID)BringUp(ctx);
     (VOID)ExSetTimerResolution(0, FALSE);
+}
+
+/* ------------------------------------------------------------ stage 3 */
+
+/* The firmware and the station, in PrepareHardware; TRUE if both are up. */
+static BOOLEAN
+NetworkUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
+{
+    bwl_dev *d = &Ctx->Bwl;
+    CHAR country[4], text[32];
+    BOOLEAN ok;
+    int r;
+
+    (VOID)ExSetTimerResolution(10000, TRUE);
+    ok = BringUp(Ctx);
+    if (ok) {
+        d->Wlan.Net = &BwlNetOps;
+        (VOID)BwlGetAscii(Ctx, L"Country", country, sizeof(country));
+        BwlCrumb(Ctx, "wlan: set-up");
+        r = BwlWlanInit(d, country[0] ? country : NULL);
+        BwlPutULong(Ctx, L"WlanInitResult", (ULONG)r);
+        BwlPutULong(Ctx, L"WlanFwStatus", d->Wlan.LastFwStatus);
+        BwlPutULong(Ctx, L"IoType", d->Wlan.IoType);
+        BwlPutULong(Ctx, L"Has5GHz", d->Wlan.Has5g);
+        BwlPutULong(Ctx, L"FwSupCapable", d->Wlan.FwSupCapable);
+        (VOID)RtlStringCbPrintfA(text, sizeof(text), "%02x:%02x:%02x:%02x:%02x:%02x", d->Wlan.Mac[0],
+                                 d->Wlan.Mac[1], d->Wlan.Mac[2], d->Wlan.Mac[3], d->Wlan.Mac[4], d->Wlan.Mac[5]);
+        BwlPutString(Ctx, L"MacAddress", text);
+        if (r) {
+            Fail(Ctx, r);
+            ok = FALSE;
+        } else {
+            BwlPutString(Ctx, L"FwState", "station up");
+            BwlCrumb(Ctx, "wlan: up");
+        }
+    }
+    (VOID)ExSetTimerResolution(0, FALSE);
+    PutCounters(Ctx);
+    return ok;
+}
+
+static VOID
+BwlWorkerMain(_In_ PVOID Context)
+{
+    PBWL_DEVICE_CONTEXT ctx = (PBWL_DEVICE_CONTEXT)Context;
+
+    /* 1 ms timer resolution while the card is polled */
+    (VOID)ExSetTimerResolution(10000, TRUE);
+    BwlWifiRun(ctx);
+    (VOID)ExSetTimerResolution(0, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+static NTSTATUS
+StartWorker(_In_ PBWL_DEVICE_CONTEXT Ctx)
+{
+    HANDLE h;
+    NTSTATUS status;
+
+    if (!Ctx->WifiMode || Ctx->Worker != NULL) {
+        return STATUS_SUCCESS;
+    }
+    InterlockedExchange(&Ctx->WorkerStop, 0);
+    status = PsCreateSystemThread(&h, THREAD_ALL_ACCESS, NULL, NULL, NULL, BwlWorkerMain, Ctx);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    status = ObReferenceObjectByHandle(h, THREAD_ALL_ACCESS, *PsThreadType, KernelMode, (PVOID *)&Ctx->Worker,
+                                       NULL);
+    ZwClose(h);
+    return status;
+}
+
+static VOID
+StopWorker(_In_ PBWL_DEVICE_CONTEXT Ctx)
+{
+    if (Ctx->Worker == NULL) {
+        return;
+    }
+    InterlockedExchange(&Ctx->WorkerStop, 1);
+    KeSetEvent(&Ctx->WakeEvent, IO_NO_INCREMENT, FALSE);
+    (VOID)KeWaitForSingleObject(Ctx->Worker, Executive, KernelMode, FALSE, NULL);
+    ObDereferenceObject(Ctx->Worker);
+    Ctx->Worker = NULL;
 }
 
 /* Stop the bring-up; then, with I/O allowed again, halt the chip's CPU and turn F1/F2 off. */
 static VOID
 StopBringUp(_In_ PBWL_DEVICE_CONTEXT Ctx)
 {
+    StopWorker(Ctx);
     if (InterlockedCompareExchange(&Ctx->Stopping, 1, 0) != 0) {
         return;
     }
@@ -496,17 +641,39 @@ BwlEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
     UNREFERENCED_PARAMETER(Translated);
 
     InterlockedExchange(&ctx->Stopping, 0);
-    ctx->Stage = GetULong(ctx, L"Stage", BWL_STAGE_OPEN);
-    ctx->MaxBlocks = GetULong(ctx, L"MaxBlocks", 32);
-    ctx->F2BlockMode = GetULong(ctx, L"F2BlockMode", 0);
-    ctx->Verify = GetULong(ctx, L"Verify", 1);
+    ctx->Stage = BwlGetULong(ctx, L"Stage", BWL_STAGE_OPEN);
+    ctx->MaxBlocks = BwlGetULong(ctx, L"MaxBlocks", 32);
+    ctx->F2BlockMode = BwlGetULong(ctx, L"F2BlockMode", 0);
+    ctx->Verify = BwlGetULong(ctx, L"Verify", 1);
     BwlPutULong(ctx, L"StageSeen", ctx->Stage);
+    if (ctx->Stage >= BWL_STAGE_NETWORK && !ctx->WifiMode) {
+        /* the Class System INF, or not function 1: the bring-up only */
+        BwlCrumb(ctx, "stage 3 without the Wi-Fi adapter (bcmwlwifi.inf, function 1): running stage 2");
+    }
+
+    ctx->PollMs = BwlGetULong(ctx, L"PollMs", 2);
+    ctx->IdlePollMs = BwlGetULong(ctx, L"IdlePollMs", 10);
 
     status = BwlSdOpen(ctx);
     BwlPutULong(ctx, L"SdOpenStatus", (ULONG)status);
     BwlCrumb(ctx, NT_SUCCESS(status) ? "SDBUS open" : "SDBUS open failed");
-    /* The device still starts, so that the breadcrumbs can be read. */
-    return STATUS_SUCCESS;
+    if (!ctx->WifiMode) {
+        /* The device still starts, so that the breadcrumbs can be read. */
+        return STATUS_SUCCESS;
+    }
+
+    /* Stage 3: the firmware now, then the capabilities; WiFiCx asks for
+     * the adapter after this returns (EvtWifiDeviceCreateAdapter). */
+    ctx->FwReady = FALSE;
+    if (NT_SUCCESS(status)) {
+        ctx->FwReady = NetworkUp(ctx);
+        if (ctx->Function != 1) {
+            BwlCrumb(ctx, "stage 3: this instance is not function 1 after all");
+        }
+    }
+    status = BwlWifiReportCapabilities(ctx);
+    BwlPutULong(ctx, L"WifiCapsStatus", (ULONG)status);
+    return status;
 }
 
 static NTSTATUS
@@ -515,7 +682,11 @@ BwlEvtReleaseHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Translated)
     PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
 
     UNREFERENCED_PARAMETER(Translated);
+    StopWorker(ctx);
+    BwlWifiReleaseHardware(ctx);
     StopBringUp(ctx);
+    ctx->FwReady = FALSE;
+    ctx->Bwl.FwRunning = 0;
     BwlSdClose(ctx);
     return STATUS_SUCCESS;
 }
@@ -525,6 +696,10 @@ BwlEvtSelfManagedIoInit(_In_ WDFDEVICE Device)
 {
     PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
 
+    if (ctx->WifiMode) {
+        /* the worker runs the WDI requests even without firmware, to refuse them */
+        return StartWorker(ctx);
+    }
     if (ctx->SdOpen && ctx->BringUp != NULL) {
         WdfWorkItemEnqueue(ctx->BringUp);
     }
@@ -532,9 +707,25 @@ BwlEvtSelfManagedIoInit(_In_ WDFDEVICE Device)
 }
 
 static NTSTATUS
+BwlEvtSelfManagedIoRestart(_In_ WDFDEVICE Device)
+{
+    PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
+
+    /* back from a low-power state: the firmware was left running */
+    return ctx->WifiMode ? StartWorker(ctx) : STATUS_SUCCESS;
+}
+
+static NTSTATUS
 BwlEvtSelfManagedIoSuspend(_In_ WDFDEVICE Device)
 {
-    StopBringUp(BwlGetContext(Device));
+    PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
+
+    if (ctx->WifiMode) {
+        /* stop polling; the chip keeps its firmware for the restart */
+        StopWorker(ctx);
+        return STATUS_SUCCESS;
+    }
+    StopBringUp(ctx);
     return STATUS_SUCCESS;
 }
 
@@ -542,6 +733,113 @@ static VOID
 BwlEvtSelfManagedIoCleanup(_In_ WDFDEVICE Device)
 {
     StopBringUp(BwlGetContext(Device));
+}
+
+static VOID
+BwlEvtDeviceCleanup(_In_ WDFOBJECT Object)
+{
+    PBWL_DEVICE_CONTEXT ctx = BwlGetContext((WDFDEVICE)Object);
+
+    StopWorker(ctx);
+    BwlWifiCleanup(ctx);
+    BwlNetFree(ctx);
+}
+
+/* ------------------------------------------------------------ DeviceAdd */
+
+/* Stage from Device Parameters, before WdfDeviceCreate (through the FDO init). */
+static ULONG
+ReadStage(_In_ PWDFDEVICE_INIT DeviceInit)
+{
+    DECLARE_CONST_UNICODE_STRING(name, L"Stage");
+    WDFKEY key;
+    ULONG v = BWL_STAGE_OPEN;
+
+    if (NT_SUCCESS(WdfFdoInitOpenRegistryKey(DeviceInit, PLUGPLAY_REGKEY_DEVICE, KEY_READ,
+                                             WDF_NO_OBJECT_ATTRIBUTES, &key))) {
+        if (!NT_SUCCESS(WdfRegistryQueryULong(key, &name, &v))) {
+            v = BWL_STAGE_OPEN;
+        }
+        WdfRegistryClose(key);
+    }
+    return v;
+}
+
+static BOOLEAN
+IsNetClass(_In_ PWDFDEVICE_INIT DeviceInit)
+{
+    GUID g;
+    ULONG len = 0;
+
+    RtlZeroMemory(&g, sizeof(g));
+    if (!NT_SUCCESS(WdfFdoInitQueryProperty(DeviceInit, DevicePropertyClassGuid, sizeof(g), &g, &len))) {
+        return FALSE;
+    }
+    return RtlEqualMemory(&g, &BwlNetClassGuid, sizeof(g));
+}
+
+/* The digit after the first "FN_" in a (multi-)string of UTF-16, or 0xFF. */
+static UCHAR
+FindFn(_In_reads_(Chars) const WCHAR *S, _In_ ULONG Chars)
+{
+    ULONG i;
+
+    for (i = 0; i + 3 < Chars; i++) {
+        if ((S[i] == L'F' || S[i] == L'f') && (S[i + 1] == L'N' || S[i + 1] == L'n') && S[i + 2] == L'_' &&
+            S[i + 3] >= L'0' && S[i + 3] <= L'7') {
+            return (UCHAR)(S[i + 3] - L'0');
+        }
+    }
+    return 0xFF;
+}
+
+/*
+ * Which SDIO function this device is, before the device exists (WiFiCx
+ * has to be set up before WdfDeviceCreate, and only function 1 gets it).
+ * sdbus names the function in the device's IDs ("...&FN_1"); the instance
+ * ID, the hardware IDs and the compatible IDs are looked at, in that
+ * order. Which one carries it is recorded (FunctionSource). PrepareHardware
+ * checks the answer against SDP_FUNCTION_NUMBER.
+ */
+static UCHAR
+FunctionFromIds(_In_ PWDFDEVICE_INIT DeviceInit, _Out_ PULONG Source)
+{
+    static const DEVICE_REGISTRY_PROPERTY props[] = { DevicePropertyHardwareID, DevicePropertyCompatibleIDs };
+    WDF_DEVICE_PROPERTY_DATA pd;
+    WDF_OBJECT_ATTRIBUTES attr;
+    DEVPROPTYPE type;
+    WDFMEMORY mem;
+    size_t size;
+    UCHAR fn = 0xFF;
+    ULONG i;
+
+    *Source = 0;
+    WDF_DEVICE_PROPERTY_DATA_INIT(&pd, &BwlInstanceIdKey);
+    WDF_OBJECT_ATTRIBUTES_INIT(&attr);
+    if (NT_SUCCESS(WdfFdoInitAllocAndQueryPropertyEx(DeviceInit, &pd, NonPagedPoolNx, &attr, &mem, &type))) {
+        const WCHAR *w = (const WCHAR *)WdfMemoryGetBuffer(mem, &size);
+
+        fn = FindFn(w, (ULONG)(size / sizeof(WCHAR)));
+        WdfObjectDelete(mem);
+        if (fn != 0xFF) {
+            *Source = 1;
+            return fn;
+        }
+    }
+    for (i = 0; i < RTL_NUMBER_OF(props); i++) {
+        WDF_OBJECT_ATTRIBUTES_INIT(&attr);
+        if (NT_SUCCESS(WdfFdoInitAllocAndQueryProperty(DeviceInit, props[i], NonPagedPoolNx, &attr, &mem))) {
+            const WCHAR *w = (const WCHAR *)WdfMemoryGetBuffer(mem, &size);
+
+            fn = FindFn(w, (ULONG)(size / sizeof(WCHAR)));
+            WdfObjectDelete(mem);
+            if (fn != 0xFF) {
+                *Source = 2 + i;
+                return fn;
+            }
+        }
+    }
+    return 0xFF;
 }
 
 static NTSTATUS
@@ -553,24 +851,65 @@ BwlEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     PBWL_DEVICE_CONTEXT ctx;
     WDFDEVICE device;
     NTSTATUS status;
+    BOOLEAN net, wifi;
+    ULONG stage, source = 0;
+    UCHAR fn;
 
     UNREFERENCED_PARAMETER(Driver);
+
+    /* Stage 3 on function 1 under the Class Net INF: a WiFiCx device.
+     * Every other instance (function 2 and 3, a lower stage, the Class
+     * System INF) is a plain device that does what Stage says. An instance
+     * whose IDs name no function is taken for function 1 (one PDO for the
+     * card), and PrepareHardware tells if that was wrong. */
+    net = IsNetClass(DeviceInit);
+    stage = ReadStage(DeviceInit);
+    fn = FunctionFromIds(DeviceInit, &source);
+    wifi = net && stage >= BWL_STAGE_NETWORK && (fn == 1 || fn == 0xFF);
+    if (wifi) {
+        status = NetDeviceInitConfig(DeviceInit);
+        if (NT_SUCCESS(status)) {
+            status = BwlWifiPreDeviceCreate(DeviceInit);
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+    }
 
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = BwlEvtPrepareHardware;
     pnp.EvtDeviceReleaseHardware = BwlEvtReleaseHardware;
     pnp.EvtDeviceSelfManagedIoInit = BwlEvtSelfManagedIoInit;
     pnp.EvtDeviceSelfManagedIoSuspend = BwlEvtSelfManagedIoSuspend;
+    pnp.EvtDeviceSelfManagedIoRestart = BwlEvtSelfManagedIoRestart;
     pnp.EvtDeviceSelfManagedIoCleanup = BwlEvtSelfManagedIoCleanup;
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnp);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attr, BWL_DEVICE_CONTEXT);
+    attr.EvtCleanupCallback = BwlEvtDeviceCleanup;
     status = WdfDeviceCreate(&DeviceInit, &attr, &device);
     if (!NT_SUCCESS(status)) {
         return status;
     }
     ctx = BwlGetContext(device);
     ctx->Device = device;
+    ctx->WifiMode = wifi;
+    ctx->AddFunction = fn;
+    KeInitializeEvent(&ctx->WakeEvent, SynchronizationEvent, FALSE);
+    KeInitializeSpinLock(&ctx->DataLock);
+    ctx->RxHold = TRUE;
+    BwlPutULong(ctx, L"NetClass", net);
+    BwlPutULong(ctx, L"AddFunction", fn);
+    BwlPutULong(ctx, L"FunctionSource", source);
+    BwlPutULong(ctx, L"ActiveMode", wifi ? 1 : 0);
+    if (wifi) {
+        /* the adapter comes later, when WiFiCx asks for it */
+        status = BwlWifiPostDeviceCreate(ctx);
+        BwlPutULong(ctx, L"WifiInitStatus", (ULONG)status);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+    }
 
     /* Every CMD53 goes through this buffer: non-paged, for the MDLs. */
     WDF_OBJECT_ATTRIBUTES_INIT(&attr);
