@@ -79,7 +79,7 @@ test_nvram(void)
 static void
 test_nvram_exact(void)
 {
-    static const char alpha[] = { 'a', '=', '\n', '#', ' ', '\r' };
+    static const unsigned char alpha[] = { 'a', '=', '\n', '#', ' ', '\r' };
     unsigned len, iter, worst = 0;
     unsigned x = 1;
 
