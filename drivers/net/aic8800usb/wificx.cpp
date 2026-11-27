@@ -92,7 +92,7 @@ typedef struct _AIC_WIFI {
     KSPIN_LOCK Lock;                    /* the ring and Accepting */
     WIFIREQUEST Ring[AIC_WIFI_RING];
     ULONG RingHead, RingCount;
-    BOOLEAN Accepting;                  /* between PrepareHardware and ReleaseHardware or a suspend */
+    BOOLEAN Accepting;                  /* capabilities reported and the worker running */
 
     BOOLEAN HwReady;                    /* firmware up, capabilities reported */
     BOOLEAN RadioOn;
@@ -1198,7 +1198,7 @@ AicWifiResume(_In_ PAIC_DEVICE_CONTEXT Ctx)
         return;
     }
     KeAcquireSpinLock(&W->Lock, &irql);
-    W->Accepting = TRUE;
+    W->Accepting = W->HwReady;
     KeReleaseSpinLock(&W->Lock, irql);
 }
 
@@ -1272,9 +1272,6 @@ AicWifiReportCapabilities(_In_ PAIC_DEVICE_CONTEXT Ctx)
     if (W == NULL) {
         return STATUS_INVALID_DEVICE_STATE;
     }
-    KeAcquireSpinLock(&W->Lock, &irql);
-    W->Accepting = TRUE;
-    KeReleaseSpinLock(&W->Lock, irql);
     W->HwReady = FALSE;
     /* Windows' supplicant gets the EAPOL frames; aic_wpa.c stays idle */
     d->HostAuth = 1;
@@ -1401,6 +1398,11 @@ AicWifiReportCapabilities(_In_ PAIC_DEVICE_CONTEXT Ctx)
         return status;
     }
     W->HwReady = TRUE;
+    /* from here WDI requests queue for the worker, which PrepareHardware
+     * starts next; before, or on a failure above, they are refused at once */
+    KeAcquireSpinLock(&W->Lock, &irql);
+    W->Accepting = TRUE;
+    KeReleaseSpinLock(&W->Lock, irql);
     AicCrumb(Ctx, "wificx: capabilities reported");
     return STATUS_SUCCESS;
 }
