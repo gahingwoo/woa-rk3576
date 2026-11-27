@@ -482,8 +482,8 @@ os_send(harness *h, const u8 *Eth, u32 Len)
     int n = aic_build_tx(&h->D, Eth, Len, b, sizeof(b));
 
     CHECK(n > 0, "build tx %d", n);
-    if (n > 0) {
-        fake_send(&h->F, 0, b, (u32)n);
+    if (n > 0 && fake_send(&h->F, 0, b, (u32)n) == AIC_OK) {
+        aic_tx_note(&h->D, Eth, Len);   /* as TxSend does once the write is sent */
     }
 }
 
@@ -826,7 +826,7 @@ test_wificx_host_auth(void)
     const scanrec *home = NULL;
     const u8 *p, *rsn_req, *rsn_beacon;
     u8 f[2400], e[512], body[512], wrapped[256], plain[256];
-    u32 n, i, blen, kd;
+    u32 n, i, blen, kd, rx0, tx0;
     os_supp S;
     int idx, rc;
 
@@ -870,6 +870,11 @@ test_wificx_host_auth(void)
     CHECK(aic_find_bssid(d, home->Bssid) == 0, "found by BSSID");
     CHECK(aic_bss_from_body(d, home->Bssid, 2437, -40, home->Body, 8) < 0, "short body refused");
 
+    /* wificx.cpp holds the pairwise key back until each EAPOL frame handed
+     * to Windows since the connect was answered: the counters it compares */
+    rx0 = d->Stats.RxEapol;
+    tx0 = d->Stats.TxEapol;
+    CHECK(aic_eapol_owed(d, rx0, tx0) == 0, "nothing owed before the connect");
     rc = aic_connect_start(d, idx);
     /* the simulated AP answers at once, so the association may already be in */
     CHECK(rc == AIC_OK && d->Link != AIC_LINK_DOWN, "connect start without a passphrase: rc %d", rc);
@@ -879,6 +884,7 @@ test_wificx_host_auth(void)
     CHECK((d->Events & AIC_EV_ASSOC) && d->Link == AIC_LINK_ASSOCIATED && d->ConnectStatus == 0,
           "association event, link %d", d->Link);
     CHECK(aic_poll(d) == 0 && d->Stats.RxEapol == 1, "the core leaves message 1 to the OS");
+    CHECK(aic_eapol_owed(d, rx0, tx0) == 1 && d->Stats.TxEapol == tx0, "message 2 owed");
 
     /* the association result Windows gets */
     blen = aic_assoc_req_body(d, body, sizeof(body));
@@ -912,10 +918,13 @@ test_wificx_host_auth(void)
     n = os_eapol(&S, 0x010A, S.Snonce, rsn_req, 2u + rsn_req[1], e);
     n = os_frame(d, d->Bssid, 0x888E, e, n, f);
     CHECK(os_send80211(h, f, n) > 0 && F->Msg2Ok, "message 2 accepted by the AP");
+    CHECK(d->Stats.TxEapol - tx0 == 1 && aic_eapol_owed(d, rx0, tx0) == 0, "message 2 counted as the answer");
 
     /* message 3: MIC, the AP's RSN element as in its beacon, the GTK */
     n = os_recv80211(h, 0x888E, f, &p);
     CHECK(n && aic_be16(p + 5) == 0x13CA, "message 3 reaches Windows");
+    CHECK(d->Stats.RxEapol - rx0 == 2 && aic_eapol_owed(d, rx0, tx0) == 1,
+          "message 4 owed: a pairwise key now would wait");
     if (n == 0) {
         harness_free(h);
         return;
@@ -947,6 +956,9 @@ test_wificx_host_auth(void)
     n = os_eapol(&S, 0x030A, NULL, NULL, 0, e);
     n = os_frame(d, d->Bssid, 0x888E, e, n, f);
     CHECK(os_send80211(h, f, n) > 0 && F->Msg4Ok, "message 4 accepted by the AP");
+    CHECK(aic_eapol_owed(d, rx0, tx0) == 0 && d->Stats.TxEapol - tx0 == 2, "all answered: the key goes in");
+    /* the counters do not run backwards: more sent than received is not owed */
+    CHECK(aic_eapol_owed(d, rx0 + 1, tx0) == 0, "no wrap when ahead");
 
     /* SET_ADD_CIPHER_KEYS: pairwise, then group */
     CHECK(d->Link == AIC_LINK_ASSOCIATED && !F->PortOpen, "port closed before the pairwise key");
@@ -973,6 +985,21 @@ test_wificx_host_auth(void)
               memcmp(f + 16, "\x00\x11\x22\x33\x44\x55", 6) == 0, "ARP reply as 802.11 from the gateway");
     }
     CHECK(F->TxDataBad == 0 && h->Q.Drops == 0, "no bad frames, no drops");
+
+    /* an EAPOL frame the core drops (no link to hand it up on) gets no
+     * answer from Windows, so it is not owed either */
+    {
+        static const u8 eap[4] = { 2, 3, 0, 0 };
+        u32 before = d->Stats.RxEapol;
+        int link = d->Link;
+
+        d->Link = AIC_LINK_ASSOCIATING;
+        fake_ap_send_data(F, d->Mac, 0x888E, eap, sizeof(eap), 0, 1);
+        fake_wait(F, 0);
+        CHECK(d->Stats.RxEapol == before && aic_eapol_owed(d, before, d->Stats.TxEapol) == 0,
+              "EAPOL dropped before association: not counted");
+        d->Link = link;
+    }
 
     /* the AP leaves */
     fake_ap_deauth(F, 7);

@@ -78,7 +78,35 @@ aic_tx_eth(aic_dev *Dev, const u8 *Eth, u32 EthLen)
         return n;
     }
     Dev->Stats.TxData++;
-    return Dev->Ops->send(Dev->Ctx, 0, Dev->TxBuf, (u32)n) == AIC_OK ? AIC_OK : AIC_E_IO;
+    if (Dev->Ops->send(Dev->Ctx, 0, Dev->TxBuf, (u32)n) != AIC_OK) {
+        return AIC_E_IO;
+    }
+    aic_tx_note(Dev, Eth, EthLen);
+    return AIC_OK;
+}
+
+static int
+is_eapol(const u8 *Eth, u32 Len)
+{
+    return Len >= 14 && Eth[12] == 0x88 && Eth[13] == 0x8E;
+}
+
+void
+aic_tx_note(aic_dev *Dev, const u8 *Eth, u32 EthLen)
+{
+    if (is_eapol(Eth, EthLen)) {
+        Dev->Stats.TxEapol++;
+    }
+}
+
+u32
+aic_eapol_owed(const aic_dev *Dev, u32 Rx0, u32 Tx0)
+{
+    /* another thread counts TX: read each counter once */
+    u32 rx = *(const volatile u32 *)&Dev->Stats.RxEapol - Rx0;
+    u32 tx = *(const volatile u32 *)&Dev->Stats.TxEapol - Tx0;
+
+    return rx > tx ? rx - tx : 0;
 }
 
 /* Where the 802.11 header ends and the MSDU (LLC/SNAP) starts; 0 if the
@@ -182,10 +210,12 @@ deliver(aic_dev *Dev, const u8 *Eth, u32 Len)
         /* WiFiCx: the operating system's supplicant gets the EAPOL frames,
          * so everything goes up from association on (the firmware keeps
          * the port closed to anything but EAPOL until the pairwise key) */
-        if (Len >= 14 && Eth[12] == 0x88 && Eth[13] == 0x8E) {
-            Dev->Stats.RxEapol++;
-        }
         if (Dev->Ops->rx_eth && (Dev->Link == AIC_LINK_ASSOCIATED || Dev->Link == AIC_LINK_UP)) {
+            /* counted only when handed up: one dropped here gets no answer,
+             * and the pairwise key must not wait for one (aic_eapol_owed) */
+            if (is_eapol(Eth, Len)) {
+                Dev->Stats.RxEapol++;
+            }
             Dev->Ops->rx_eth(Dev->Ctx, Eth, Len);
         } else {
             Dev->Stats.RxDataDropped++;

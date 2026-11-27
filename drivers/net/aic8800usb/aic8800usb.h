@@ -204,6 +204,9 @@ VOID AicWifiRun(_In_ PAIC_DEVICE_CONTEXT Ctx);
 VOID AicWifiScanBss(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_ const aic_bss *Bss, _In_reads_(Len) const UCHAR *Body,
                     _In_ ULONG Len, _In_ int ProbeResp);
 VOID AicWifiReleaseHardware(_In_ PAIC_DEVICE_CONTEXT Ctx);
+/* Suspend (the worker has stopped): refuse and fail WDI requests; Restart: take them again. */
+VOID AicWifiPause(_In_ PAIC_DEVICE_CONTEXT Ctx);
+VOID AicWifiResume(_In_ PAIC_DEVICE_CONTEXT Ctx);
 VOID AicWifiCleanup(_In_ PAIC_DEVICE_CONTEXT Ctx);
 
 EXTERN_C_END

@@ -57,6 +57,7 @@
 #define AIC_WIFI_TRACE      64          /* message IDs kept for WdiTrace */
 #define AIC_WIFI_SCAN_MS    10000       /* a scan task ends (aborted) after this */
 #define AIC_WIFI_FW_SCAN_MS 8000        /* a firmware scan still running is given up after this */
+#define AIC_WIFI_M4_WAIT_MS 200         /* a pairwise key waits this long at most for message 4 to go out */
 
 #ifndef NDIS_STATUS_REQUEST_ABORTED
 #define NDIS_STATUS_REQUEST_ABORTED ((NDIS_STATUS)0xC001000CL)
@@ -91,7 +92,7 @@ typedef struct _AIC_WIFI {
     KSPIN_LOCK Lock;                    /* the ring and Accepting */
     WIFIREQUEST Ring[AIC_WIFI_RING];
     ULONG RingHead, RingCount;
-    BOOLEAN Accepting;                  /* between PrepareHardware and ReleaseHardware */
+    BOOLEAN Accepting;                  /* between PrepareHardware and ReleaseHardware or a suspend */
 
     BOOLEAN HwReady;                    /* firmware up, capabilities reported */
     BOOLEAN RadioOn;
@@ -114,6 +115,8 @@ typedef struct _AIC_WIFI {
     /* records (Device Parameters) */
     ULONG Msgs, Unsupported, Indications, IndicationErrors, Keys, KeyErrors, ScanTasks, ConnectTasks;
     ULONG BssIndicated, Disassociations, LastConnectStatus, LastKeyStatus, Refused;
+    ULONG KeyEapolWaitMs;               /* the last pairwise key: how long message 4 took to go out */
+    u32   EapolRx0, EapolTx0;           /* the EAPOL counters at this connection's start or last pairwise key */
     USHORT Trace[AIC_WIFI_TRACE];
     ULONG TraceCount;
     ULONG LastRecordMs;
@@ -291,6 +294,7 @@ PutRecords(_In_ PAIC_WIFI W)
     AicPutULong(ctx, L"WdiKeys", W->Keys);
     AicPutULong(ctx, L"WdiKeyErrors", W->KeyErrors);
     AicPutULong(ctx, L"WdiLastKeyStatus", W->LastKeyStatus);
+    AicPutULong(ctx, L"KeyEapolWaitMs", W->KeyEapolWaitMs);
     AicPutULong(ctx, L"WdiDisassociations", W->Disassociations);
     AicPutULong(ctx, L"WdiRadioOn", W->RadioOn);
     AicPutULong(ctx, L"WdiConnected", W->Connected);
@@ -721,6 +725,8 @@ TaskConnect(_In_ PAIC_WIFI W, _In_ WIFIREQUEST Request, _In_ const WDI_MESSAGE_H
     d->HostAuth = 1;
     W->Ctx->RxHold = TRUE;
     TaskStart(&W->Conn, H);
+    W->EapolRx0 = d->Stats.RxEapol;     /* an earlier attempt's unanswered message 1 does not count */
+    W->EapolTx0 = d->Stats.TxEapol;
     RtlCopyMemory(W->ConnBssid, d->Bss[idx].Bssid, 6);
     if (aic_connect_start(d, idx) != AIC_OK) {
         W->Conn.Active = FALSE;
@@ -815,15 +821,32 @@ SetAddCipherKeys(_In_ PAIC_WIFI W, _In_ WIFIREQUEST Request, _In_ const WDI_MESS
             break;
         }
         if (pairwise) {
-            /* message 4 went out just before this: let it leave the USB
-             * queue unencrypted before the key is in */
-            ULONG waited = 0;
+            /* Message 4 must leave unencrypted before the key is in.
+             * Windows sent it just before this, but it may still be in
+             * NetAdapterCx's TX ring, not yet sent on the data pipe (the TX
+             * queue runs on its own thread). Each EAPOL frame from the AP
+             * (M1, M3, a group key message) gets one answer, so wait until
+             * as many went out as came in, taking the receive path
+             * meanwhile; then for the USB writes to finish. */
+            ULONG start = NowMs(), waited = 0;
 
+            while (aic_eapol_owed(d, W->EapolRx0, W->EapolTx0) != 0 && !ctx->Stopping) {
+                waited = NowMs() - start;
+                if (waited >= AIC_WIFI_M4_WAIT_MS) {
+                    break;
+                }
+                AicUsbOps.wait(ctx, 2);
+            }
+            W->KeyEapolWaitMs = NowMs() - start;
+            waited = 0;
             while (!AicNetTxIdle(ctx) && waited < 50) {
                 AicUsbOps.delay_ms(ctx, 5);
                 waited += 5;
             }
             AicUsbOps.delay_ms(ctx, 10);
+            /* a later rekey counts from here */
+            W->EapolRx0 = d->Stats.RxEapol;
+            W->EapolTx0 = d->Stats.TxEapol;
         }
         rc = aic_host_set_key(d, pairwise, id, k->CCMPKey.pElements, 16, AIC_MAC_CIPHER_CCMP);
         W->Keys++;
@@ -1086,8 +1109,8 @@ AicWifiRun(_In_ PAIC_DEVICE_CONTEXT Ctx)
             PutRecords(W);
         }
     }
-    /* stopping (suspend, removal): running tasks end; queued requests stay
-     * for the next start, or ReleaseHardware fails them */
+    /* stopping (suspend, removal): running tasks end; queued requests are
+     * failed by AicWifiPause (suspend) or ReleaseHardware */
     if (W->Scan.Active) {
         W->Scan.Aborted = TRUE;
         ScanFinish(W, NDIS_STATUS_REQUEST_ABORTED);
@@ -1144,10 +1167,10 @@ AicWifiPostDeviceCreate(_In_ PAIC_DEVICE_CONTEXT Ctx)
     return STATUS_SUCCESS;
 }
 
-/* ReleaseHardware (the worker has stopped): nothing more is taken, and
+/* The worker has stopped (or never started): nothing more is taken, and
  * what waits is failed, so that nobody waits for it. */
 extern "C" VOID
-AicWifiReleaseHardware(_In_ PAIC_DEVICE_CONTEXT Ctx)
+AicWifiPause(_In_ PAIC_DEVICE_CONTEXT Ctx)
 {
     PAIC_WIFI W = Ctx->Wifi;
     WIFIREQUEST r;
@@ -1162,7 +1185,35 @@ AicWifiReleaseHardware(_In_ PAIC_DEVICE_CONTEXT Ctx)
     while ((r = Pop(W)) != NULL) {
         WifiRequestComplete(r, STATUS_DEVICE_NOT_READY, sizeof(WDI_MESSAGE_HEADER));
     }
+}
+
+/* SelfManagedIoRestart, before the worker starts again. */
+extern "C" VOID
+AicWifiResume(_In_ PAIC_DEVICE_CONTEXT Ctx)
+{
+    PAIC_WIFI W = Ctx->Wifi;
+    KIRQL irql;
+
+    if (W == NULL) {
+        return;
+    }
+    KeAcquireSpinLock(&W->Lock, &irql);
+    W->Accepting = TRUE;
+    KeReleaseSpinLock(&W->Lock, irql);
+}
+
+/* ReleaseHardware (the worker has stopped). */
+extern "C" VOID
+AicWifiReleaseHardware(_In_ PAIC_DEVICE_CONTEXT Ctx)
+{
+    PAIC_WIFI W = Ctx->Wifi;
+
+    if (W == NULL) {
+        return;
+    }
+    AicWifiPause(Ctx);
     W->HwReady = FALSE;
+    W->Connected = FALSE;
 }
 
 extern "C" VOID

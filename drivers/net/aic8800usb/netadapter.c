@@ -96,13 +96,15 @@ AicTxDone(_In_ WDFREQUEST Request, _In_ WDFIOTARGET Target, _In_ PWDF_REQUEST_CO
     (VOID)WdfRequestReuse(Request, &reuse);
     KeAcquireSpinLock(&ctx->DataLock, &irql);
     ctx->TxFreeMask |= 1u << slot;
-    if (ctx->TxNotify) {
+    if (ctx->TxNotify && ctx->TxQueue != NULL) {
         notify = ctx->TxQueue;
+        WdfObjectReference(notify);     /* the queue may be deleted once the lock is dropped */
         ctx->TxNotify = FALSE;
     }
     KeReleaseSpinLock(&ctx->DataLock, irql);
     if (notify) {
         NetTxQueueNotifyMoreCompletedPacketsAvailable(notify);
+        WdfObjectDereference(notify);
     }
 }
 
@@ -160,6 +162,8 @@ TxSend(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_reads_(Len) const UCHAR *Eth, _In_ ULON
         WdfRequestSetCompletionRoutine(Ctx->TxReq[slot], AicTxDone, (WDFCONTEXT)(ULONG_PTR)slot);
         if (WdfRequestSend(Ctx->TxReq[slot], WdfUsbTargetPipeGetIoTarget(Ctx->OutPipe[0]), WDF_NO_SEND_OPTIONS)) {
             Ctx->TxFrames++;
+            /* an EAPOL frame counts as answered from here (SetAddCipherKeys) */
+            aic_tx_note(&Ctx->Aic, Eth, Len);
             return TRUE;
         }
     }
@@ -342,11 +346,13 @@ AicNetRxFrame(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_reads_(Len) const UCHAR *Frame, 
         Ctx->RxDrops++;
     } else if (Ctx->RxNotify && !Ctx->RxHold) {
         notify = Ctx->RxQueue;
+        WdfObjectReference(notify);
         Ctx->RxNotify = FALSE;
     }
     KeReleaseSpinLock(&Ctx->DataLock, irql);
     if (notify) {
         NetRxQueueNotifyMoreReceivedPacketsAvailable(notify);
+        WdfObjectDereference(notify);
     }
 }
 
@@ -362,11 +368,13 @@ AicNetRxRelease(_In_ PAIC_DEVICE_CONTEXT Ctx)
     Ctx->RxHold = FALSE;
     if (Ctx->RxNotify && Ctx->RxQueue && Ctx->RxQ && aic_frameq_peek(Ctx->RxQ, &len) != NULL) {
         notify = Ctx->RxQueue;
+        WdfObjectReference(notify);
         Ctx->RxNotify = FALSE;
     }
     KeReleaseSpinLock(&Ctx->DataLock, irql);
     if (notify) {
         NetRxQueueNotifyMoreReceivedPacketsAvailable(notify);
+        WdfObjectDereference(notify);
     }
 }
 

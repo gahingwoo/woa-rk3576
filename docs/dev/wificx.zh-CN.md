@@ -92,7 +92,7 @@ Windows。对 WPA2 个人网络，它在数据通路上做四次握手和组密�
 
 所以 WiFiCx 模式不用我们的 supplicant：`aic_wpa.c` 留在二进制里给以太网式模式用，在 WiFiCx 模式下闲着。AIC8800D80 的固件不需要新东西：设了 `CONTROL_PORT_HOST` 以后，它本来就把 EAPOL 交上来，在主机打开端口（`ME_SET_CONTROL_PORT`）之前挡住其他帧，并用 `MM_KEY_ADD` 收密钥，Linux 上 wpa_supplicant 那条路也是这样。
 
-要留意一个竞争：Windows 发出消息 4 后马上就把成对密钥交下来；如果密钥先于消息 4 到达固件，AP 收到的消息 4 就是加密的，会丢掉。驱动在 `MM_KEY_ADD` 之前等 USB 数据队列清空（最多 50 ms，再多等 10 ms）。
+要留意一个竞争：Windows 发出消息 4 后马上就把成对密钥交下来；如果密钥先于消息 4 到达固件，AP 收到的消息 4 就是加密的，会丢掉。消息 4 可能还在 NetAdapterCx 的 TX 环里，所以驱动在 `MM_KEY_ADD` 之前先等（最多 200 ms，`KeyEapolWaitMs`），直到连接以来交给 Windows 的每个 EAPOL 帧都发出了一个回应（`TxEapol`、`RxEapol`），再等 USB 数据队列清空（最多 50 ms，再多等 10 ms）。
 
 ## 数据通路
 
@@ -133,7 +133,7 @@ AIC8800D80 的固件收的是以太网负载，802.11 头由它自己构造；�
 | `ABORT_TASK` | 扫描：立即把听到的报上去，发中止状态的 `SCAN_COMPLETE`（固件自己扫完）；连接：`SM_DISCONNECT`，发中止状态的 `CONNECT_COMPLETE` |
 | `TASK_CONNECT` | 取第一个开放的、或 RSN + PSK + CCMP 的候选，用 Windows 交回来的帧体重建（`aic_bss_from_body`）；发 `SM_CONNECT`，带我们的 RSN 元素和 `CONTROL_PORT_HOST`；收到 `SM_CONNECT_IND` 后发 `ASSOCIATION_RESULT`、`LINK_STATE_CHANGE`（65 Mbit/s，HT20）、`CONNECT_COMPLETE`；失败或超时（`ConnectTimeoutMs`）：失败的 `ASSOCIATION_RESULT` 和失败的 `CONNECT_COMPLETE`。没有能用的候选：M3 返回 `STATUS_NOT_SUPPORTED` |
 | `TASK_DISCONNECT` | `SM_DISCONNECT`、`DISASSOCIATION`（主机断开）、`DISCONNECT_COMPLETE` |
-| `SET_ADD_CIPHER_KEYS` | 只支持 CCMP：成对密钥（等 TX 队列清空后）`MM_KEY_ADD`，再 `ME_SET_CONTROL_PORT` 打开端口；组密钥按它的密钥 ID `MM_KEY_ADD` |
+| `SET_ADD_CIPHER_KEYS` | 只支持 CCMP：成对密钥（等消息 4 发出、TX 队列清空后）`MM_KEY_ADD`，再 `ME_SET_CONTROL_PORT` 打开端口；组密钥按它的密钥 ID `MM_KEY_ADD` |
 | `SET_ADAPTER_CONFIGURATION`、`SET_PRIVACY_EXEMPTION_LIST`、`SET_DELETE_CIPHER_KEYS`、`SET_DEFAULT_KEY_ID`、`SET_CONNECTION_QUALITY`、`SET_RECEIVE_PACKET_FILTER`、`SET_MULTICAST_LIST`、`SET_FLUSH_BSS_ENTRY` | 接受，不用做什么（EAPOL 由固件自己放行，地址过滤也由固件做；密钥随站点表项一起删除） |
 | 其他（`GET_STATISTICS`、`SET_LOCATION_PRIVACY`、P2P、AP 等） | `STATUS_NOT_SUPPORTED`（对站点来说没问题：SCAN-1） |
 | 固件的 `SM_DISCONNECT_IND` | `DISASSOCIATION`（对端解除认证，或无法维持）；Windows 会重连 |
@@ -201,7 +201,7 @@ ROCK 4D，Windows 11 23H2，开测试签名，用网线访问，CI 产物 `aic88
 5. **断开与重连**：在列表里点"断开连接"，再连上；关掉路由器再打开（Windows 自己重连：`WdiDisassociations` 增加，之后 `WdiConnected` 又是 1）；开关飞行模式（`WdiRadioOn`）。
 6. **切回以太网式**：`aic-bringup.ps1 -Mode Ethernet`，重启，阶段 4 和以前一样能用。
 
-如果握手一直完不成（Windows 显示"无法连接"，`WdiKeys` 为 0）：看 `RxEapol`（消息 1 到了驱动）和 `NetRxFrames`（也到了 Windows），`NetTxFrames`（消息 2 发出去了）；消息 2 里的 RSN 元素不对的表现是 AP 一直不发消息 3。如果成对密钥装上了但不通数据，怀疑消息 4 的竞争（AP 日志里缺消息 4）：把 `SetAddCipherKeys` 里的延时加大。
+如果握手一直完不成（Windows 显示"无法连接"，`WdiKeys` 为 0）：看 `RxEapol`（消息 1 到了驱动）和 `NetRxFrames`（也到了 Windows），`NetTxFrames`（消息 2 发出去了）；消息 2 里的 RSN 元素不对的表现是 AP 一直不发消息 3。如果成对密钥装上了但不通数据，怀疑消息 4 的竞争（AP 日志里缺消息 4）：`KeyEapolWaitMs` 接近 200 说明消息 4 没发出去。
 
 ## 风险与未决问题
 

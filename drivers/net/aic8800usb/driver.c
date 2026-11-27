@@ -6,7 +6,10 @@
  * continuous readers, D0Entry starts them, SelfManagedIoInit starts the
  * worker thread that runs the stages (they take seconds, and stage 3 keeps
  * the link for as long as the device is up), SelfManagedIoSuspend stops it,
- * D0Exit stops the readers.
+ * D0Exit stops the readers. In WiFiCx mode the worker starts at the end of
+ * PrepareHardware instead (WiFiCx may wait on a WDI command before
+ * SelfManagedIoInit), and ReleaseHardware stops it too, for a start that
+ * failed after PrepareHardware.
  *
  * The loader instance (PID_8D80) downloads the firmware and records that in
  * a volatile key, so that the runtime instance (PID_8D81) can tell firmware
@@ -30,6 +33,8 @@ static EVT_WDF_DEVICE_SELF_MANAGED_IO_INIT AicEvtSelfManagedIoInit;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_SUSPEND AicEvtSelfManagedIoSuspend;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_RESTART AicEvtSelfManagedIoRestart;
 static KSTART_ROUTINE AicWorkerMain;
+static NTSTATUS StartWorker(_In_ PAIC_DEVICE_CONTEXT Ctx);
+static VOID StopWorker(_In_ PAIC_DEVICE_CONTEXT Ctx);
 
 static BOOLEAN g_LoaderService;     /* this image runs as aic8800ldr */
 
@@ -365,6 +370,7 @@ PutStats(_In_ PAIC_DEVICE_CONTEXT Ctx)
     AicPutULong(Ctx, L"RxData", d->Stats.RxData);
     AicPutULong(Ctx, L"RxDataDropped", d->Stats.RxDataDropped);
     AicPutULong(Ctx, L"RxEapol", d->Stats.RxEapol);
+    AicPutULong(Ctx, L"TxEapol", d->Stats.TxEapol);
     AicPutULong(Ctx, L"TxData", d->Stats.TxData);
     AicPutULong(Ctx, L"RxPrint", d->Stats.RxPrint);
     AicPutULong(Ctx, L"RxErrors", d->Stats.RxErrors);
@@ -780,6 +786,16 @@ AicEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
          * (EvtWifiDeviceCreateAdapter), which starts it */
         status = AicWifiReportCapabilities(ctx);
         AicPutULong(ctx, L"WifiCapsStatus", (ULONG)status);
+        if (NT_SUCCESS(status)) {
+            /* WiFiCx may send WDI commands (the port, the adapter) and wait
+             * for them before this device's start reaches SelfManagedIoInit:
+             * the worker has to run from here on */
+            status = StartWorker(ctx);
+            AicPutULong(ctx, L"WorkerStartStatus", (ULONG)status);
+            if (!NT_SUCCESS(status)) {
+                AicWifiPause(ctx);      /* nobody would run what is queued */
+            }
+        }
         return status;
     }
     status = AicNetStart(ctx);
@@ -793,6 +809,9 @@ AicEvtReleaseHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Translated)
     PAIC_DEVICE_CONTEXT ctx = AicGetContext(Device);
 
     UNREFERENCED_PARAMETER(Translated);
+    /* stopped already, unless the start failed after PrepareHardware
+     * started it (WiFiCx): then no SelfManagedIoSuspend comes */
+    StopWorker(ctx);
     AicWifiReleaseHardware(ctx);
     AicUsbStopReaders(ctx);
     if (ctx->Ring) {
@@ -826,6 +845,10 @@ AicEvtD0Exit(_In_ WDFDEVICE Device, _In_ WDF_POWER_DEVICE_STATE TargetState)
     return STATUS_SUCCESS;
 }
 
+/* ntifs.h, not in the ntddk.h this driver builds with; exported by ntoskrnl */
+NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(_In_ HANDLE Handle, _In_ BOOLEAN Alertable,
+                                              _In_opt_ PLARGE_INTEGER Timeout);
+
 static NTSTATUS
 StartWorker(_In_ PAIC_DEVICE_CONTEXT Ctx)
 {
@@ -843,6 +866,14 @@ StartWorker(_In_ PAIC_DEVICE_CONTEXT Ctx)
     }
     status = ObReferenceObjectByHandle(h, THREAD_ALL_ACCESS, *PsThreadType, KernelMode, (PVOID *)&Ctx->Worker,
                                        NULL);
+    if (!NT_SUCCESS(status)) {
+        /* the thread runs, but StopWorker could not wait for it: stop it now */
+        Ctx->Worker = NULL;
+        InterlockedExchange(&Ctx->Stopping, 1);
+        Ctx->Aic.Abort = 1;
+        KeSetEvent(&Ctx->RxEvent, IO_NO_INCREMENT, FALSE);
+        (VOID)ZwWaitForSingleObject(h, FALSE, NULL);
+    }
     ZwClose(h);
     return status;
 }
@@ -864,19 +895,34 @@ StopWorker(_In_ PAIC_DEVICE_CONTEXT Ctx)
 static NTSTATUS
 AicEvtSelfManagedIoInit(_In_ WDFDEVICE Device)
 {
+    /* WiFiCx: running since PrepareHardware */
     return StartWorker(AicGetContext(Device));
 }
 
 static NTSTATUS
 AicEvtSelfManagedIoRestart(_In_ WDFDEVICE Device)
 {
-    return StartWorker(AicGetContext(Device));
+    PAIC_DEVICE_CONTEXT ctx = AicGetContext(Device);
+    NTSTATUS status;
+
+    AicWifiResume(ctx);
+    status = StartWorker(ctx);
+    if (!NT_SUCCESS(status)) {
+        AicWifiPause(ctx);
+    }
+    return status;
 }
 
 static NTSTATUS
 AicEvtSelfManagedIoSuspend(_In_ WDFDEVICE Device)
 {
-    StopWorker(AicGetContext(Device));
+    PAIC_DEVICE_CONTEXT ctx = AicGetContext(Device);
+
+    StopWorker(ctx);
+    /* WiFiCx: WDI requests from now until the restart (or ReleaseHardware)
+     * are failed at once: nobody is left to run them, and WiFiCx may wait
+     * for one while it stops the adapter */
+    AicWifiPause(ctx);
     return STATUS_SUCCESS;
 }
 

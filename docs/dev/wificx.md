@@ -193,8 +193,11 @@ Linux's wpa_supplicant path does.
 
 One race to watch: Windows sends message 4 and hands the pairwise key down
 right after; if the key reaches the firmware before message 4 has left, the
-AP gets message 4 encrypted and drops it. The driver waits for the USB data
-queue to drain (up to 50 ms, then 10 ms more) before `MM_KEY_ADD`.
+AP gets message 4 encrypted and drops it. Message 4 may still be in
+NetAdapterCx's TX ring, so before `MM_KEY_ADD` the driver waits (up to
+200 ms, `KeyEapolWaitMs`) until it has sent one EAPOL frame for each one it
+handed to Windows since the connect (`TxEapol`, `RxEapol`), then for the USB
+data queue to drain (up to 50 ms, then 10 ms more).
 
 ## The data path
 
@@ -251,7 +254,7 @@ the driver's FIFO until `ASSOCIATION_RESULT` has gone up (`RxHold`).
 | `ABORT_TASK` | scan: what was heard, `SCAN_COMPLETE` aborted at once (the firmware finishes on its own); connect: `SM_DISCONNECT`, `CONNECT_COMPLETE` aborted |
 | `TASK_CONNECT` | first candidate that is open, or RSN with PSK and CCMP, rebuilt from the body Windows hands back (`aic_bss_from_body`); `SM_CONNECT` with our RSN element and `CONTROL_PORT_HOST`; at `SM_CONNECT_IND`: `ASSOCIATION_RESULT`, `LINK_STATE_CHANGE` (65 Mbit/s, HT20), `CONNECT_COMPLETE`; failure or timeout (`ConnectTimeoutMs`): failed `ASSOCIATION_RESULT`, `CONNECT_COMPLETE` failed. Nothing usable: M3 `STATUS_NOT_SUPPORTED` |
 | `TASK_DISCONNECT` | `SM_DISCONNECT`, `DISASSOCIATION` (by host), `DISCONNECT_COMPLETE` |
-| `SET_ADD_CIPHER_KEYS` | CCMP only: pairwise (after the TX queue drains) `MM_KEY_ADD` and `ME_SET_CONTROL_PORT` open; group `MM_KEY_ADD` with its key ID |
+| `SET_ADD_CIPHER_KEYS` | CCMP only: pairwise (after message 4 has gone out and the TX queue drains) `MM_KEY_ADD` and `ME_SET_CONTROL_PORT` open; group `MM_KEY_ADD` with its key ID |
 | `SET_ADAPTER_CONFIGURATION`, `SET_PRIVACY_EXEMPTION_LIST`, `SET_DELETE_CIPHER_KEYS`, `SET_DEFAULT_KEY_ID`, `SET_CONNECTION_QUALITY`, `SET_RECEIVE_PACKET_FILTER`, `SET_MULTICAST_LIST`, `SET_FLUSH_BSS_ENTRY` | accepted, nothing to do (the firmware gates EAPOL itself and filters by address; keys go with the station entry) |
 | anything else (`GET_STATISTICS`, `SET_LOCATION_PRIVACY`, P2P, AP, ...) | `STATUS_NOT_SUPPORTED` (fine for a station: SCAN-1) |
 | firmware `SM_DISCONNECT_IND` | `DISASSOCIATION` (peer deauthenticated, or unable to maintain); Windows reconnects |
@@ -311,6 +314,8 @@ in the runtime device's Device Parameters:
 | `WifiInitStatus`, `OsWdiVersion`, `DriverWdiVersion` | `WifiDeviceInitialize`; the WDI version the OS speaks and the one declared |
 | `WifiCapsStatus`, `WifiDeviceCapsStatus`, `WifiStationCapsStatus`, `WifiBandCapsStatus`, `WifiPhyCapsStatus` | each capability call (0 = success) |
 | `AdapterStartStatus`, `WdiPortId` | the station adapter |
+| `WorkerStartStatus` | the worker thread, started at the end of PrepareHardware |
+| `KeyEapolWaitMs` | the last pairwise key: how long it waited for message 4 |
 | `WdiTrace` | the first 64 WDI message IDs received, in order |
 | `WdiMessages`, `WdiUnsupported`, `WdiRefused`, `WdiIndications`, `WdiIndicationErrors` | counters |
 | `WdiScanTasks`, `WdiBssIndicated`, `WdiConnectTasks`, `WdiLastConnectStatus`, `WdiKeys`, `WdiKeyErrors`, `WdiLastKeyStatus`, `WdiDisassociations`, `WdiRadioOn`, `WdiConnected` | what happened |
@@ -337,7 +342,9 @@ against the simulated chip and AP:
   conversions as the driver, using only what the driver reports: message 2
   carries the RSN element from the reported association request (the AP
   checks it), message 3's RSN element equals the beacon's; then
-  `aic_host_set_key` pairwise (the port opens) and group;
+  the EAPOL counters the pairwise key waits on (owed after messages 1
+  and 3, answered by 2 and 4; a frame dropped before association is not
+  owed); `aic_host_set_key` pairwise (the port opens) and group;
 - ARP to the gateway as 802.11 frames both ways; the AP's deauthentication
   gives the disconnect event;
 - the conversions alone: full-size frames, 802.1H for IPX, QoS and +HTC
@@ -393,7 +400,7 @@ check `RxEapol` (message 1 reached the driver) and `NetRxFrames` (and
 Windows), `NetTxFrames` (message 2 left); a wrong RSN element in message 2
 shows as the AP never sending message 3. If the pairwise key goes in but
 traffic does not flow, suspect the message 4 race (the AP log shows message
-4 missing): raise the delay in `SetAddCipherKeys`.
+4 missing): `KeyEapolWaitMs` near 200 means message 4 never left.
 
 ## Risks and open questions
 

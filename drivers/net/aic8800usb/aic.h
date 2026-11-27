@@ -154,7 +154,8 @@ typedef struct aic_stats {
     u32 RxInd;
     u32 RxData;
     u32 RxDataDropped;
-    u32 RxEapol;
+    u32 RxEapol;            /* HostAuth: the EAPOL frames handed to the OS (ops->rx_eth) */
+    u32 TxEapol;            /* EAPOL frames sent (aic_tx_note, aic_tx_eth) */
     u32 TxData;
     u32 RxPrint;
     u32 RxDataCfm;
@@ -386,6 +387,18 @@ int aic_build_tx(const aic_dev *Dev, const u8 *Eth, u32 EthLen, u8 *Out, u32 Out
 
 /* Build and send. */
 int aic_tx_eth(aic_dev *Dev, const u8 *Eth, u32 EthLen);
+
+/* An Ethernet frame the driver's own TX queue has handed to the bus (built
+ * with aic_build_tx): counts EAPOL in Stats.TxEapol. Call from one thread
+ * at a time. */
+void aic_tx_note(aic_dev *Dev, const u8 *Eth, u32 EthLen);
+
+/* With HostAuth: how many EAPOL frames handed to the OS since the marks
+ * (Stats.RxEapol, Stats.TxEapol taken earlier) it has not answered yet.
+ * Each EAPOL frame from the AP (messages 1 and 3, a group key message)
+ * gets one answer, so 0 means message 4 has gone out and the pairwise key
+ * may go in. Safe to call while another thread runs aic_tx_note. */
+u32 aic_eapol_owed(const aic_dev *Dev, u32 Rx0, u32 Tx0);
 
 /* One received data packet (starting at the 60-byte RX header) to an
  * Ethernet frame. Returns the frame length, 0 for a frame to drop, or a
