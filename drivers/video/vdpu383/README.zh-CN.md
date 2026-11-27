@@ -7,7 +7,7 @@ RK3576 H.264/HEVC/VP9/AV1 解码器（RKVDEC，Rockchip 的叫法是 VDPU383）�
 计划作为显示驱动（[wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)）里的 VIDEO_DECODE 节点；
 [lib](lib) 里的寄存器生成代码是纯 C（不调用 KMDF、WDM 或 C 库，不分配内存，不用浮点），可以原样搬过去。
 
-只有在固件设置里打开 *Video Decoder (VDPU383)*（默认关闭，见[硬件功能](../../../docs/features.zh-CN.md#视频解码器)）后，
+只有在固件设置里打开 *Video Decoder (VDPU383)*（0.4.1 之后的 edk2-rk3576 默认打开，0.4.1 默认关闭，见[硬件功能](../../../docs/features.zh-CN.md#视频解码器)）后，
 `ACPI\RKCP0383` 这个设备才存在。
 
 | 编码格式 | 状态 |
@@ -56,11 +56,18 @@ RK3576 H.264/HEVC/VP9/AV1 解码器（RKVDEC，Rockchip 的叫法是 VDPU383）�
 |---|---|---|
 | `WarmupAtD0` | 1 | 每次进入 D0 和 IP 复位时运行预热解码。0：从不运行（H.264 会出错，直到运行 `vdpu383test warmup`） |
 | `Iommu` | 1 | 缓冲区经解码器 IOMMU 映射。0：4 GiB 以下的物理连续缓冲区，关闭分页（大 surface 会以错误 1450 失败） |
-| `UserAccess` | 0 | 0：SYSTEM 和管理员，一个句柄。1：所有用户，多个句柄（播放器进程经显示驱动的用户态部分访问）。2：低完整性进程也可以（浏览器 GPU 进程）。为 1 或 2 时忽略 `VDPU383_RUN_NO_ADDR_CHECK`，每个句柄最多持有 384 MiB |
+| `UserAccess` | 0 | 谁能从用户态打开 `\\.\VDPU383`。0：SYSTEM 和管理员，一个句柄。1：所有用户，多个句柄。2：低完整性进程也可以。为 1 或 2 时忽略 `VDPU383_RUN_NO_ADDR_CHECK`，每个句柄最多持有 384 MiB。播放器都不需要它：它们经显示驱动解码（见下面的会话） |
 
-`UserAccess` 只用于测试板。这个接口允许调用者写解码器寄存器；驱动检查每个地址寄存器都指向该句柄自己的缓冲区，
-但不检查解码器是否停留在缓冲区内。`Iommu` 为 1 时，解码器能访问所有已打开句柄的缓冲区，所以一个进程能碰到另一个进程的缓冲区；
+`UserAccess` 1 和 2 只用于测试板，作为显示驱动路径的退路。这个接口允许调用者写解码器寄存器；驱动检查每个地址寄存器都指向该句柄自己的缓冲区，
+但不检查解码器是否停留在缓冲区内。用户态句柄共用一个 IOMMU 页目录，所以一个进程能碰到另一个进程的缓冲区；
 `Iommu` 为 0 时它能访问任意内存。
+
+会话（接口版本 4，[vdpu383_check.h](vdpu383_check.h)）：从内核态打开的文件对象。wddm-mali-g52 的 maliwddm
+为每个要解码的 D3D 设备开一个，在里面替那个进程发调用（wddm-mali-g52 docs/CHROMIUM-VIDEO.md，C2）。会话只能
+取信息、分配、释放、导入和解码；每次解码的每个地址寄存器都按它自己的缓冲区和导入检查（不含 SRAM，不看标志）；
+不读回寄存器，最多等 2 秒，只能导入发给自己进程的令牌；解码时用它自己的 IOMMU 页目录，里面只有它的缓冲区，
+所以解码器碰不到别的会话或用户句柄的内存；需要 `Iommu` 1；拿不到物理地址和寄存器内容。最多 64 个会话。
+`vdpu383test info` 打印 `sessions` 一行，任何用户都可以用 wddm-mali-g52 的 `vdectest kmd` 看同样的计数。
 
 驱动还会把痕迹记录写到同一个键下并立即刷盘，卡死或蓝屏后仍能读到（如果是解码器导致 Windows 起不来，启动时关掉固件选项）：
 
@@ -74,6 +81,7 @@ RK3576 H.264/HEVC/VP9/AV1 解码器（RKVDEC，Rockchip 的叫法是 VDPU383）�
 | `FirstRunResult`, `FirstRunStatus` | 本次会话的第一次解码（0 = 正常） |
 | `IommuSetting`, `IommuOn`, `MmuDte0`, `MmuEnableStatus0/1` | 读到的 `Iommu` 值、分页是否打开、目录寄存器、打开后的状态（位 0 = 分页） |
 | `LastMmuFaultAddr` | 最近一次 IOMMU 故障的 IO 地址 |
+| `LastImportStage`, `LastImportStatus`, `LastImportPages`, `LastImportExporterStatus`, `LastImportExporterPages`, `LastImportHandle`, `LastImportPid`, `ImportFailures`, `Imports` | 最近一次失败的 `IOCTL_VDPU383_IMPORT`（前 16 次，之后每 64 次一次）。Stage：1 参数或 IOMMU 关，2 内存不足，3 刷新未知导入，4 无空闲 IO 地址，5 无导出方（maliwddm 未启动），6 导出方拒绝（见其状态与 maliwddm 的 `VdecLast*`），7 页数不符，8 IOMMU 表项 |
 
 ## 安装
 

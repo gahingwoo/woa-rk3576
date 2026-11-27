@@ -86,6 +86,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="dwcmshc.h" />
+    <ClInclude Include="idmac.h" />
     <ClInclude Include="precomp.h" />
     <ClInclude Include="rockchip_ops.h" />
     <ClInclude Include="trace.h" />

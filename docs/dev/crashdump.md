@@ -87,38 +87,79 @@ What they mean:
 
 ## Installing the test build
 
-`dwcsdhc` is the boot disk's driver. Never `pnputil /install` it on a
-running system. Take the package from the WinPE workflow's `woa-drivers\`
-(signed), trust its certificate and sync the clock as in
-[INSTALL.md](../INSTALL.md), then:
+`dwcsdhc` is the boot disk's driver. Never `pnputil /install` it, or swap
+it, on the running main system. Install it offline from the rescue Windows,
+where the main system is `D:`.
 
-1. `pnputil /add-driver dwcsdhc.inf` (stage only).
-2. As SYSTEM (for example `schtasks /ru SYSTEM` running a script), set bit
-   0x20 (CONFIGFLAG_REINSTALL) in `ConfigFlags` under
-   `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0D40\<instance>`.
-3. Restart. Check the `DriverVersion` query above shows the new build.
+Get the package: `woa-drivers-signed-arm64` from a WinPE (ARM64) run that
+includes this driver, folder `woa-drivers\dwcsdhc\` (`dwcsdhc.inf`,
+`dwcsdhc.sys`, `dwcsdhc.cat`). Note its `DriverVer` (the last field is the WinPE run number).
 
-Install it on the main system only. The rescue Windows on `R:` keeps its own
-copy of the old driver, which is what makes the way back below possible.
+On the main system, before leaving it: `bcdedit /debug off` if it is on,
+then `bcdedit /bootsequence <rescue guid>` (`C:\drvold\rescue-guid.txt`) and
+`shutdown /r /t 0`.
+
+In the rescue Windows, administrator PowerShell, package copied to
+`C:\pkg\dwcsdhc`:
+
+1. Find the old package(s):
+   `dism /Image:D:\ /Get-Drivers /Format:Table | findstr /i dwcsdhc`
+   Each line gives an `oemN.inf`. `dism /Image:D:\ /Get-DriverInfo /Driver:oemN.inf`
+   shows its version.
+2. Remove each old one, then add the new one:
+   `dism /Image:D:\ /Remove-Driver /Driver:oemN.inf`
+   `dism /Image:D:\ /Add-Driver /Driver:C:\pkg\dwcsdhc\dwcsdhc.inf`
+   Run `/Get-Drivers` again: exactly one `dwcsdhc.inf`, the new version.
+3. Check the file the boot loader will load is the new one:
+   `Get-FileHash D:\Windows\System32\drivers\dwcsdhc.sys, C:\pkg\dwcsdhc\dwcsdhc.sys`
+   If the hashes differ, `Remove-Item D:\Windows\System32\drivers\dwcsdhc.sys`
+   then `Copy-Item C:\pkg\dwcsdhc\dwcsdhc.sys D:\Windows\System32\drivers\`
+   (remove first: the old file is a hard link into the DriverStore).
+4. Registry of the main system:
+   ```
+   reg load HKLM\OFF D:\Windows\System32\config\SYSTEM
+   reg query HKLM\OFF\Select /v Current
+   ```
+   `Current` is normally 1, so the control set is `ControlSet001` (use
+   `ControlSet00<Current>` otherwise):
+   ```
+   reg add HKLM\OFF\ControlSet001\Services\dwcsdhc\Parameters /v CrashDump /t REG_DWORD /d 1 /f
+   reg add HKLM\OFF\ControlSet001\Control\CrashControl /v CrashDumpEnabled /t REG_DWORD /d 3 /f
+   reg add HKLM\OFF\ControlSet001\Control\CrashControl /v AutoReboot /t REG_DWORD /d 1 /f
+   reg query HKLM\OFF\ControlSet001\Services\dwcsdhc
+   reg query HKLM\OFF\ControlSet001\Control\CrashControl
+   reg unload HKLM\OFF
+   ```
+   Expect `Start` 0 and `ImagePath` `System32\drivers\dwcsdhc.sys` for the
+   service, and `MinidumpDir` `%SystemRoot%\Minidump` and `DumpFile`
+   `%SystemRoot%\MEMORY.DMP` in CrashControl. Close every `regedit` and
+   shell that has the hive open before `reg unload`.
+5. `shutdown /r /t 0`. `/bootsequence` was one-time, so this boots the main
+   system.
+
+Back in the main system, the checks above should show the new
+`DriverVersion` (if it still shows the old one, PnP kept its old binding;
+the driver that runs is the file from step 3 either way), `CrashDump` 1,
+and no volmgr event 45 or 46 from this boot. The pagefile must be on `C:`
+(`Win32_PageFileUsage`); a minidump needs only a few MB of it.
+
+Install it on the main system only. The rescue Windows keeps its own copy
+of the old driver, which is what makes the way back below possible.
 
 ## The one-shot test
 
 Back up anything you care about first: the test crashes the board once.
 Save the UEFI variables too if you might reflash firmware afterwards.
 
-1. Set `CrashDump` to 1 as above.
-2. Set a dump type and make sure the pagefile is on `C:`. Start with a
-   minidump (3): it is small and needs only a pagefile of a few MB. Once
-   that works, try a kernel dump (2), which needs a pagefile at least as big
-   as the kernel memory in use (usually a few hundred MB here), or a
-   dedicated dump file if `C:` is short of space:
-   `reg add HKLM\SYSTEM\CurrentControlSet\Control\CrashControl /v CrashDumpEnabled /t REG_DWORD /d 3 /f`
-   `reg add HKLM\SYSTEM\CurrentControlSet\Control\CrashControl /v AutoReboot /t REG_DWORD /d 1 /f`
-   Optional, for a kernel dump with little pagefile:
+1. Check `CrashDump` is 1, `CrashDumpEnabled` 3 and the pagefile is on
+   `C:` (the install above sets the first two; online it is the `reg add`
+   lines above plus a restart). Keep `bcdedit /debug off`.
+2. Start with the minidump (3). Once that works, try a kernel dump (2),
+   which needs a pagefile at least as big as the kernel memory in use
+   (usually a few hundred MB here), or a dedicated dump file:
    `reg add HKLM\SYSTEM\CurrentControlSet\Control\CrashControl /v DedicatedDumpFile /t REG_SZ /d C:\dedicateddumpfile.sys /f`
    `reg add HKLM\SYSTEM\CurrentControlSet\Control\CrashControl /v DumpFileSize /t REG_DWORD /d 1500 /f` (MB)
-   Keep `bcdedit /debug off`, and restart once so the dump stack is set up
-   with the new settings.
+   and restart once so the dump stack picks it up.
 3. Crash it, either way:
    - USB keyboard: `reg add HKLM\SYSTEM\CurrentControlSet\Services\kbdhid\Parameters /v CrashOnCtrlScroll /t REG_DWORD /d 1 /f`,
      restart, then hold the right Ctrl key and press Scroll Lock twice.
@@ -128,10 +169,17 @@ Save the UEFI variables too if you might reflash firmware afterwards.
    - Sysinternals NotMyFault with `/crash`: bugcheck 0xD1 from its own
      signed driver. Use the native ARM64 executable from the package; an
      x64 one runs emulated and cannot load the driver.
+   - Not `tools/wdthang`: it hangs every CPU with interrupts masked, so
+     there is no bugcheck and no dump, only a watchdog reset.
 4. The blue screen counts its percentage up while it writes. Let it restart.
 5. Expected: a new file in `C:\Windows\Minidump`, event 1001 naming it, and
-   Kernel-Power 41 with bugcheck code 0xE2 or 0xEF. Open it with WinDbg
-   (`!analyze -v`) to be sure it is readable.
+   Kernel-Power 41 with bugcheck code 0xE2 or 0xEF:
+   ```
+   Get-ChildItem C:\Windows\Minidump, C:\Windows\MEMORY.DMP -ErrorAction SilentlyContinue
+   wevtutil qe System /q:"*[System[(EventID=1001)]]" /c:3 /rd:true /f:text
+   wevtutil qe System /q:"*[System[(EventID=41 or EventID=161)]]" /c:3 /rd:true /f:text
+   ```
+   Open the dump with WinDbg (`!analyze -v`) to be sure it is readable.
 
    Copy the file to another machine (`scp`) and open it there with WinDbg
    (`windbg -z MEMORY.DMP`, `.symfix; .reload; !analyze -v`), or with

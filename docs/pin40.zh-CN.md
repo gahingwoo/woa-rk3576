@@ -24,7 +24,7 @@ Linux 没有任何作用。
 |---|---|---|
 | 泰山派 3M | `main` | 两个选项都有 |
 | CM5-IO | `cm5io-parity` | 两个选项都有，还没合并到 `main` |
-| ROCK 4D | `rock4d-parity` | 两个选项都有，还没合并到 `main` |
+| ROCK 4D | `main` | 两个选项都有，还没在板上试过 |
 
 调试串口（UART0）在任何板子上都不会成为排针 UART，rk3xuart 遇到它也会拒绝启动。
 
@@ -49,8 +49,8 @@ Linux 没有任何作用。
 
 | 用途 | 排针引脚 | SoC | Windows 中的名字 |
 |---|---|---|---|
-| UART4（M0） | TX 8，RX 10 | GPIO2_D0，GPIO2_D1 | 端口 `UART4`，`COM4` |
-| UART8（M1） | TX 37，RX 40 | GPIO2_A6，GPIO2_A7 | 端口 `UART8`，`COM8` |
+| UART4（M0） | TX 8，RX 10 | GPIO2_D0，GPIO2_D1 | 端口 `UART4` 和一个 COM 名 |
+| UART8（M1） | TX 37，RX 40 | GPIO2_A6，GPIO2_A7 | 端口 `UART8` 和一个 COM 名 |
 | I2C7（M1） | SDA 3，SCL 5 | GPIO3_A1，GPIO3_A0 | `I2C7`（默认 I2C 总线） |
 | I2C8（M2） | SDA 27，SCL 28 | GPIO2_B7，GPIO2_B6 | `I2C8` |
 | SPI1（M1） | MOSI 19，MISO 21，SCLK 23，CS0 24，CS1 26 | GPIO2_C2、C3、C5、C4、C1 | `SPI1`，片选 0 和 1 |
@@ -78,7 +78,7 @@ Linux 没有任何作用。
 
 | 用途 | 排针引脚 | SoC | Windows 中的名字 |
 |---|---|---|---|
-| UART2（M1） | RX 3，TX 5 | GPIO4_B4，GPIO4_B5 | 端口 `UART2`，`COM2` |
+| UART2（M1） | RX 3，TX 5 | GPIO4_B4，GPIO4_B5 | 端口 `UART2` 和一个 COM 名 |
 | I2C4（M3） | SDA 27，SCL 29 | GPIO3_B7，GPIO3_C0 | `I2C4` |
 | SPI3（M0） | MOSI 19，MISO 21，SCLK 23，CS0 24 | GPIO3_A1、A2、A0、A3 | `SPI3`，片选 0 |
 
@@ -98,8 +98,8 @@ Linux 没有任何作用。
 
 | 用途 | 排针引脚 | SoC | Windows 中的名字 |
 |---|---|---|---|
-| UART4（M1） | TX 11，RX 15 | GPIO1_C4，GPIO1_C5 | 端口 `UART4`，`COM4` |
-| UART7（M0） | TX 16，RX 18 | GPIO2_B6，GPIO2_B7 | 端口 `UART7`，`COM7` |
+| UART4（M1） | TX 11，RX 15 | GPIO1_C4，GPIO1_C5 | 端口 `UART4` 和一个 COM 名 |
+| UART7（M0） | TX 16，RX 18 | GPIO2_B6，GPIO2_B7 | 端口 `UART7` 和一个 COM 名 |
 | I2C8（M1） | SDA 3，SCL 5 | GPIO1_C7，GPIO1_C6 | `I2C8`（默认 I2C 总线） |
 | I2C6（M3） | SDA 27，SCL 28 | GPIO4_C7，GPIO4_C6 | `I2C6`（EEPROM 在 0x50） |
 | SPI1（M0） | MOSI 19，MISO 21，SCLK 23，CS0 24，CS1 26 | GPIO1_B5、B6、B4、B7、GPIO1_C0 | `SPI1`，片选 0 和 1 |
@@ -121,7 +121,7 @@ Linux 没有任何作用。
 1. 在固件 Setup 的 ACPI / Device Tree 页打开 "40-pin UART"、"40-pin GPIO/I2C/SPI for apps"，或两个都开。
    保存并重启。
 2. 用 CI 产物（`rk3576-woa-uart-arm64`，或 WinPE 工作流放到介质上的签名包）安装 rk3xuart，方法和其他
-   测试签名驱动一样（[INSTALL.zh-CN.md](INSTALL.zh-CN.md)）：`pnputil /add-driver rk3xuart.inf /install`。
+   测试签名驱动一样（[INSTALL.zh-CN.md](INSTALL.zh-CN.md)）：`pnputil /add-driver rk3xuart.inf`（只暂存），然后重启。
 3. 确认系统里有 rhproxy：`reg query HKLM\SYSTEM\CurrentControlSet\Services\rhproxy` 和
    `dir C:\Windows\INF\rhproxy.inf`。之后设备管理器的系统设备下应该出现已启动的
    "Resource Hub proxy device"。问题代码 51 表示它用到的某个控制器（GPIO、I2C 或 SPI）没有启动。
@@ -133,8 +133,10 @@ UART，把 TX 接到 RX：
 ```
 serialtest list
 serialtest UART4 --sweep
-serialtest COM4 --baud 115200 --bytes 65536
+serialtest COM5 --baud 115200 --bytes 65536
 ```
+
+每个 UART 的 COM 编号由 Windows 分配（不会和别的设备重复，所以 UART4 不一定是 COM4），`serialtest list` 会显示。
 
 [serialtest](../tools/serialtest) 在 CI 产物 `rk3576-woa-serialtest-arm64` 里。任何接受 COM 名的终端程序也能用。
 
@@ -168,12 +170,12 @@ powershell -ExecutionPolicy Bypass -File i2c-scan.ps1 -Bus I2C7
 
 1. 两个选项都关：启动，确认什么都没变（设备管理器；固件日志里没有 `Pin40:` 行）。
 2. 打开 "40-pin UART"：固件日志有 `Pin40: 2 UART(s)` 和 `AcpiPlatform: 40-pin UART on`。Windows 里出现
-   `RKCP3006` 设备，装上 rk3xuart 后启动。`serialtest list` 显示 `UART4`、`UART8` 接口和 `COM4`/`COM8`。
+   `RKCP3006` 设备，装上 rk3xuart 后启动。`serialtest list` 显示 `UART4`、`UART8` 接口和它们的 COM 名。
    用跳线把 TX 接到 RX，`serialtest UART4 --sweep` 通过；然后接电脑上的 USB 串口适配器，115200 双向收发。
 3. 打开 "40-pin GPIO/I2C/SPI for apps"：`\_SB.RHPX` 启动（有没有 rhproxy？没有的话记下是哪个版本的
    Windows）。`gpio-blink.ps1 -List` 显示 19 个引脚（UART 选项打开时 15 个）。接在排针 7 脚上的 LED 或
    万用表跟随 `gpio-blink.ps1 -Pin 0` 变化。`i2c-scan.ps1 -Bus I2C7` 找到接在 3/5 脚上的已知 I2C 设备。
    SPI1 上把 MOSI 接到 MISO，用 SpiTestTool 做回环。
 4. 两个都开：GPIO 列表里没有 8、10、37、40 脚，UART 正常。
-5. 然后在各自分支上测 CM5-IO 和 ROCK 4D，步骤相同；在 CM5-IO 上确认两个选项都打开时 8/10 脚上的调试串口
+5. 然后测 CM5-IO（在它的分支上）和 ROCK 4D，步骤相同；在 CM5-IO 上确认两个选项都打开时 8/10 脚上的调试串口
    照常工作。

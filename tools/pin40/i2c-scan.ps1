@@ -67,9 +67,35 @@ function Buses([string]$selector) {
             ([Windows.Devices.Enumeration.DeviceInformationCollection]))
 }
 
+# The property read back above came out empty on the TaishanPi 3M
+# (2026-11-25: "(no name)"), although GetDeviceSelector('I2C7') found the
+# bus, so Windows does hold the name. So the name is also found the way
+# that worked: each name the firmware gives a bus (I2C0..I2C9, SPI0..SPI4;
+# the board files use I2C7, I2C8 and SPI1) is turned into a selector, and
+# the interface it finds gets that name.
+$knownNames = @{}
+function AddKnownNames([string[]]$names, [scriptblock]$selector) {
+    foreach ($n in $names) {
+        foreach ($d in @(Buses (& $selector $n))) {
+            if (-not $knownNames.ContainsKey($d.Id)) { $knownNames[$d.Id] = $n }
+        }
+    }
+}
+AddKnownNames (0..9 | ForEach-Object { "I2C$_" }) { param($n) [Windows.Devices.I2c.I2cDevice]::GetDeviceSelector($n) }
+AddKnownNames (0..4 | ForEach-Object { "SPI$_" }) { param($n) [Windows.Devices.Spi.SpiDevice]::GetDeviceSelector($n) }
+
 function BusName($info) {
-    $n = $info.Properties[$nameKey]
-    if ($n) { [string]$n } else { "(no name) $($info.Id)" }
+    $n = $null
+    try { $n = $info.Properties[$nameKey] } catch { }
+    if (-not $n) {
+        try {
+            $v = $null
+            if ($info.Properties.TryGetValue($nameKey, [ref]$v)) { $n = $v }
+        } catch { }
+    }
+    if ($n) { return [string]$n }
+    if ($knownNames.ContainsKey($info.Id)) { return $knownNames[$info.Id] }
+    "(no name) $($info.Id)"
 }
 
 $i2c = @(Buses ([Windows.Devices.I2c.I2cDevice]::GetDeviceSelector()))

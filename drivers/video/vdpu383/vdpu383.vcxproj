@@ -78,6 +78,7 @@
     <ClInclude Include="vdpu383.h" />
     <ClInclude Include="vdpu383_ioctl.h" />
     <ClInclude Include="vdpu383_import.h" />
+    <ClInclude Include="vdpu383_check.h" />
     <ClInclude Include="lib\vdpu383_h264.h" />
     <ClInclude Include="lib\v383_dxva.h" />
   </ItemGroup>

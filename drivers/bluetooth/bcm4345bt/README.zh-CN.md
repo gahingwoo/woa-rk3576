@@ -82,8 +82,8 @@ ACPI\RKCP4345          bcm4345bt.sys  (this driver, class System)
 2. 以管理员身份运行 `powershell -ExecutionPolicy Bypass -File install-firmware.ps1`。
 3. 信任驱动包里的 `signer.cer`（Root 和 TrustedPublisher，和其他驱动一样，见 [INSTALL](../../../docs/INSTALL.zh-CN.md)）。
    签名好的驱动包是 WinPE workflow 的 `bcm4345bt-signed-arm64` 构建产物。
-4. 首次安装（设备还没有驱动时）：`pnputil /add-driver bcm4345bt.inf /install`。要替换已经装好的版本，先用
-   `pnputil /add-driver bcm4345bt.inf`（不加 `/install`）暂存，再重启：在运行中的系统上停掉本驱动曾导致 DPC_WATCHDOG_VIOLATION。
+4. 不论首次安装还是替换已经装好的版本，都用 `pnputil /add-driver bcm4345bt.inf`（不加 `/install`）暂存，
+   再重启：在运行中的系统上停掉本驱动曾导致 DPC_WATCHDOG_VIOLATION。
 
 ## 查看发生了什么
 

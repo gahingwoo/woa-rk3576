@@ -6,9 +6,11 @@
 ; "40-pin UART" setup option is on. Off by default: the pins are GPIOs then.
 ;
 ; The port is a GUID_DEVINTERFACE_COMPORT interface named by the firmware's
-; "SerCx-FriendlyName" (UART4, ...), and also \DosDevices\COMn for UARTn.
-; A REG_SZ "PortName" in the device's hardware key renames the COM name, and
-; an empty one drops it (README.md).
+; "SerCx-FriendlyName" (UART4, ...), and also a COM name. The device is in
+; the Ports class so that its class installer (msports.dll) claims a free
+; COM number from the COM name arbiter (ComDB) and stores it as "PortName"
+; in the device's hardware key; the driver claims one itself when there is
+; none. Editing "PortName" renames it, an empty one drops it (README.md).
 ;
 ; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
 ; SPDX-License-Identifier: GPL-2.0-only
@@ -16,8 +18,8 @@
 
 [Version]
 Signature   = "$WINDOWS NT$"
-Class       = System
-ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Class       = Ports
+ClassGuid   = {4D36E978-E325-11CE-BFC1-08002BE10318}
 Provider    = %ProviderName%
 DriverVer   = ; set by stampinf during build
 CatalogFile = rk3xuart.cat

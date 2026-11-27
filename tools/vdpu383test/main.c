@@ -31,6 +31,9 @@
  *   --link-vendor   link 0x54 = 0x7FFFFF and 0x58 = 0x01000000 (vendor kernel)
  *                   instead of mainline's (register 13, 0)
  *   --null          no device: parse and build registers only
+ *   --session       with --null: decode as one of the driver's sessions
+ *                   (vdpu383_check.h): its run rules and address check,
+ *                   "session check" at the end
  *   --hevc, --h264  the codec, when the first NAL unit does not tell
  *   --vp9-mpp-intra, --vp9-mpp-update, --vp9-mpp
  *                   VP9: MPP's frame context handling instead of the
@@ -90,6 +93,10 @@ static double now_ms(void)
 #endif
 
 #include "dev.h"
+#include "../../drivers/video/vdpu383/vdpu383_check.h"
+
+/* --session: decode as a session of the driver (dev_null_sessions) */
+static int g_session_mode;
 #include "h264parse.h"
 #include "hevcparse.h"
 #include "vp9parse.h"
@@ -170,6 +177,30 @@ static void print_status_bits(unsigned s)
 
 /* --------------------------------------------------------------- info */
 
+/* The driver's note of the last failed import (README.md), from its
+ * Device Parameters; nothing printed when there is none. */
+static void print_last_import(void)
+{
+#ifdef _WIN32
+    static const wchar_t key[] = L"SYSTEM\\CurrentControlSet\\Enum\\ACPI\\RKCP0383\\0\\Device Parameters";
+    static const wchar_t *const names[] = { L"LastImportStage", L"LastImportStatus", L"LastImportPages",
+                                            L"LastImportExporterStatus", L"LastImportExporterPages",
+                                            L"LastImportHandle", L"LastImportPid" };
+    static const char *const stages[] = { "?", "parameters or IOMMU off", "no memory", "refresh of an unknown import",
+                                          "no free IO addresses", "no exporter (maliwddm did not start it)",
+                                          "exporter refused", "page count differs", "IOMMU entries" };
+    DWORD v[7], i;
+
+    for (i = 0; i < 7; i++) {
+        DWORD n = sizeof(v[i]);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, key, names[i], RRF_RT_REG_DWORD, NULL, &v[i], &n) != ERROR_SUCCESS)
+            return;
+    }
+    printf("last failed import  stage %lu (%s), status 0x%08lx; %lu pages asked, exporter 0x%08lx with %lu pages; "
+           "handle %lu, process %lu\n", v[0], stages[v[0] < 9 ? v[0] : 0], v[1], v[2], v[3], v[4], v[5], v[6]);
+#endif
+}
+
 static int cmd_info(void)
 {
     VDPU383_INFO in;
@@ -202,6 +233,13 @@ static int cmd_info(void)
     if (in.interface_version >= 3)
         printf("imports             %u made or refreshed, %u taken back by the display driver, %u failed\n",
                in.imports, in.revokes, in.import_failures);
+    if (in.interface_version >= 3 && in.import_failures)
+        print_last_import();
+    if (in.interface_version >= 4)
+        printf("sessions            %u open, %u made, %u decodes through them, %u refused; "
+               "IOMMU directory switched %u times; UserAccess %u\n",
+               in.sessions, in.sessions_made, in.session_runs, in.session_refused, in.domain_switches,
+               in.user_access);
     printf("warm-up at D0 entry: ran %u timed_out %u irq 0x%08x status 0x%08x (", in.warmup.ran,
            in.warmup.timed_out, in.warmup.irq, in.warmup.status);
     print_status_bits(in.warmup.status & 0xFFFF);
@@ -1446,7 +1484,7 @@ static int cmd_decode(int argc, char **argv)
         else if (!strcmp(argv[i], "--dxva-only")) d.dxva_only = 1;
         else if (!strcmp(argv[i], "--stride") && i + 1 < argc) d.stride_mpp = !strcmp(argv[++i], "mpp");
         else if (!strcmp(argv[i], "--link-vendor")) d.link_vendor = 1;
-        else if (!strcmp(argv[i], "--null")) ;
+        else if (!strcmp(argv[i], "--null") || !strcmp(argv[i], "--session")) ;
         else if (!strcmp(argv[i], "--hevc")) codec = 2;
         else if (!strcmp(argv[i], "--h264")) codec = 1;
         else if (!strcmp(argv[i], "--av1-synth") && i + 1 < argc) {
@@ -1558,6 +1596,8 @@ static int cmd_decode(int argc, char **argv)
     free(data);
     free(d.ref);
     free(d.frame);
+    if (dev_is_null() && g_session_mode)
+        printf("session check: %u decodes refused\n", dev_null_refused());
     return (rc || d.hw_errors || d.mismatches || d.rps_real_bad || d.rps_rebuilt_bad || d.addr_bad ||
             (d.ref && codec >= 3 && d.ref_off != d.ref_len) ||
             (d.dxva_only && d.rps_unsupported)) ? 2 : 0;
@@ -1977,6 +2017,157 @@ static int cmd_selftest(void)
     return fails ? 1 : 0;
 }
 
+/* ---------------------------------------------------------- sessions */
+
+/*
+ * The driver's session rules (vdpu383_check.h) on the null device: two
+ * sessions (two processes' display driver sessions), their buffers, an
+ * imported texture, revocation, closing. Each line names what it checks.
+ */
+static unsigned st_fails;
+#define ST_CHECK(c, what) do { int ok_ = (c); printf("sessiontest: %-62s %s\n", what, ok_ ? "ok" : "FAILED"); \
+                               if (!ok_) st_fails++; } while (0)
+
+static void st_set(VDPU383_RUN_IN *in, unsigned r, unsigned v)
+{
+    in->regs[r] = v;
+    in->write_mask[r / 32] |= 1u << (r % 32);
+}
+
+static unsigned st_run(const VDPU383_RUN_IN *in, unsigned *bad)
+{
+    VDPU383_RUN_OUT *out = (VDPU383_RUN_OUT *)calloc(1, sizeof(*out));
+    unsigned r;
+
+    if (!out || dev_run(in, out)) {
+        free(out);
+        return 0xFFFFFFFFu;
+    }
+    r = out->result;
+    *bad = out->bad_reg;
+    free(out);
+    return r;
+}
+
+static int cmd_sessiontest(void)
+{
+    VDPU383_RUN_IN *in = (VDPU383_RUN_IN *)calloc(1, sizeof(*in));
+    VDPU383_INFO info;
+    VDPU383_IMPORT_OUT imp, imp2;
+    DevBuf strm, aux, pic, other, stolen;
+    uint64_t tok, tok2, tokb;
+    unsigned bad = 0, r, in_sz, out_sz;
+    const VDPU383_RUN_IN *seen;
+
+    if (!in)
+        return 1;
+    dev_null_sessions(1);
+
+    /* which calls a session has, and their sizes */
+    ST_CHECK(v383_session_ioctl_ok(IOCTL_VDPU383_RUN) && v383_session_ioctl_ok(IOCTL_VDPU383_ALLOC) &&
+             v383_session_ioctl_ok(IOCTL_VDPU383_FREE) && v383_session_ioctl_ok(IOCTL_VDPU383_IMPORT) &&
+             v383_session_ioctl_ok(IOCTL_VDPU383_GET_INFO), "a session may run, allocate, free, import, ask");
+    ST_CHECK(!v383_session_ioctl_ok(IOCTL_VDPU383_WRITE_REGS) && !v383_session_ioctl_ok(IOCTL_VDPU383_READ_REGS) &&
+             !v383_session_ioctl_ok(IOCTL_VDPU383_WARMUP) && !v383_session_ioctl_ok(IOCTL_VDPU383_RESET) &&
+             !v383_session_ioctl_ok(0x83830000u), "no register access, warm-up, reset or unknown call");
+    ST_CHECK(v383_session_sizes(IOCTL_VDPU383_RUN, &in_sz, &out_sz) && in_sz == sizeof(VDPU383_RUN_IN) &&
+             out_sz == sizeof(VDPU383_RUN_OUT) && !v383_session_sizes(IOCTL_VDPU383_WRITE_REGS, &in_sz, &out_sz),
+             "the sizes of a session's calls");
+
+    /* session 1: a decode of its own buffers */
+    dev_null_select(1);
+    if (dev_alloc(64 << 10, &strm) || dev_alloc(64 << 10, &aux) || dev_alloc(256 << 10, &pic))
+        return 1;
+    st_set(in, 8, 0x1);                 /* a mode register, not an address */
+    st_set(in, 66, 1000);
+    st_set(in, 128, strm.dma);
+    st_set(in, 131, aux.dma + 0x100);
+    st_set(in, 168, pic.dma);
+    st_set(in, 216, pic.dma + (192 << 10));
+    in->flags = VDPU383_RUN_RESET_ON_ERROR;
+    in->timeout_ms = 2000;
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_OK, "session 1 decodes into its own buffers");
+
+    /* an address just past its picture buffer */
+    st_set(in, 168, pic.dma + pic.size);
+    r = st_run(in, &bad);
+    ST_CHECK(r == VDPU383_RUN_BAD_ADDRESS && bad == 168, "an address outside its buffers is refused (register 168)");
+    in->flags |= VDPU383_RUN_NO_ADDR_CHECK;
+    r = st_run(in, &bad);
+    ST_CHECK(r == VDPU383_RUN_BAD_ADDRESS && bad == 168, "and is refused with VDPU383_RUN_NO_ADDR_CHECK too");
+    st_set(in, 168, pic.dma);
+
+    /* what the driver makes of a session's run flags */
+    in->flags = VDPU383_RUN_NO_ADDR_CHECK | VDPU383_RUN_READBACK | VDPU383_RUN_RESET_ON_ERROR;
+    in->timeout_ms = 600000;
+    in->link_ip_enable = 0x01000000;
+    r = st_run(in, &bad);
+    seen = dev_null_last_run();
+    ST_CHECK(r == VDPU383_RUN_OK && seen->flags == VDPU383_RUN_RESET_ON_ERROR &&
+             seen->timeout_ms == V383_SESSION_TIMEOUT_MS && seen->link_ip_enable == 0,
+             "no read-back, no skipped check, a bounded wait, link enable 0");
+    in->flags = VDPU383_RUN_RESET_ON_ERROR;
+    in->timeout_ms = 0;
+    in->link_ip_enable = 0;
+    (void)st_run(in, &bad);
+    ST_CHECK(dev_null_last_run()->timeout_ms == V383_SESSION_TIMEOUT_MS, "timeout 0 becomes the session bound");
+
+    /* session 2 (another process) names session 1's buffers */
+    dev_null_select(2);
+    if (dev_alloc(64 << 10, &other))
+        return 1;
+    r = st_run(in, &bad);
+    ST_CHECK(r == VDPU383_RUN_BAD_ADDRESS && bad == 128, "another session's buffers are refused");
+    stolen = pic;
+    dev_free(&stolen);
+    dev_null_select(1);
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_OK, "another session cannot free them");
+
+    /* an imported texture of session 1's process */
+    tok = dev_null_export(1, 64);
+    tokb = dev_null_export(2, 64);
+    dev_null_select(2);
+    ST_CHECK(dev_import(tok, 64, 0, &imp) != 0, "another process's export token is refused");
+    dev_null_select(1);
+    ST_CHECK(dev_import(tokb, 64, 0, &imp) != 0, "and the other way round");
+    ST_CHECK(dev_import(tok, 64, 0, &imp) == 0 && imp.handle, "session 1 imports its own texture");
+    st_set(in, 168, imp.dma);
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_OK, "and decodes into it");
+    ST_CHECK(dev_import(tok, 64, 0, &imp2) != 0, "a second import of the same export is refused");
+    dev_null_select(2);
+    r = st_run(in, &bad);
+    ST_CHECK(r == VDPU383_RUN_BAD_ADDRESS, "session 2 cannot decode into it");
+    dev_null_select(1);
+
+    /* the display driver takes the pages back (eviction, destruction) */
+    dev_null_revoke(tok);
+    r = st_run(in, &bad);
+    ST_CHECK(r == VDPU383_RUN_REVOKED && bad == 168, "after revocation a decode naming it is refused (revoked)");
+    ST_CHECK(dev_import(tok, 64, imp.handle, &imp2) != 0, "the old token is gone");
+    tok2 = dev_null_export(1, 64);
+    ST_CHECK(dev_import(tok2, 64, imp.handle, &imp2) == 0 && imp2.dma == imp.dma, "a new export refreshes it in place");
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_OK, "and the decode runs again");
+
+    /* session 1's process exits: its session closes */
+    dev_null_close(1);
+    dev_null_select(2);
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_BAD_ADDRESS, "a closed session's buffers stay refused to others");
+    dev_null_select(3);
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_BAD_ADDRESS, "and to a new session");
+
+    /* what a session is told */
+    memset(&info, 0x5a, sizeof(info));
+    v383_session_scrub_info(&info);
+    ST_CHECK(info.iommu_dt_dma == 0 && info.mmu_dte[0] == 0 && info.mmu_dte[1] == 0 && info.sram_dma == 0 &&
+             info.link[0] == 0 && info.link[23] == 0 && info.warmup.buffer_dma == 0 &&
+             info.mmu_last_fault_addr[0] == 0 && info.runs == 0x5a5a5a5au,
+             "no physical addresses or registers in GET_INFO, counters kept");
+
+    free(in);
+    printf("sessiontest: %s (%u refused decodes counted)\n", st_fails ? "FAILED" : "passed", dev_null_refused());
+    return st_fails ? 1 : 0;
+}
+
 /* ---------------------------------------------------------------- main */
 
 static void usage(void)
@@ -1985,7 +2176,8 @@ static void usage(void)
            "                   decode IN.264 [-o out.yuv] [--ref ref.yuv] [-n N] [--frame-md5]\n"
            "                          [--dump DIR] [--readback] [--regs] [--dxva-only]\n"
            "                          [--stride mpp] [--link-vendor] [--vp9-mpp[-intra|-update]] [--av1-synth 0|1] |\n"
-           "                   replay DIR/replay.txt | selftest\n");
+           "                   replay DIR/replay.txt | selftest | --null sessiontest\n"
+           "       --session (with --null): decode as a session of the driver\n");
 }
 
 int main(int argc, char **argv)
@@ -1997,6 +2189,8 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--null"))
             null_dev = 1;
+        else if (!strcmp(argv[i], "--session"))
+            g_session_mode = 1;
         else if (!cmd) {
             cmd = argv[i];
             first = i + 1;
@@ -2012,7 +2206,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "%s\n", dev_error());
         return 1;
     }
-    if (!strcmp(cmd, "info"))
+    if (null_dev && g_session_mode)
+        dev_null_sessions(1);
+    if (!strcmp(cmd, "sessiontest"))
+        rc = null_dev ? cmd_sessiontest() : 1;
+    else if (!strcmp(cmd, "info"))
         rc = cmd_info();
     else if (!strcmp(cmd, "warmup"))
         rc = cmd_warmup();

@@ -27,7 +27,7 @@ Firmware support per board:
 |---|---|---|
 | TaishanPi 3M | `main` | both options |
 | CM5-IO | `cm5io-parity` | both options, not merged to `main` yet |
-| ROCK 4D | `rock4d-parity` | both options, not merged to `main` yet |
+| ROCK 4D | `main` | both options, not tried on the board |
 
 The debug console UART (UART0) is never one of the header UARTs here, on
 any board, and rk3xuart refuses to start on it.
@@ -65,8 +65,8 @@ mainline `rk3576-pinctrl.dtsi`.
 
 | Use | Header pins | SoC | Name in Windows |
 |---|---|---|---|
-| UART4 (M0) | TX 8, RX 10 | GPIO2_D0, GPIO2_D1 | port `UART4`, `COM4` |
-| UART8 (M1) | TX 37, RX 40 | GPIO2_A6, GPIO2_A7 | port `UART8`, `COM8` |
+| UART4 (M0) | TX 8, RX 10 | GPIO2_D0, GPIO2_D1 | port `UART4` and a COM name |
+| UART8 (M1) | TX 37, RX 40 | GPIO2_A6, GPIO2_A7 | port `UART8` and a COM name |
 | I2C7 (M1) | SDA 3, SCL 5 | GPIO3_A1, GPIO3_A0 | `I2C7` (the default I2C bus) |
 | I2C8 (M2) | SDA 27, SCL 28 | GPIO2_B7, GPIO2_B6 | `I2C8` |
 | SPI1 (M1) | MOSI 19, MISO 21, SCLK 23, CS0 24, CS1 26 | GPIO2_C2, C3, C5, C4, C1 | `SPI1`, chip selects 0 and 1 |
@@ -97,7 +97,7 @@ input, not a GPIO.
 
 | Use | Header pins | SoC | Name in Windows |
 |---|---|---|---|
-| UART2 (M1) | RX 3, TX 5 | GPIO4_B4, GPIO4_B5 | port `UART2`, `COM2` |
+| UART2 (M1) | RX 3, TX 5 | GPIO4_B4, GPIO4_B5 | port `UART2` and a COM name |
 | I2C4 (M3) | SDA 27, SCL 29 | GPIO3_B7, GPIO3_C0 | `I2C4` |
 | SPI3 (M0) | MOSI 19, MISO 21, SCLK 23, CS0 24 | GPIO3_A1, A2, A0, A3 | `SPI3`, chip select 0 |
 
@@ -118,8 +118,8 @@ console. Pins 27/28 are I2C6 with the board's EEPROM at 0x50 (mainline
 
 | Use | Header pins | SoC | Name in Windows |
 |---|---|---|---|
-| UART4 (M1) | TX 11, RX 15 | GPIO1_C4, GPIO1_C5 | port `UART4`, `COM4` |
-| UART7 (M0) | TX 16, RX 18 | GPIO2_B6, GPIO2_B7 | port `UART7`, `COM7` |
+| UART4 (M1) | TX 11, RX 15 | GPIO1_C4, GPIO1_C5 | port `UART4` and a COM name |
+| UART7 (M0) | TX 16, RX 18 | GPIO2_B6, GPIO2_B7 | port `UART7` and a COM name |
 | I2C8 (M1) | SDA 3, SCL 5 | GPIO1_C7, GPIO1_C6 | `I2C8` (the default I2C bus) |
 | I2C6 (M3) | SDA 27, SCL 28 | GPIO4_C7, GPIO4_C6 | `I2C6` (EEPROM at 0x50) |
 | SPI1 (M0) | MOSI 19, MISO 21, SCLK 23, CS0 24, CS1 26 | GPIO1_B5, B6, B4, B7, GPIO1_C0 | `SPI1`, chip selects 0 and 1 |
@@ -143,7 +143,7 @@ console. Pins 27/28 are I2C6 with the board's EEPROM at 0x50 (mainline
 2. Install rk3xuart from the CI artifact (`rk3576-woa-uart-arm64`, or the
    signed packages the WinPE workflow puts on its media) the same way as the
    other test-signed drivers ([INSTALL.md](INSTALL.md)):
-   `pnputil /add-driver rk3xuart.inf /install`.
+   `pnputil /add-driver rk3xuart.inf` (stage only), then restart.
 3. Check rhproxy is on the system:
    `reg query HKLM\SYSTEM\CurrentControlSet\Services\rhproxy` and
    `dir C:\Windows\INF\rhproxy.inf`. Device Manager should then show
@@ -158,8 +158,11 @@ UART, with TX wired to RX:
 ```
 serialtest list
 serialtest UART4 --sweep
-serialtest COM4 --baud 115200 --bytes 65536
+serialtest COM5 --baud 115200 --bytes 65536
 ```
+
+Windows picks each UART's COM number (one no other device holds, so not
+necessarily COM4 for UART4); `serialtest list` shows it.
 
 [serialtest](../tools/serialtest) is in the CI artifact `rk3576-woa-serialtest-arm64`.
 Any terminal program that takes a COM name works too.
@@ -204,7 +207,7 @@ Nothing above has run on hardware. In this order, one board at a time
 2. "40-pin UART" on: the firmware log shows `Pin40: 2 UART(s)` and
    `AcpiPlatform: 40-pin UART on`. In Windows, `RKCP3006` devices appear;
    after installing rk3xuart they start. `serialtest list` shows `UART4` and
-   `UART8` interfaces and `COM4`/`COM8`. With a jumper from TX to RX,
+   `UART8` interfaces and their COM names. With a jumper from TX to RX,
    `serialtest UART4 --sweep` passes; then a USB serial adapter on a PC,
    both directions, at 115200.
 3. "40-pin GPIO/I2C/SPI for apps" on: `\_SB.RHPX` starts (rhproxy present?
@@ -214,6 +217,6 @@ Nothing above has run on hardware. In this order, one board at a time
    finds a known I2C device on pins 3/5. SpiTestTool loopback with MOSI
    wired to MISO on SPI1.
 4. Both on: pins 8, 10, 37, 40 are gone from the GPIO list, the UARTs work.
-5. Then the CM5-IO and ROCK 4D on their branches, the same steps; on the
+5. Then the CM5-IO (on its branch) and the ROCK 4D, the same steps; on the
    CM5-IO, check the debug console on pins 8/10 keeps working with both
    options on.

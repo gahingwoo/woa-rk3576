@@ -11,7 +11,8 @@ them.
 | HDMI output, 48 kHz stereo | TaishanPi 3M | `PcdHdmiAudioPreset` (TRUE) | the same, and wddm-mali-g52 driving HDMI | board-tested |
 | HDMI output | CM5-IO | `PcdHdmiAudioPreset` (TRUE) | the same | CI only |
 | ES8388: CN3 header (OUT2 on test pads), LIN2/RIN2 differential microphone pads | CM5-IO | edk2-rk3576 branch `cm5io-parity` | the same, es8323 with optional interrupt | branch |
-| ES8388: headphone jack, LIN1 headset microphone | ROCK 4D | edk2-rk3576 branch `rock4d-parity` | the same | branch |
+| ES8388: headphone jack, LIN1 microphone | ROCK 4D | edk2-rk3576 `main` | the same | board-tested (jack detect not tried) |
+| HDMI output | ROCK 4D | edk2-rk3576 `main` | the same, and wddm-mali-g52 driving HDMI | board-tested |
 
 These need edk2-rk3576 firmware newer than 0.4.1 (the `ci` build until the
 next release). A USB audio device works with Windows' inbox USB Audio Class
@@ -188,8 +189,8 @@ other `Jack*` values. `JackDetect` = 0 turns this off too. CI only.
   0 dB.
 - The headset microphone (RINPUT), sample rates other than 48 kHz, and
   16-bit formats.
-- The CM5-IO's and the ROCK 4D's ES8388: described and configured, not run
-  on either board.
+- The CM5-IO's ES8388: described and configured, not run on the board.
+- The ROCK 4D's jack detection on the SARADC: not run on the board.
 
 ## Installing
 
@@ -197,7 +198,8 @@ other `Jack*` values. `JackDetect` = 0 turns this off too. CI only.
 2. The signed packages are on the WinPE media in `woa-audio\`, next to the
    run's test certificate. They are not injected by the deploy script.
    Install them as in [drivers](../drivers.md): trust the certificate, then
-   `pnputil /add-driver ... /install` for rk3xi2sbus, csaudiork3x and es8323.
+   `pnputil /add-driver ...` (stage only, no `/install`) for rk3xi2sbus,
+   csaudiork3x and es8323, and restart.
    `pl330dma` is already installed from `woa-drivers\`. The CI workflow's
    artifacts carry unsigned catalogs and do not install.
 3. Device Manager shows "Rockchip SAI Bus" once per SAI the DSDT publishes,

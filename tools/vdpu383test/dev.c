@@ -14,10 +14,110 @@
 #include <string.h>
 
 #include "dev.h"
+#include "../../drivers/video/vdpu383/vdpu383_check.h"
 
 static int  g_null;
 static char g_err[256];
 static uint32_t g_fake_dma = 0x10000000;
+
+/* the null device's buffers and imports, for its session mode */
+#define NULL_BUFS 4096
+typedef struct NullBuf {
+    unsigned handle, dma, size, session;
+    int used, import, dead;
+    uint64_t token;
+} NullBuf;
+typedef struct NullExport {
+    uint64_t token;
+    unsigned session, pages;
+    int used, revoked;
+    unsigned import_handle;         /* the import holding it, 0 for none */
+} NullExport;
+static NullBuf g_nb[NULL_BUFS];
+static NullExport g_nx[256];
+static int g_sessions;
+static unsigned g_session = 1, g_next_handle, g_refused;
+static uint64_t g_next_token = 0x7000;
+static VDPU383_RUN_IN g_last_run;
+
+static NullBuf *null_slot(void)
+{
+    unsigned i;
+    for (i = 0; i < NULL_BUFS; i++)
+        if (!g_nb[i].used) {
+            memset(&g_nb[i], 0, sizeof(g_nb[i]));
+            g_nb[i].used = 1;
+            return &g_nb[i];
+        }
+    return NULL;
+}
+
+static NullBuf *null_find(unsigned handle)
+{
+    unsigned i;
+    for (i = 0; i < NULL_BUFS; i++)
+        if (g_nb[i].used && g_nb[i].handle == handle && g_nb[i].session == g_session)
+            return &g_nb[i];
+    return NULL;
+}
+
+/* driver.c V383AddrCheck: the current session's buffers and imports only */
+static unsigned null_lookup(void *ctx, unsigned addr)
+{
+    unsigned i;
+    (void)ctx;
+    for (i = 0; i < NULL_BUFS; i++) {
+        const NullBuf *b = &g_nb[i];
+        if (b->used && b->session == g_session && addr >= b->dma && (uint64_t)addr < (uint64_t)b->dma + b->size)
+            return b->dead ? V383_ADDR_DEAD : V383_ADDR_OK;
+    }
+    return V383_ADDR_BAD;
+}
+
+void dev_null_sessions(int on) { g_sessions = on; }
+void dev_null_select(unsigned session) { g_session = session; }
+unsigned dev_null_refused(void) { return g_refused; }
+const VDPU383_RUN_IN *dev_null_last_run(void) { return &g_last_run; }
+
+void dev_null_close(unsigned session)
+{
+    unsigned i;
+    for (i = 0; i < NULL_BUFS; i++)
+        if (g_nb[i].used && g_nb[i].session == session)
+            g_nb[i].used = 0;
+    for (i = 0; i < 256; i++)
+        if (g_nx[i].used && g_nx[i].session == session)
+            g_nx[i].import_handle = 0;
+}
+
+uint64_t dev_null_export(unsigned session, unsigned pages)
+{
+    unsigned i;
+    for (i = 0; i < 256; i++)
+        if (!g_nx[i].used) {
+            memset(&g_nx[i], 0, sizeof(g_nx[i]));
+            g_nx[i].used = 1;
+            g_nx[i].token = ++g_next_token;
+            g_nx[i].session = session;
+            g_nx[i].pages = pages;
+            return g_nx[i].token;
+        }
+    return 0;
+}
+
+/* maliwddm MwVdecGone: the importer's revoke routine, then the export ends */
+void dev_null_revoke(uint64_t token)
+{
+    unsigned i, k;
+    for (i = 0; i < 256; i++)
+        if (g_nx[i].used && g_nx[i].token == token) {
+            for (k = 0; k < NULL_BUFS; k++)
+                if (g_nb[k].used && g_nb[k].import && g_nb[k].handle == g_nx[i].import_handle)
+                    g_nb[k].dead = 1;
+            g_nx[i].used = 0;
+        }
+}
+
 
 #ifdef _WIN32
 static HANDLE g_dev = INVALID_HANDLE_VALUE;
@@ -155,12 +255,22 @@ int dev_alloc(uint32_t size, DevBuf *b)
     memset(b, 0, sizeof(*b));
     size = (size + 4095) & ~4095u;
     if (g_null) {
+        NullBuf *n = null_slot();
         b->cpu = (uint8_t *)calloc(1, size);
-        if (!b->cpu)
+        if (!b->cpu || !n) {
+            free(b->cpu);
+            b->cpu = NULL;
+            if (n)
+                n->used = 0;
             return -1;
+        }
         b->dma = g_fake_dma;
         b->size = size;
-        b->handle = 1;
+        b->handle = ++g_next_handle;
+        n->handle = b->handle;
+        n->dma = b->dma;
+        n->size = size;
+        n->session = g_session;
         g_fake_dma += (size + 0xFFFF) & ~0xFFFFu;
         return 0;
     }
@@ -189,6 +299,15 @@ void dev_free(DevBuf *b)
     if (!b->handle)
         return;
     if (g_null) {
+        NullBuf *n = null_find(b->handle);
+        /* another session's handle is not this one's to free (driver.c
+         * V383Free: STATUS_INVALID_HANDLE); the memory stays its owner's */
+        if (!n && g_sessions) {
+            snprintf(g_err, sizeof(g_err), "free: no such handle in this session");
+            return;
+        }
+        if (n)
+            n->used = 0;
         free(b->cpu);
     } else {
 #ifdef _WIN32
@@ -206,6 +325,18 @@ int dev_run(const VDPU383_RUN_IN *in, VDPU383_RUN_OUT *out)
     if (g_null) {
         out->result = VDPU383_RUN_OK;
         out->status = V383_STA_FRAME_RDY;
+        if (g_sessions) {
+            /* driver.c V383RunGated for a session */
+            unsigned bad = 0;
+            g_last_run = *in;
+            v383_session_sanitize_run(&g_last_run);
+            out->result = v383_check_addrs(g_last_run.regs, g_last_run.write_mask, null_lookup, NULL, &bad);
+            out->bad_reg = bad;
+            if (out->result != VDPU383_RUN_OK) {
+                out->status = 0;
+                g_refused++;
+            }
+        }
         return 0;
     }
 #ifdef _WIN32
@@ -214,4 +345,57 @@ int dev_run(const VDPU383_RUN_IN *in, VDPU383_RUN_OUT *out)
     (void)in;
     return -1;
 #endif
+}
+
+/* driver.c V383Import with maliwddm's VdecCallback as the exporter */
+int dev_import(uint64_t token, unsigned pages, unsigned handle, VDPU383_IMPORT_OUT *out)
+{
+    NullExport *x = NULL;
+    NullBuf *b;
+    unsigned i;
+
+    memset(out, 0, sizeof(*out));
+    if (!g_null) {
+#ifdef _WIN32
+        VDPU383_IMPORT_IN in;
+        in.token = token;
+        in.pages = pages;
+        in.handle = handle;
+        return ioctl(IOCTL_VDPU383_IMPORT, &in, sizeof(in), out, sizeof(*out), NULL);
+#else
+        return -1;
+#endif
+    }
+    for (i = 0; i < 256; i++)
+        if (g_nx[i].used && g_nx[i].token == token)
+            x = &g_nx[i];
+    /* no such export, another session's (process's), imported already */
+    if (!x || x->session != g_session || (x->import_handle && x->import_handle != handle) || x->pages != pages) {
+        snprintf(g_err, sizeof(g_err), "import refused by the exporter");
+        return -1;
+    }
+    if (handle) {
+        b = null_find(handle);
+        if (!b || !b->import || b->size != pages * 4096u)
+            return -1;
+        b->dead = 0;
+        b->token = token;
+    } else {
+        b = null_slot();
+        if (!b)
+            return -1;
+        b->handle = ++g_next_handle;
+        b->dma = g_fake_dma;
+        b->size = pages * 4096u;
+        b->session = g_session;
+        b->import = 1;
+        b->token = token;
+        g_fake_dma += (b->size + 0xFFFF) & ~0xFFFFu;
+    }
+    x->import_handle = b->handle;
+    out->handle = b->handle;
+    out->dma = b->dma;
+    out->size = b->size;
+    out->flags = VDPU383_ALLOC_IOVA | VDPU383_ALLOC_IMPORTED;
+    return 0;
 }

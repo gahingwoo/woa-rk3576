@@ -16,10 +16,12 @@
  * GUID_DEVINTERFACE_COMPORT interface (Windows 10 1903 and later): that is
  * what Windows.Devices.SerialCommunication finds, and what Win32 programs
  * open with CreateFile on the interface path. For programs that only take
- * a COM name, the driver also creates \DosDevices\COMn (UARTn -> COMn,
- * "PortName" in the device's hardware key overrides it, an empty value
- * turns it off) and lists it under HARDWARE\DEVICEMAP\SERIALCOMM, which is
- * where such programs look for ports.
+ * a COM name, the driver also creates \DosDevices\COMn and lists it under
+ * HARDWARE\DEVICEMAP\SERIALCOMM, which is where such programs look for
+ * ports. The name comes from Windows' COM name arbiter (ComDB): the Ports
+ * class installer claims one and stores it as "PortName", or the driver
+ * claims a free one itself (see RkuCreatePortLink); an empty "PortName"
+ * turns it off.
  *
  * The firmware sets the pins and the UART clock (sclk_uartN = xin24m,
  * 24 MHz) only when its "40-pin UART" setup option is on; the ACPI device
@@ -111,7 +113,115 @@ RkuDsdInteger(_In_ WDFDEVICE Device, _In_z_ const CHAR *Name, _Out_ PULONG Value
     return STATUS_SUCCESS;
 }
 
+/*
+ * COM names. Windows hands them out through the COM name arbiter: a bitmap
+ * at HKLM\SYSTEM\CurrentControlSet\Control\COM Name Arbiter, value ComDB,
+ * bit n-1 set when COMn is claimed (msports.dll's ComDBClaimPort does the
+ * same). The Ports class installer claims one for this device when the
+ * driver is installed and stores it as "PortName" in the device's hardware
+ * key, which is the name used here. Without a stored name (installed before
+ * the INF moved to the Ports class, or the class installer did not run),
+ * the driver claims one itself: COMn for UARTn when nobody holds it, else
+ * the lowest free one, and stores it so the name stays across boots. A
+ * stored name that another driver already links gives way to a free one
+ * for this boot only. The case this is for: UART4 on the TaishanPi 3M
+ * wanted COM4, which the EC20 modem's port holds (2026-11-25), and was left
+ * without a COM name. An empty "PortName" still means no COM name.
+ */
+#define RKU_COMDB_PORTS     256u
+#define RKU_COMDB_BYTES     (RKU_COMDB_PORTS / 8)
+
+static NTSTATUS
+RkuComDbOpen(_Out_ PHANDLE Key)
+{
+    DECLARE_CONST_UNICODE_STRING(path,
+        L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\COM Name Arbiter");
+    OBJECT_ATTRIBUTES oa;
+
+    InitializeObjectAttributes(&oa, (PUNICODE_STRING)&path, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               NULL, NULL);
+    return ZwCreateKey(Key, KEY_QUERY_VALUE | KEY_SET_VALUE, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL);
+}
+
 static VOID
+RkuComDbRead(_In_ HANDLE Key, _Out_writes_bytes_(RKU_COMDB_BYTES) PUCHAR Bits)
+{
+    DECLARE_CONST_UNICODE_STRING(valueName, L"ComDB");
+    DECLSPEC_ALIGN(8) UCHAR buf[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + RKU_COMDB_BYTES];
+    PKEY_VALUE_PARTIAL_INFORMATION info = (PKEY_VALUE_PARTIAL_INFORMATION)buf;
+    ULONG len = 0;
+    NTSTATUS status;
+
+    RtlZeroMemory(Bits, RKU_COMDB_BYTES);
+    status = ZwQueryValueKey(Key, (PUNICODE_STRING)&valueName, KeyValuePartialInformation,
+                             info, sizeof(buf), &len);
+    /* longer than 256 ports: the first 256 bits are enough here */
+    if ((NT_SUCCESS(status) || status == STATUS_BUFFER_OVERFLOW) && info->Type == REG_BINARY) {
+        RtlCopyMemory(Bits, info->Data, min(info->DataLength, RKU_COMDB_BYTES));
+    }
+}
+
+static VOID
+RkuComDbClaim(_In_ HANDLE Key, _In_ ULONG Number)
+{
+    DECLARE_CONST_UNICODE_STRING(valueName, L"ComDB");
+    DECLSPEC_ALIGN(8) UCHAR buf[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + RKU_COMDB_BYTES];
+    PKEY_VALUE_PARTIAL_INFORMATION info = (PKEY_VALUE_PARTIAL_INFORMATION)buf;
+    UCHAR bits[RKU_COMDB_BYTES];
+    ULONG len = 0;
+    NTSTATUS status;
+
+    if (Number == 0 || Number > RKU_COMDB_PORTS) {
+        return;
+    }
+    status = ZwQueryValueKey(Key, (PUNICODE_STRING)&valueName, KeyValuePartialInformation,
+                             info, sizeof(buf), &len);
+    if (status == STATUS_BUFFER_OVERFLOW) {
+        /* a longer bitmap than this driver writes: leave it to msports */
+        return;
+    }
+    RtlZeroMemory(bits, sizeof(bits));
+    if (NT_SUCCESS(status) && info->Type == REG_BINARY) {
+        RtlCopyMemory(bits, info->Data, min(info->DataLength, RKU_COMDB_BYTES));
+    }
+    bits[(Number - 1) / 8] |= (UCHAR)(1u << ((Number - 1) % 8));
+    status = ZwSetValueKey(Key, (PUNICODE_STRING)&valueName, 0, REG_BINARY, bits, sizeof(bits));
+    if (!NT_SUCCESS(status)) {
+        RKU_ERR("ComDB: COM%lu not claimed (0x%08lx)", Number, status);
+    }
+}
+
+/* n for "COMn" (1..256), else 0 */
+static ULONG
+RkuComNumber(_In_z_ PCWSTR Name)
+{
+    ULONG n = 0;
+    ULONG i;
+
+    if ((Name[0] != L'C' && Name[0] != L'c') || (Name[1] != L'O' && Name[1] != L'o') ||
+        (Name[2] != L'M' && Name[2] != L'm') || Name[3] == L'\0') {
+        return 0;
+    }
+    for (i = 3; Name[i] != L'\0'; i++) {
+        if (Name[i] < L'0' || Name[i] > L'9' || n > RKU_COMDB_PORTS) {
+            return 0;
+        }
+        n = n * 10 + (ULONG)(Name[i] - L'0');
+    }
+    return (n >= 1 && n <= RKU_COMDB_PORTS) ? n : 0;
+}
+
+static BOOLEAN
+RkuComDbTaken(_In_reads_bytes_(RKU_COMDB_BYTES) const UCHAR *Bits, _In_ ULONG Number)
+{
+    return (Bits[(Number - 1) / 8] & (1u << ((Number - 1) % 8))) != 0;
+}
+
+/*
+ * The stored "PortName". Returns TRUE when the hardware key has one (it may
+ * be empty: no COM name wanted).
+ */
+static BOOLEAN
 RkuReadPortName(_In_ PRKU_DEVICE Dev)
 {
     DECLARE_CONST_UNICODE_STRING(valueName, L"PortName");
@@ -120,49 +230,137 @@ RkuReadPortName(_In_ PRKU_DEVICE Dev)
     NTSTATUS status;
 
     RtlZeroMemory(Dev->PortName, sizeof(Dev->PortName));
-    if (Dev->UartIndex != RKU_NO_INDEX) {
-        (VOID)RtlStringCchPrintfW(Dev->PortName, ARRAYSIZE(Dev->PortName), L"COM%lu", Dev->UartIndex);
-    }
-
     status = WdfDeviceOpenRegistryKey(Dev->Device, PLUGPLAY_REGKEY_DEVICE, KEY_READ,
                                       WDF_NO_OBJECT_ATTRIBUTES, &key);
     if (!NT_SUCCESS(status)) {
-        return;
+        return FALSE;
     }
     value.Buffer = Dev->PortName;
     value.Length = 0;
     value.MaximumLength = sizeof(Dev->PortName) - sizeof(WCHAR);
     status = WdfRegistryQueryUnicodeString(key, &valueName, NULL, &value);
+    WdfRegistryClose(key);
     if (NT_SUCCESS(status)) {
         Dev->PortName[value.Length / sizeof(WCHAR)] = L'\0';
-    } else if (status != STATUS_OBJECT_NAME_NOT_FOUND) {
-        RKU_ERR("PortName unreadable (0x%08lx), keeping %ws", status, Dev->PortName);
+        return TRUE;
     }
-    WdfRegistryClose(key);
+    RtlZeroMemory(Dev->PortName, sizeof(Dev->PortName));
+    if (status != STATUS_OBJECT_NAME_NOT_FOUND) {
+        RKU_ERR("PortName unreadable (0x%08lx)", status);
+    }
+    return FALSE;
 }
 
 static VOID
-RkuCreatePortLink(_In_ PRKU_DEVICE Dev)
+RkuStorePortName(_In_ PRKU_DEVICE Dev)
+{
+    DECLARE_CONST_UNICODE_STRING(valueName, L"PortName");
+    UNICODE_STRING value;
+    WDFKEY key;
+    NTSTATUS status;
+
+    status = WdfDeviceOpenRegistryKey(Dev->Device, PLUGPLAY_REGKEY_DEVICE, KEY_SET_VALUE,
+                                      WDF_NO_OBJECT_ATTRIBUTES, &key);
+    if (NT_SUCCESS(status)) {
+        RtlInitUnicodeString(&value, Dev->PortName);
+        status = WdfRegistryAssignUnicodeString(key, &valueName, &value);
+        WdfRegistryClose(key);
+    }
+    if (!NT_SUCCESS(status)) {
+        RKU_ERR("PortName %ws not stored (0x%08lx)", Dev->PortName, status);
+    }
+}
+
+static NTSTATUS
+RkuTryPortLink(_In_ PRKU_DEVICE Dev, _In_z_ PCWSTR Name)
 {
     WCHAR linkBuf[40];
     UNICODE_STRING link;
     UNICODE_STRING target;
     NTSTATUS status;
 
-    if (Dev->PortName[0] == L'\0') {
-        return;
-    }
-    (VOID)RtlStringCchPrintfW(linkBuf, ARRAYSIZE(linkBuf), L"\\DosDevices\\%ws", Dev->PortName);
+    (VOID)RtlStringCchPrintfW(linkBuf, ARRAYSIZE(linkBuf), L"\\DosDevices\\%ws", Name);
     RtlInitUnicodeString(&link, linkBuf);
     RtlInitUnicodeString(&target, Dev->DeviceName);
-
     status = IoCreateSymbolicLink(&link, &target);
-    if (!NT_SUCCESS(status)) {
-        /* another driver owns the name: the device interface still works */
-        RKU_ERR("UART%lu: %ws not created (0x%08lx)", Dev->UartIndex, Dev->PortName, status);
+    if (NT_SUCCESS(status)) {
+        (VOID)RtlStringCchCopyW(Dev->PortName, ARRAYSIZE(Dev->PortName), Name);
+        Dev->PortLinkCreated = TRUE;
+    }
+    return status;
+}
+
+static VOID
+RkuCreatePortLink(_In_ PRKU_DEVICE Dev)
+{
+    UCHAR bits[RKU_COMDB_BYTES];
+    WCHAR name[16];
+    HANDLE db = NULL;
+    BOOLEAN stored;
+    BOOLEAN claimed = FALSE;
+    ULONG n;
+    NTSTATUS status;
+
+    stored = RkuReadPortName(Dev);
+    if (stored && Dev->PortName[0] == L'\0') {
+        RKU_LOG("UART%lu: PortName is empty, no COM name", Dev->UartIndex);
         return;
     }
-    Dev->PortLinkCreated = TRUE;
+
+    /* a stored name is this device's: use it while nobody else links it */
+    if (stored) {
+        (VOID)RtlStringCchCopyW(name, ARRAYSIZE(name), Dev->PortName);
+        status = RkuTryPortLink(Dev, name);
+        if (!NT_SUCCESS(status)) {
+            RKU_ERR("UART%lu: %ws not created (0x%08lx), taking a free one for this boot",
+                    Dev->UartIndex, name, status);
+        }
+    }
+
+    if (!Dev->PortLinkCreated) {
+        if (!NT_SUCCESS(RkuComDbOpen(&db))) {
+            db = NULL;
+        }
+        RtlZeroMemory(bits, sizeof(bits));
+        if (db != NULL) {
+            RkuComDbRead(db, bits);
+        }
+        /* COMn for UARTn first, then the lowest number ComDB has free */
+        if (Dev->UartIndex != RKU_NO_INDEX && Dev->UartIndex >= 1 &&
+            !RkuComDbTaken(bits, Dev->UartIndex)) {
+            (VOID)RtlStringCchPrintfW(name, ARRAYSIZE(name), L"COM%lu", Dev->UartIndex);
+            if (NT_SUCCESS(RkuTryPortLink(Dev, name))) {
+                claimed = TRUE;
+            }
+        }
+        for (n = 1; !Dev->PortLinkCreated && n <= RKU_COMDB_PORTS; n++) {
+            if (RkuComDbTaken(bits, n)) {
+                continue;
+            }
+            (VOID)RtlStringCchPrintfW(name, ARRAYSIZE(name), L"COM%lu", n);
+            if (NT_SUCCESS(RkuTryPortLink(Dev, name))) {
+                claimed = TRUE;
+            }
+        }
+        /* a stand-in for a taken stored name is not claimed, or every
+           such boot would use up one more ComDB number */
+        if (claimed && !stored && db != NULL) {
+            RkuComDbClaim(db, RkuComNumber(Dev->PortName));
+        }
+        if (db != NULL) {
+            ZwClose(db);
+        }
+        if (!Dev->PortLinkCreated) {
+            RtlZeroMemory(Dev->PortName, sizeof(Dev->PortName));
+            RKU_ERR("UART%lu: no free COM name", Dev->UartIndex);
+            return;
+        }
+        /* keep it, as the Ports class installer would; a stored name that
+           was taken stays as it was, so it comes back when it is free */
+        if (!stored) {
+            RkuStorePortName(Dev);
+        }
+    }
 
     (VOID)RtlCreateRegistryKey(RTL_REGISTRY_DEVICEMAP, L"SERIALCOMM");
     status = RtlWriteRegistryValue(RTL_REGISTRY_DEVICEMAP, L"SERIALCOMM", Dev->DeviceName,
@@ -235,7 +433,6 @@ RkuEvtPrepareHardware(WDFDEVICE Device, WDFCMRESLIST ResourcesRaw, WDFCMRESLIST 
     }
     dev->FifoDepth = RKU_DEFAULT_FIFO;
 
-    RkuReadPortName(dev);
     RkuCreatePortLink(dev);
     return STATUS_SUCCESS;
 }

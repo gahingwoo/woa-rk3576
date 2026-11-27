@@ -18,11 +18,10 @@
 #   Start menu\Programs\RK3576\                     three shortcuts (all users)
 #   Task Scheduler \RK3576\Performance counters     SYSTEM, at start: rk3576-counters.ps1
 #   the GPU and NPU counter registrations (lodctr), and %ProgramData%\RK3576 (logs)
-#   rk3576-browser-gpu.ps1 -Action Install: %ProgramFiles%\RK3576\browser-gpu,
-#   the task \RK3576\Browser GPU and HKLM\SOFTWARE\RK3576\BrowserGpu, which keep
-#   --disable-direct-composition on the Edge, Chrome and WebView2 launch
-#   paths while the GPU runs WDDM 2.x (../BROWSER-GPU.md); Uninstall takes
-#   that out again first
+#   nothing from rk3576-browser-gpu.ps1: its Install and Uninstall only take
+#   out the --disable-direct-composition switch, task \RK3576\Browser GPU,
+#   %ProgramFiles%\RK3576\browser-gpu and HKLM\SOFTWARE\RK3576\BrowserGpu
+#   an earlier bundle left (../BROWSER-GPU.md)
 # An offline install starts rk-monitor through the HKLM Run entry
 # "RK3576 Monitor" until its first boot; the task replaces it then (Run
 # entries wait for Explorer's startup delay, about 30 s; a logon task does
@@ -156,8 +155,8 @@ function Invoke-Counters([string[]]$extra) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script @extra 2>&1 | ForEach-Object { Say "  $_" }
 }
 
-# Edge, Chrome and WebView2 on the GPU (BROWSER-GPU.md). Its own process
-# and log; a failure here never fails the install.
+# Takes an earlier bundle's browser switch back out (BROWSER-GPU.md). Its
+# own process and log; a failure here never fails the install.
 function Invoke-BrowserGpu([string]$what) {
     $ErrorActionPreference = 'Continue'
     $script = Join-Path $Dir 'setup\rk3576-browser-gpu.ps1'

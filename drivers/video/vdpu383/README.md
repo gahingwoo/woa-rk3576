@@ -12,7 +12,8 @@ builder in [lib](lib) is plain C (no KMDF, WDM or C library calls, no
 allocation, no floating point) so it can move there unchanged.
 
 The device `ACPI\RKCP0383` exists only when *Video Decoder (VDPU383)* is
-enabled in the firmware setup (off by default; see
+enabled in the firmware setup (on by default in edk2-rk3576 newer than
+0.4.1, off in 0.4.1; see
 [features](../../../docs/features.md#video-decoder)).
 
 | Codec | Status |
@@ -33,7 +34,7 @@ History: `git log -- drivers/video/vdpu383 tools/vdpu383test`.
 | [lib/vdpu383_hevc.c](lib/vdpu383_hevc.c), [lib/v383_dxva_hevc.h](lib/v383_dxva_hevc.h) | HEVC Main, from MPP, checked against mainline rkvdec-vdpu383-hevc.c; rebuilds the SPS reference picture sets, which DXVA does not carry |
 | [lib/vdpu383_vp9.c](lib/vdpu383_vp9.c), [lib/vdpu383_vp9_probs.c](lib/vdpu383_vp9_probs.c), [lib/v383_dxva_vp9.h](lib/v383_dxva_vp9.h) | VP9 profile 0 and 2: registers from MPP hal_vp9d_vdpu383.c (MIT), packers written fresh to MPP's layout (byte equal output), default probabilities from mainline v4l2-vp9.c (GPL-2.0). Keeps frame contexts, segment maps and motion vectors between frames (V383_Vp9State) |
 | [lib/vdpu383_av1.c](lib/vdpu383_av1.c), [lib/vdpu383_av1_cdf.c](lib/vdpu383_av1_cdf.c), [lib/v383_dxva_av1.h](lib/v383_dxva_av1.h) | AV1 Main 8/10 bit: DXVA_PicParams_AV1 to registers and the 672-byte global record, from MPP (MIT); keeps reference slot state per surface (V383_Av1State) and can wrap DXVA tile data in OBUs |
-| [driver.c](driver.c), [warmup.c](warmup.c), [vdpu383_ioctl.h](vdpu383_ioctl.h) | the KMDF driver and its interface `\\.\VDPU383` |
+| [driver.c](driver.c), [warmup.c](warmup.c), [vdpu383_ioctl.h](vdpu383_ioctl.h), [vdpu383_check.h](vdpu383_check.h) | the KMDF driver, its interface `\\.\VDPU383`, and what a session may do (shared with wddm-mali-g52) |
 | [../../../tools/vdpu383test](../../../tools/vdpu383test) | test program, parsers, conformance lists and scripts |
 | [../../../tools/vdpu383-capture](../../../tools/vdpu383-capture) | Linux reference capture and register diff |
 
@@ -62,13 +63,14 @@ when the device starts (restart the device or reboot after a change):
 |---|---|---|
 | `WarmupAtD0` | 1 | run the warm-up decode at every D0 entry and IP reset. 0: never (H.264 is then wrong until `vdpu383test warmup` runs) |
 | `Iommu` | 1 | map buffers through the decoder IOMMU. 0: physically contiguous buffers below 4 GiB, paging off (large surfaces fail with error 1450) |
-| `UserAccess` | 0 | 0: SYSTEM and administrators, one handle. 1: every user, many handles (a player process through the display driver's user-mode part). 2: low-integrity processes too (browser GPU process). With 1 or 2, `VDPU383_RUN_NO_ADDR_CHECK` is ignored and each handle may hold at most 384 MiB |
+| `UserAccess` | 0 | Who may open `\\.\VDPU383` from user mode. 0: SYSTEM and administrators, one handle. 1: every user, many handles. 2: low-integrity processes too. With 1 or 2, `VDPU383_RUN_NO_ADDR_CHECK` is ignored and each handle may hold at most 384 MiB. Players need none of it: they decode through the display driver (sessions, below) |
 
-`UserAccess` is for test boards only. The interface lets the caller write
-decoder registers; the driver checks that every address register points
-into a buffer of that handle, but not that the decoder stays inside it. With
-`Iommu` 1 the decoder reaches every open handle's buffers, so one process can
-reach another's; with `Iommu` 0 it can reach any memory.
+`UserAccess` 1 and 2 are for test boards only, as a back-out for the
+display driver's path. The interface lets the caller write decoder
+registers; the driver checks that every address register points into a
+buffer of that handle, but not that the decoder stays inside it. User-mode
+handles share one IOMMU directory, so one process can reach another's
+buffers; with `Iommu` 0 the decoder can reach any memory.
 
 The driver also writes breadcrumbs to the same key, flushed at once, so they
 survive a hang or bugcheck (boot with the firmware option off if the decoder
@@ -84,6 +86,28 @@ stops Windows):
 | `FirstRunResult`, `FirstRunStatus` | first decode of the session (0 = ok) |
 | `IommuSetting`, `IommuOn`, `MmuDte0`, `MmuEnableStatus0/1` | `Iommu` value read, whether paging came on, directory register, status after enable (bit 0 = paging) |
 | `LastMmuFaultAddr` | IO address of the last IOMMU fault |
+| `LastImportStage`, `LastImportStatus`, `LastImportPages`, `LastImportExporterStatus`, `LastImportExporterPages`, `LastImportHandle`, `LastImportPid`, `ImportFailures`, `Imports` | last failed `IOCTL_VDPU383_IMPORT` (first 16 failures, then every 64th). Stage: 1 parameters or IOMMU off, 2 no memory, 3 refresh of an unknown import, 4 no free IO addresses, 5 no exporter (maliwddm did not start it), 6 exporter refused (its status; maliwddm's `VdecLast*` says why), 7 page count differs (asked vs exporter), 8 IOMMU entries |
+
+## Sessions (interface 4)
+
+A session is a file object opened from kernel mode: wddm-mali-g52's
+maliwddm opens one for each D3D device whose process decodes, and makes
+that process's calls in it (wddm-mali-g52 docs/CHROMIUM-VIDEO.md, C2). A
+session ([vdpu383_check.h](vdpu383_check.h)):
+
+- may get information, allocate, free, import and run; nothing else (no
+  register access, warm-up or reset);
+- has every address register of a decode checked against its own buffers
+  and imports, never the SRAM, whatever its flags; no register read-back;
+  waits at most 2 s; imports only tokens given to its own process;
+- decodes with an IOMMU directory of its own that holds only its buffers,
+  so the decoder cannot reach another session's or user handle's memory
+  even past a buffer's end (the directory is switched before its decode);
+- needs `Iommu` 1; is told no physical addresses or register contents.
+
+At most 64 sessions. `vdpu383test info` prints a `sessions` line; any user
+gets the same counters with wddm-mali-g52's `vdectest kmd`.
+`vdpu383test --null sessiontest` runs these rules on the null device (CI).
 
 ## Zero copy (interface 3)
 

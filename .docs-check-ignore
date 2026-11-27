@@ -1,0 +1,6 @@
+# Names the docs mention that are real but not files of this repository
+# (tools/check-docs).  One fnmatch pattern per line; "external NAME" adds a
+# project name after which a path in backticks is that project's.
+
+# made by whoever runs tools/regress, not tracked
+tools/regress/bin*
