@@ -31,6 +31,11 @@ Maskrom Studio 按所选的板子安装它。CI 构建放在
 它只暂存驱动（`pnputil /add-driver`，从不加 `/install`：现在什么都不会启动），
 并把没有驱动或驱动比包里旧的现有设备标记为下次启动时重装。它从不标记 SD/eMMC 主控（dwcsdhc、dwcmshc），
 因为 Windows 可能正从它们启动；以太网卡只有在没有驱动时才标记。它们的新驱动只暂存，通过离线安装生效。
+
+重启两分钟后，一个 SYSTEM 计划任务（`rk3576-drivers-verify`）检查每个被标记的设备是否用上了新驱动。
+没用上的设备会再标记一次，需要再重启一次：没有用户登录时任务自己重启 Windows，有人登录时只提示
+（消息、登录时的提示、应用程序事件日志）。之后任务删除自己。日志在 `%ProgramData%\RK3576\drivers\verify-bound.log`。
+
 想先看会标记哪些设备（不做任何改动）：
 
     powershell -ExecutionPolicy Bypass -File install-online.ps1 -Board rock4d -Plan
@@ -45,4 +50,5 @@ Maskrom Studio 按所选的板子安装它。CI 构建放在
 
 `.github/workflows/drivers.yml` 用同一个提交构建并签名本仓库的驱动（`build-woa.ps1`），
 从 wddm-mali-g52 和 woa-rk3576-npu 最近一次成功的构建取 maliwddm 和 rknpu，再运行 `assemble.py`。
-`test_assemble.py` 测试它；工作流还会在 Windows runner 上为每块板子规划一次在线安装。
+`test_assemble.py` 测试它；工作流还会在 Windows runner 上为每块板子规划一次在线安装，
+并用 `test_online.ps1` 拿虚构的设备跑一遍重启后的检查。

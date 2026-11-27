@@ -9,7 +9,9 @@ rem                                             install-online.ps1 trusts
 rem                                             certs\*.cer, stages the drivers
 rem                                             (pnputil /add-driver, never
 rem                                             /install) and marks the devices
-rem                                             to take them at the next boot
+rem                                             to take them at the next boot;
+rem                                             a task checks after that boot
+rem                                             that they did (verify-bound.ps1)
 rem
 rem <board> is tspi3m, cm5io or rock4d. boards\<board>.txt lists the driver
 rem folders installed by default, boards\<board>-optional.txt the ones added

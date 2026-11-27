@@ -77,6 +77,7 @@ def run(top, woa, gpu, npu):
            '--install', os.path.join(HERE, 'install.cmd'),
            '--script', os.path.join(HERE, 'install-online.ps1'),
            '--script', os.path.join(HERE, 'mark-reinstall.ps1'),
+           '--script', os.path.join(HERE, 'verify-bound.ps1'),
            '--readme', os.path.join(HERE, 'README.md'),
            '--woa', woa, '--gpu', gpu, '--npu', npu,
            '--version', 'ci-test', '--source', 'package=test', '--out', out]
@@ -97,7 +98,7 @@ class Assemble(unittest.TestCase):
                 self.assertEqual(want, got, b)
                 for d in EVERY_BOARD:
                     self.assertIn(d, got, f'{b} has no {d}')
-            for f in ('install.cmd', 'install-online.ps1', 'mark-reinstall.ps1', 'VERSION.txt', 'SHA256SUMS.txt'):
+            for f in ('install.cmd', 'install-online.ps1', 'mark-reinstall.ps1', 'verify-bound.ps1', 'VERSION.txt', 'SHA256SUMS.txt'):
                 self.assertTrue(os.path.isfile(os.path.join(root, f)), f)
             self.assertTrue(os.path.isfile(os.path.join(root, 'drivers', 'rk3576-null', 'rk3576-null.inf')))
             self.assertFalse(os.path.exists(os.path.join(root, 'drivers', 'rk3576-null', 'rk3576-null.pdb')))

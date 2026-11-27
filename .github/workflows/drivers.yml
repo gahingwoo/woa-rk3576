@@ -136,6 +136,7 @@ jobs:
             --install tools/rk3576-drivers/install.cmd \
             --script tools/rk3576-drivers/install-online.ps1 \
             --script tools/rk3576-drivers/mark-reinstall.ps1 \
+            --script tools/rk3576-drivers/verify-bound.ps1 \
             --readme tools/rk3576-drivers/README.md \
             --readme tools/rk3576-drivers/README.zh-CN.md \
             --woa in/woa --gpu "$gpuin" --npu in/npu/rknpu-windows-arm64.zip \
@@ -186,6 +187,9 @@ jobs:
     needs: package
     runs-on: windows-2022
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/rk3576-drivers
       - uses: actions/download-artifact@v4
         with:
           name: rk3576-drivers-arm64
@@ -194,7 +198,7 @@ jobs:
         shell: powershell
         run: |
           Expand-Archive pkg\rk3576-drivers-arm64.zip -DestinationPath pkg
-          foreach ($f in 'install-online.ps1', 'mark-reinstall.ps1') {
+          foreach ($f in 'install-online.ps1', 'mark-reinstall.ps1', 'verify-bound.ps1') {
             $tok = $null; $err = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "pkg\rk3576-drivers\$f"), [ref]$tok, [ref]$err)
             if ($err) { $err | Out-Host; throw "$f does not parse" }
@@ -224,10 +228,41 @@ jobs:
           $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board nosuch -Plan
           if ($LASTEXITCODE -ne 2) { throw "an unknown board should exit 2, got $LASTEXITCODE" }
           $global:LASTEXITCODE = 0
+      - name: Follow-up check against the real INFs (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          # The 2026-11-27 case with fake devices: the plan writes expected.json,
+          # the simulated boot check re-marks only the GPU that kept its old
+          # package. test_online.ps1 from this commit, the scripts from the package.
+          & powershell -NoProfile -ExecutionPolicy Bypass -File tools\rk3576-drivers\test_online.ps1 -Package pkg\rk3576-drivers
+          if ($LASTEXITCODE -ne 0) { throw "test_online.ps1: exit $LASTEXITCODE" }
+
+  online-verify:
+    name: install.cmd /online follow-up check, simulated on a Windows runner
+    # test_online.ps1 on a small made-up package from this commit's scripts:
+    # fast, needs no driver build.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          foreach ($f in 'install-online.ps1', 'mark-reinstall.ps1', 'verify-bound.ps1', 'test_online.ps1') {
+            $tok = $null; $err = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "tools\rk3576-drivers\$f"), [ref]$tok, [ref]$err)
+            if ($err) { $err | Out-Host; throw "$f does not parse" }
+          }
+      - name: Plan and boot check with fake devices, then live (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          # -Live changes the runner: registers the follow-up task and runs it
+          # as SYSTEM against one ROOT\ device made to look stale.
+          & powershell -NoProfile -ExecutionPolicy Bypass -File tools\rk3576-drivers\test_online.ps1 -Live
+          if ($LASTEXITCODE -ne 0) { throw "test_online.ps1: exit $LASTEXITCODE" }
 
   release:
     name: Rolling "ci" release (driver package)
-    needs: [package, online-plan]
+    needs: [package, online-plan, online-verify]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
