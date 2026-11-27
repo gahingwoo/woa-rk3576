@@ -126,6 +126,98 @@ typedef struct bwl_stats {
     u32 Polls;
 } bwl_stats;
 
+/* ------------------------------------------------------------ WLAN state (bwl_wlan.c) */
+
+enum bwl_sec {
+    BWL_SEC_OPEN = 0,       /* no privacy */
+    BWL_SEC_WPA2_PSK,       /* RSN, PSK, CCMP pairwise and group */
+    BWL_SEC_OTHER,          /* WEP, TKIP, 802.1X, SAE only: not joinable here */
+};
+
+enum bwl_link {
+    BWL_LINK_DOWN = 0,
+    BWL_LINK_CONNECTING,    /* C_SET_SSID sent, no result yet */
+    BWL_LINK_ASSOCIATED,    /* associated; the port is closed until the keys are in */
+    BWL_LINK_UP,            /* keys in (or an open network) */
+};
+
+/* One network as escan or a frame body describes it. */
+typedef struct bwl_bss {
+    u8  Bssid[6];
+    u8  SsidLen;
+    u8  Ssid[32];
+    u8  Channel;            /* the control (primary) channel */
+    u8  Band;               /* 0: 2.4 GHz, 1: 5 GHz */
+    u8  Security;           /* enum bwl_sec */
+    u8  Beacon;             /* the firmware heard it in a beacon (else a probe response) */
+    int Rssi;               /* dBm */
+    u16 Capability;
+    u16 BeaconPeriod;
+} bwl_bss;
+
+/* What the front end gets from the core, on the thread that polls. */
+typedef struct bwl_net_ops {
+    /* A data frame from the firmware, as Ethernet (EAPOL included). */
+    void (*rx_eth)(void *Ctx, const u8 *Eth, u32 Len);
+    /* One escan result and its frame body (Timestamp, interval,
+     * capability, elements), as Windows wants a beacon or probe response. */
+    void (*scan_bss)(void *Ctx, const bwl_bss *Bss, const u8 *Body, u32 Len);
+} bwl_net_ops;
+
+/* Events for the front end, cleared by it (bwl_wlan.Events). */
+#define BWL_EV_SCAN_DONE    0x01u   /* escan finished; ScanStatus */
+#define BWL_EV_ASSOC        0x02u   /* the join finished; ConnStatus (0: associated) */
+#define BWL_EV_DISCONNECT   0x04u   /* the link went down; DisconnectReason */
+#define BWL_EV_KEYED        0x08u   /* firmware supplicant: the handshake finished; ConnStatus */
+
+#define BWL_ASSOC_IE_MAX    512u
+
+typedef struct bwl_wlan {
+    const bwl_net_ops *Net;     /* NULL: data frames dropped, scan results counted only */
+    u8   Mac[6];
+    u32  IoType;                /* C_GET_VERSION: chanspec encoding, IOTYPE_* */
+    u8   Up;                    /* C_UP done */
+    u8   Has5g;
+    u8   FwSupCapable;          /* "cap" lists idsup */
+    u8   FwSup;                 /* this connection: the firmware runs the handshake */
+    u32  Events;                /* BWL_EV_* */
+
+    /* scan */
+    u16  ScanSyncId;
+    u8   Scanning;
+    u32  ScanStatus;
+    u32  ScanResults;
+
+    /* connection */
+    int  Link;                  /* enum bwl_link */
+    bwl_bss Target;
+    u8   Bssid[6];
+    u32  ConnStatus;            /* event status of the failure, 0 if none */
+    u32  ConnEvent;             /* the event that ended the join */
+    u32  DisconnectReason;
+    u32  DisconnectEvent;
+    u8   DisconnectByPeer;      /* the AP deauthenticated or disassociated us (else the link was lost) */
+    u8   AssocPending;          /* join succeeded: read the IEs on the next service */
+    u8   RsnIe[24];             /* what goes into our association request */
+    u32  RsnIeLen;
+    u8   AssocReqIe[BWL_ASSOC_IE_MAX];
+    u32  AssocReqIeLen;
+    u8   AssocRspIe[BWL_ASSOC_IE_MAX];
+    u32  AssocRspIeLen;
+    u16  AssocCapability;
+    u16  AssocListen;
+    u16  AssocAid;
+    u32  RateKbps;              /* BwlLinkInfo */
+    int  Rssi;
+
+    /* data */
+    u32  TxData, TxDataDrops, RxData, RxEapol, TxEapol, Keys, FlowHold;
+    u8   FlowCtl;               /* the firmware's per-priority flow-off bits */
+    u32  LastFwStatus;          /* the firmware's status for the last refused command */
+    u32  JoinFlags;             /* bwl_wlan.c: the join's progress */
+    u8   ScanBody[2048];        /* bwl_wlan.c: an escan record as a frame body */
+} bwl_wlan;
+
 typedef struct bwl_dev {
     const bwl_bus_ops *Ops;
     void *Ctx;
@@ -176,6 +268,8 @@ typedef struct bwl_dev {
     /* Where it stopped, for the breadcrumbs. */
     const char *Step;
     u32  Detail;
+
+    bwl_wlan Wlan;
 } bwl_dev;
 
 /* Big enough for a 32 KB window chunk plus a full control frame. */
@@ -326,6 +420,7 @@ int  BwlBcdcParseDcmd(const u8 *Buf, u32 Len, bwl_dcmd_reply *R);
 int  BwlBcdcData(const u8 *Buf, u32 Len, const u8 **Payload, u32 *PayloadLen, unsigned *IfIdx);
 
 typedef struct bwl_event {
+    u16 Flags;
     u32 Type;
     u32 Status;
     u32 Reason;
@@ -368,6 +463,127 @@ int  BwlClmLoad(bwl_dev *Dev, const u8 *Blob, u32 Len, u32 *Chunks, u32 *ClmStat
 
 /* Drain whatever frames the firmware has queued (events at start-up). */
 int  BwlPollOnce(bwl_dev *Dev);
+
+/*
+ * The poller's step: one look at the SDIO core and every frame it has,
+ * events handled (bwl_wlan.c) and data frames handed to Net->rx_eth; then
+ * what an event left to do (the association's elements). Not from inside
+ * a Net callback. Returns the number of frames read, or a negative error.
+ */
+int  BwlService(bwl_dev *Dev);
+
+/*
+ * One Ethernet frame to the firmware on the data channel (BCDC header,
+ * SDPCM channel 2). BWL_E_CREDIT: no window or flow control is on, try
+ * again after the next BwlService. Prio is the 802.1D priority, 0..7.
+ */
+int  BwlTxEth(bwl_dev *Dev, const u8 *Eth, u32 Len, unsigned Prio);
+int  BwlTxReady(const bwl_dev *Dev, unsigned Prio);
+
+/* ------------------------------------------------------------ bwl_wlan.c */
+
+/*
+ * After the firmware runs (BwlStart, the CLM): the event mask, power save
+ * and roaming as this driver wants them, infrastructure mode, C_UP, and
+ * the chip's address, encoding and bands into Dev->Wlan. Country: two
+ * letters, or NULL for the CLM's default.
+ */
+int  BwlWlanInit(bwl_dev *Dev, const char *Country);
+
+/* escan: every channel, active, the wildcard SSID. Results come through Net->scan_bss. */
+int  BwlScanStart(bwl_dev *Dev);
+
+/*
+ * Join Bss (BSSID, SSID, control channel). Open: no security. WPA2-PSK:
+ * CCMP, our RSN element; Passphrase NULL leaves the handshake to the host
+ * (sup_wpa 0: EAPOL comes up as data, keys with BwlSetKey), else the
+ * firmware runs it (sup_wpa 1, C_SET_WSEC_PMK with the passphrase, 8 to 63
+ * characters, or 64 hex digits). The result comes as BWL_EV_ASSOC (and
+ * BWL_EV_KEYED with the firmware supplicant).
+ */
+int  BwlConnect(bwl_dev *Dev, const bwl_bss *Bss, const char *Passphrase);
+
+/* A CCMP key from the host supplicant: pairwise (index 0, the AP's address) or group. */
+int  BwlSetKey(bwl_dev *Dev, int Pairwise, unsigned KeyIdx, const u8 *Key, u32 Len);
+
+int  BwlDisconnect(bwl_dev *Dev, u16 Reason);
+
+/* Rate and RSSI of the current link into Dev->Wlan. */
+int  BwlLinkInfo(bwl_dev *Dev);
+
+/* The event handler (bwl_ctl.c calls it for every firmware event). */
+void BwlWlanEvent(bwl_dev *Dev, const bwl_event *E);
+
+/* What happens after the event handler, outside the receive path. */
+int  BwlWlanService(bwl_dev *Dev);
+
+/* Association request and response bodies, as Windows wants them in an
+ * association result: fixed fields, then the elements the firmware sent and got. */
+u32  BwlAssocReqBody(const bwl_dev *Dev, u8 *Out, u32 Max);
+u32  BwlAssocRspBody(const bwl_dev *Dev, u8 *Out, u32 Max);
+
+/* ------------------------------------------------------------ bwl_data.c (pure functions) */
+
+/* A chanspec for a 20 MHz channel; the control channel and band of any chanspec. */
+u16  BwlChanspec(u32 IoType, unsigned Channel, unsigned Band);
+void BwlChanspecDecode(u32 IoType, u16 Cs, u8 *Channel, u8 *Band);
+
+/*
+ * A wl_bss_info record (Len bytes, as escan delivers it) to a bwl_bss and
+ * the frame body Windows wants (8 zero bytes of Timestamp, interval,
+ * capability, elements; the SSID and rates built from the record when it
+ * has no elements). 0, or a negative error.
+ */
+int  BwlBssInfoParse(const u8 *Bi, u32 Len, u32 IoType, bwl_bss *Out, u8 *Body, u32 BodyMax, u32 *BodyLen);
+
+/* A beacon or probe response body (from the Timestamp on) to a bwl_bss. */
+int  BwlBssFromBody(const u8 *Bssid, unsigned Channel, unsigned Band, int Rssi, const u8 *Body, u32 Len,
+                    bwl_bss *Out);
+
+/*
+ * The SDIO function an sdbus device ID names: "...&FN_<d>" followed by the
+ * end, '\\', '&' or a NUL (a multi-string is searched whole). S is UTF-16
+ * (Chars units, NUL or not). Returns 0..7, or -1 when no ID names one.
+ */
+int  BwlFindFn(const u16 *S, u32 Chars);
+
+/* The element with this ID in Ies, or NULL. */
+const u8 *BwlFindIe(const u8 *Ies, u32 Len, u8 Id);
+
+/* What an RSN element (or its absence, with the privacy bit) allows: enum bwl_sec. */
+int  BwlRsnSecurity(const u8 *Rsn, u16 Capability);
+
+/* Our RSN element: CCMP group and pairwise, PSK. Returns its length. */
+u32  BwlBuildRsnIe(u8 *Out, u32 Max);
+
+/*
+ * Native 802.11 data frames as WiFiCx hands them over and wants them back
+ * (the same conversions as aic8800usb's aic_data.c).
+ * BwlEthTo80211: an Ethernet frame from the firmware to a 24-byte header
+ *   with From DS (A1 DA, A2 Bssid, A3 SA) plus RFC 1042 / 802.1H SNAP.
+ * Bwl80211ToEth: a To DS data frame from Windows (QoS, +HTC allowed, not
+ *   protected) to Ethernet.
+ * Both return the length, 0 for a frame not to pass, or a negative error.
+ */
+#define BWL_80211_HDR   24u
+int  BwlEthTo80211(const u8 *Bssid, const u8 *Eth, u32 EthLen, u8 *Out, u32 OutMax);
+int  Bwl80211ToEth(const u8 *Frame, u32 Len, u8 *Out, u32 OutMax);
+
+/* A FIFO of frames between the poller and the OS's queues; the driver locks around each call. */
+#define BWL_FRAMEQ_SLOTS 64
+#define BWL_FRAMEQ_MAX   1600
+typedef struct bwl_frameq {
+    u8  Buf[BWL_FRAMEQ_SLOTS][BWL_FRAMEQ_MAX];
+    u16 Len[BWL_FRAMEQ_SLOTS];
+    u8  Prio[BWL_FRAMEQ_SLOTS];
+    u32 Head, Tail;
+    u32 Drops;
+} bwl_frameq;
+
+int  BwlFrameqPush(bwl_frameq *Q, const u8 *Frame, u32 Len, unsigned Prio);
+const u8 *BwlFrameqPeek(const bwl_frameq *Q, u32 *Len, unsigned *Prio);
+void BwlFrameqPop(bwl_frameq *Q);
+u32  BwlFrameqCount(const bwl_frameq *Q);
 
 /* ------------------------------------------------------------ small helpers */
 

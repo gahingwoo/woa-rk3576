@@ -240,20 +240,113 @@
 #define BCDC_FLAG_VER(x)        (((x) & 0xF) << 4)
 #define BCDC_FLAG2_IF_MASK      0xF
 
-/* Firmware commands */
+/* Firmware commands (bwfmreg.h BWFM_C_*, brcmfmac fwil.h BRCMF_C_*) */
 #define C_GET_VERSION           1
 #define C_UP                    2
 #define C_DOWN                  3
+#define C_GET_RATE              12      /* 500 kbit/s units */
+#define C_SET_INFRA             20
+#define C_SET_AUTH              22
+#define C_SET_SSID              26      /* join, with struct join params */
+#define C_SCAN                  50
+#define C_DISASSOC              52      /* struct scb_val */
+#define C_SET_PM                86
+#define C_GET_RSSI              127     /* struct scb_val */
+#define C_GET_BANDLIST          140
 #define C_GET_VAR               262
 #define C_SET_VAR               263
+#define C_SET_WSEC_PMK          268
 
-/* Firmware events */
+/* "wsec", "wpa_auth", "wsec_key", C_SET_WSEC_PMK */
+#define WSEC_NONE               0
+#define WSEC_AES                4
+#define WPA_AUTH_DISABLED       0
+#define WPA2_AUTH_PSK           0x80
+#define CRYPTO_ALGO_AES_CCM     4
+#define WSEC_PRIMARY_KEY        0x02
+#define WSEC_PASSPHRASE         0x01
+#define WSEC_KEY_LEN            164u    /* struct bwfm_wsec_key / brcmf_wsec_key_le */
+#define WSEC_KEY_DATA           8u
+#define WSEC_KEY_ALGO           112u
+#define WSEC_KEY_FLAGS          116u
+#define WSEC_KEY_EA             156u
+#define WSEC_PMK_LEN            68u     /* key_len 2, flags 2, key 64 */
+
+/* escan (brcmf_escan_params_le, brcmf_scan_params_le, brcmf_escan_result_le) */
+#define ESCAN_REQ_VERSION       1
+#define ESCAN_ACTION_START      1
+#define BSSTYPE_ANY             2
+#define SCAN_PARAMS_FIXED       64u
+#define ESCAN_PARAMS_FIXED      (8u + SCAN_PARAMS_FIXED)
+#define ESCAN_RESULT_FIXED      12u
+
+/* struct bwfm_bss_info / brcmf_bss_info_le, natural alignment */
+#define BI_LENGTH               4
+#define BI_BSSID                8
+#define BI_BEACON_PERIOD        14
+#define BI_CAPABILITY           16
+#define BI_SSID_LEN             18
+#define BI_SSID                 19
+#define BI_NRATES               52
+#define BI_RATES                56
+#define BI_CHANSPEC             72
+#define BI_RSSI                 78
+#define BI_CTL_CH               88
+#define BI_FLAGS                96
+#define  BI_FLAGS_FROM_BEACON           0x01
+#define BI_IE_OFFSET            116
+#define BI_IE_LENGTH            120
+#define BI_FIXED                126u
+
+/* join params: struct brcmf_ssid_le, then brcmf_assoc_params_le */
+#define JOIN_PARAMS_LEN         52u
+
+/* chanspecs: brcmu_d11.h, the two encodings C_GET_VERSION announces */
+#define IOTYPE_D11N             1
+#define IOTYPE_D11AC            2
+#define CS_CH_MASK              0x00FFu
+#define CS_N_SB_U               0x0200u
+#define CS_N_SB_NONE            0x0300u
+#define CS_N_BW_MASK            0x0C00u
+#define CS_N_BW_20              0x0800u
+#define CS_N_BW_40              0x0C00u
+#define CS_N_BND_MASK           0xF000u
+#define CS_N_BND_5G             0x1000u
+#define CS_N_BND_2G             0x2000u
+#define CS_AC_SB_MASK           0x0700u
+#define CS_AC_SB_SHIFT          8
+#define CS_AC_BW_MASK           0x3800u
+#define CS_AC_BW_20             0x1000u
+#define CS_AC_BW_40             0x1800u
+#define CS_AC_BW_80             0x2000u
+#define CS_AC_BND_MASK          0xC000u
+#define CS_AC_BND_5G            0xC000u
+
+/* Firmware events (fweh.h BRCMF_E_*) */
 #define ETHERTYPE_BRCM          0x886C
+#define ETHERTYPE_EAPOL         0x888E
 #define BRCM_SUBTYPE_EVENT      1
 #define E_SET_SSID              0
+#define E_AUTH                  3
+#define E_DEAUTH                5
+#define E_DEAUTH_IND            6
+#define E_ASSOC                 7
+#define E_REASSOC               9
+#define E_DISASSOC              11
+#define E_DISASSOC_IND          12
 #define E_LINK                  16
+#define E_ROAM                  19
+#define E_PSK_SUP               46
 #define E_IF                    54
 #define E_ESCAN_RESULT          69
+#define EVENT_MASK_LEN          18u     /* bwfm BWFM_EVENT_MASK_LEN */
+#define EVENT_FLAG_LINK         0x0001  /* E_LINK: link up */
+
+#define E_STATUS_SUCCESS        0
+#define E_STATUS_FAIL           1
+#define E_STATUS_NO_NETWORKS    3
+#define E_STATUS_PARTIAL        8
+#define E_STATUS_FWSUP_DONE     6       /* E_PSK_SUP: keys in place */
 
 /* Downloads ("clmload") */
 #define DLOAD_FLAG_BEGIN        (1u << 1)

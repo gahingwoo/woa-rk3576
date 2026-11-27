@@ -3,11 +3,11 @@
 KMDF function driver for the Broadcom BCM43456 in the AMPAK AP6256 module
 (TaishanPi 3M) and the BCM43752 in the BW3752-50B1 module (ArmSoM CM5 on
 the CM5-IO), on the RK3576 SDIO controller. Both boards wire the module to
-the same controller and the same GPIOs. This is stage W3 of
-[docs/dev/wifi.md](../../../docs/dev/wifi.md): it talks to the chip over
-SDIO, identifies it, downloads and starts the firmware, and reads the
-firmware's version. **It has no network interface yet**, and it has not
-been run on a board.
+the same controller and the same GPIOs. Stages 0 to 2 (W3 of [docs/dev/wifi.md](../../../docs/dev/wifi.md)) talk
+to the chip over SDIO, identify it, start its firmware and read its
+version; on the TaishanPi 3M they passed on the board on 2026-11-26.
+Stage 3 makes it a WiFiCx 1.0 Wi-Fi adapter (scan, connect, data) and
+**has not run on a board yet**.
 
 ## What it needs
 
@@ -25,13 +25,16 @@ been run on a board.
 ## Stages
 
 Under the device's `Device Parameters` key, `Stage` (DWORD) decides how far
-the driver goes. The INF sets 0.
+the driver goes. Both INFs set 0 on a new install and keep a value that is
+already there. Two INFs, one binary: `bcmwlsdio.inf` (Class System, the
+bring-up) and `bcmwlwifi.inf` (Class Net, the Wi-Fi adapter). Install one.
 
 | Stage | Does |
 |---|---|
 | 0 | opens the SDBUS interface and records what sdbus reports; the card is not touched |
 | 1 | also reads the CCCR, turns on function 1, reads the chip ID, scans the cores, halts the chip's CPU and sizes its RAM |
 | 2 | also writes the firmware and NVRAM to RAM, verifies them, starts the CPU, waits for function 2, loads the CLM blob and asks for `ver` |
+| 3 | also sets up the firmware's station and becomes a WiFiCx Wi-Fi adapter: needs `bcmwlwifi.inf`, function 1 only; read when the device starts |
 
 The driver writes what it found next to `Stage` and flushes it (`LastStep`,
 `FwState`, `ChipId`, `FwVersion`, `FwConsole` and more; the full list is
@@ -49,6 +52,8 @@ $d | ForEach-Object { reg query "HKLM\SYSTEM\CurrentControlSet\Enum\$($_.Instanc
 | `driver.c` | PnP, the bring-up work item, the registry breadcrumbs |
 | `sdbus.c` | CMD52/CMD53 and properties through `SdBusSubmitRequest` |
 | `files.c` | reading the firmware files |
+| `wificx.cpp` | stage 3: the WDI commands from WiFiCx, on the worker thread (aic8800usb's front end) |
+| `netadapter.c` | stage 3: the NetAdapterCx queues, native 802.11 frames, the TX and RX FIFOs |
 | `bwl*.c`, `bwl.h`, `bwl_regs.h` | the chip and protocol code, plain C with no Windows dependency; CI builds it into `tools/bwltest` and runs it against a simulated chip |
 
 The chip and protocol code follows OpenBSD's `bwfm` (ISC licence, Patrick

@@ -1,0 +1,132 @@
+;
+; bcmwlwifi.inf - Broadcom BCM43456 Wi-Fi (AMPAK AP6256, LCKFB TaishanPi 3M)
+; and BCM43752 Wi-Fi (BW3752-50B1, ArmSoM CM5 on the CM5-IO) on the RK3576
+; SDIO controller, as a Wi-Fi adapter for Windows' own Wi-Fi (WiFiCx 1.0):
+; the network list in Settings and on the taskbar, Windows' WPA2
+; supplicant, its profiles. Stage 3 of docs/dev/wifi.md.
+;
+; Same binary and service as bcmwlsdio.inf (the bring-up, Class System).
+; Install one of the two: they bind the same IDs. The driver becomes a
+; Wi-Fi adapter only on SDIO function 1 and only with Stage 3 in that
+; device's Device Parameters; Stage is kept across driver changes and is 0
+; on a new install, so this INF alone touches nothing. The function 2 and
+; 3 devices bind here too and stay idle.
+;
+; Target: Windows 11 on ARM64, 22H2/23H2 (build 22621/22631: WiFiCx 1.0,
+; NetAdapterCx 2.2, KMDF 1.33). The firmware files are not part of this
+; package; see README.md and install-firmware.ps1.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Net
+ClassGuid   = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = bcmwlwifi.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+bcmwlsdio.sys = 1
+bwlsdflt.sys  = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%BCMWL.DeviceDesc% = BCMWL_Inst,SD\VID_02D0&PID_A9BF
+%BCMWL.DeviceDesc% = BCMWL_Inst,SD\VID_02D0&PID_4345
+%BCMWL.43752Desc%  = BCMWL_Inst,SD\VID_02D0&PID_AAE8
+%BCMWL.43752Desc%  = BCMWL_Inst,SD\VID_02D0&PID_AAE7
+
+[BCMWL_Inst.NT]
+CopyFiles           = BCMWL_CopyFiles
+AddReg              = BCMWL_AddReg_Ndi
+Characteristics     = 0x84  ; NCF_PHYSICAL | NCF_HAS_UI, as Microsoft's WiFiCx sample
+BusType             = 15    ; PNPBus
+*IfType             = 71    ; IF_TYPE_IEEE80211
+*MediaType          = 16    ; NdisMediumNative802_11
+*PhysicalMediaType  = 9     ; NdisPhysicalMediumNative802_11
+*IfConnectorPresent = 1
+*ConnectionType     = 1     ; NET_IF_CONNECTION_DEDICATED
+*DirectionType      = 0     ; NET_IF_DIRECTION_SENDRECEIVE
+*AccessType         = 2     ; NET_IF_ACCESS_BROADCAST
+*HardwareLoopback   = 0
+
+[BCMWL_AddReg_Ndi]
+HKR, Ndi,            Service,    0, bcmwlsdio
+HKR, Ndi\Interfaces, UpperRange, 0, "ndis5"
+HKR, Ndi\Interfaces, LowerRange, 0, "wlan,ethernet"
+; The station only (no Wi-Fi Direct ports): the Net class installer
+; reserves this many adapters when it installs.
+HKR,,                NumberOfNetworkInterfaces, 0x00010001, 1
+
+[BCMWL_CopyFiles]
+bcmwlsdio.sys
+bwlsdflt.sys
+
+[BCMWL_Inst.NT.HW]
+AddReg = BCMWL_Inst.NT.HW.AddReg
+
+[BCMWL_Inst.NT.HW.AddReg]
+; Device Parameters. FLG_ADDREG_NOCLOBBER (0x2) keeps a value already set
+; on the board across driver changes.
+; Stage: 0 open the SD bus interface only, 1 also identify the chip, 2 also
+; download and start the firmware, 3 also the Wi-Fi adapter (function 1).
+HKR,,"Stage",0x00010003,0
+HKR,,"MaxBlocks",0x00010003,32
+HKR,,"F2BlockMode",0x00010003,0
+HKR,,"Verify",0x00010003,1
+HKR,,"FirmwareDir",0x00000002,"\SystemRoot\System32\drivers\brcm"
+; bwlsdflt below the FDO: sdport 22621 frees the wrong address when KMDF
+; releases GUID_REENUMERATE_SELF_INTERFACE_STANDARD at removal (bwlsdflt.c).
+HKR,,"LowerFilters",0x00010000,"bwlsdflt"
+; Stage 3: the poller's interval while frames move and when idle (ms), the
+; time a connect task may take, and the firmware's own WPA2 supplicant
+; (1: used for the network FwSupSsid names, or any, with Passphrase; both
+; REG_SZ, set by hand; 0: Windows' supplicant).
+HKR,,"PollMs",0x00010003,2
+HKR,,"IdlePollMs",0x00010003,10
+HKR,,"ConnectTimeoutMs",0x00010003,15000
+HKR,,"FwSupplicant",0x00010003,0
+
+[BCMWL_Inst.NT.Services]
+AddService = bcmwlsdio,0x00000002,BCMWL_Service
+AddService = bwlsdflt,,BWLSDFLT_Service
+
+[BCMWL_Service]
+DisplayName   = %BCMWL.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\bcmwlsdio.sys
+
+[BWLSDFLT_Service]
+DisplayName   = %BWLSDFLT.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\bwlsdflt.sys
+
+[BCMWL_Inst.NT.Wdf]
+KmdfService = bcmwlsdio, BCMWL_wdfsect
+
+[BCMWL_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName      = "woa-rk3576"
+DiskName          = "Broadcom SDIO Wi-Fi Installation Disk"
+BCMWL.DeviceDesc  = "Broadcom BCM43456 Wi-Fi (SDIO, WiFiCx)"
+BCMWL.43752Desc   = "Broadcom BCM43752 Wi-Fi (SDIO, WiFiCx)"
+BCMWL.SvcDesc     = "Broadcom SDIO Wi-Fi driver"
+BWLSDFLT.SvcDesc      = "SDIO function filter for bcmwlsdio (sdport removal fix)"
