@@ -3950,7 +3950,23 @@ Return value:
             //
 
             if (Use64BitDescriptor) {
-                *((PULONGLONG) Buffer) = NextAddress.QuadPart;
+
+                //
+                // The 64-bit address sits at offset 4 of a 12-byte entry, so
+                // it is 8-byte aligned only in every other entry. Under
+                // Windows 10 19041 the 64-bit store to entry 0 (offset 4)
+                // raised STATUS_DATATYPE_MISALIGNMENT, bugcheck 0x7E at the
+                // first eMMC transfer; the descriptor buffer is evidently
+                // not Normal cacheable memory there. Windows 11 never showed
+                // it. Store the halves with two separate 4-byte stores:
+                // plain volatile stores were still paired into one STP by
+                // the compiler, the intrinsic is a single STR each.
+                //
+
+                __iso_volatile_store32((volatile __int32 *) Buffer,
+                                       (__int32) NextAddress.LowPart);
+                __iso_volatile_store32((volatile __int32 *) (Buffer + sizeof(ULONG)),
+                                       (__int32) NextAddress.HighPart);
                 Buffer += sizeof(LONGLONG);
 
             } else {
