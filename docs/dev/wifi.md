@@ -176,7 +176,7 @@ Board steps: see [Board session for W2 and W3](#board-session-for-w2-and-w3).
 
 This replaces the earlier W4 to W6 plan (an Ethernet-style adapter first):
 Windows 11 23H2 has WiFiCx 1.0, and aic8800usb already had a WiFiCx 1.0
-front end (`docs/dev/wificx.md` on branch `aic8800-wificx`), so bcmwlsdio
+front end (docs/dev/wificx.md on branch `aic8800-wificx`), so bcmwlsdio
 uses the same one.
 
 | Stage | |
@@ -244,7 +244,8 @@ Stage 3 adds (written by the driver): `ActiveMode` (1: Wi-Fi adapter),
 `NetClass`, `AddFunction`, `FunctionSource` (0 none, 1 instance ID, 2
 hardware IDs, 3 compatible IDs), `WlanInitResult`, `IoType`, `Has5GHz`,
 `FwSupCapable`, `WifiInitStatus`, `OsWdiVersion`, `Wifi*CapsStatus`,
-`AdapterStartStatus`, the `Wdi*` counters and `WdiTrace` as in
+`AdapterStartStatus`, `WorkerStartStatus`, `KeyEapolWaitMs` (how long the
+last pairwise key waited for message 4 to go out; 200 means it gave up), the `Wdi*` counters and `WdiTrace` as in
 aic8800usb's WiFiCx mode, `LinkState` (0 down, 1 joining, 2
 associated, 3 keys in), `ConnStatus`, `ConnEvent`, `DisconnectReason`,
 `LinkRateKbps`, `LinkRssi`, `RxData`, `RxEapol`, `TxData`, `TxEapol`,
@@ -258,30 +259,50 @@ TaishanPi 3M, Windows 11 23H2, test signing, Ethernet for access,
 firmware with SDIO Wi-Fi on, W3 passing (Stage 2 on function 1). CI
 artifact `wifi-bringup-signed-arm64` from branch `bcmwlsdio-wificx`.
 
-1. `pnputil /add-driver bcmwlsdio\bcmwlwifi.inf /install`, then delete the
-   old bring-up package (`pnputil /enum-drivers`, `pnputil /delete-driver
-   oemNN.inf` for the old `bcmwlsdio.inf`) so only one is staged.
-2. On the function 1 device: `reg add "HKLM\SYSTEM\CurrentControlSet\Enum\<FN_1 instance>\Device Parameters" /v Stage /t REG_DWORD /d 3 /f`,
-   restart Windows.
-3. Pass: one "Broadcom BCM43456 Wi-Fi (SDIO, WiFiCx)" without a problem
-   code; `ActiveMode` 1, `FwState` `station up`, `WifiInitStatus` and every
-   `Wifi*CapsStatus` 0, `AdapterStartStatus` 0; `netsh wlan show drivers`
-   lists it. Function 2 and 3: `ActiveMode` 0, `FwState` `idle: not
-   function 1` (or `stage 0`).
-4. Taskbar Wi-Fi list: networks appear (`WdiScanTasks`, `WdiBssIndicated`).
-5. Join a WPA2-PSK network, then an open one (a phone hotspot): connected,
+The switch from the old bring-up package to this one must not remove a
+running bcmwlsdio device that has no bwlsdflt below it: that removal is
+the 0xC2/0x99 of the section below, and it is what the three crashes of
+2026-11-26 were (the old W3 driver going away, not the new package). So
+the new package is never installed over a running instance:
+
+1. Firmware setup: SDIO Wi-Fi off, boot Windows. The SD function devices
+   are now absent.
+2. `pnputil /delete-driver oemNN.inf /force` for every old `bcmwlsdio.inf`
+   (`pnputil /enum-drivers`), then `pnputil /add-driver bcmwlsdio\bcmwlwifi.inf`
+   (no `/install`). For each function device
+   (`SD\VID_02D0&PID_A9BF&FN_1..3\...`): ConfigFlags 0x20 under its Enum
+   key, so that it is installed again when it next appears; on function
+   1's `Device Parameters` set `Stage` 3. Turn the kernel debugger on
+   (serial, see Reading a failure).
+3. Firmware setup: SDIO Wi-Fi on, boot. The devices come up fresh with the
+   filter below them.
+
+Alternative: the same offline from the rescue Windows (`dism /Image:D:\
+/Remove-Driver` and `/Add-Driver`, the values in the loaded SYSTEM hive).
+
+4. Pass: one "Broadcom BCM43456 Wi-Fi (SDIO, WiFiCx)" without a problem
+   code; `ActiveMode` 1, `FwState` `station up`, `WifiInitStatus`, every
+   `Wifi*CapsStatus` and `WorkerStartStatus` 0, `AdapterStartStatus` 0;
+   `netsh wlan show drivers` lists it. Function 2 and 3: `ActiveMode` 0,
+   `FwState` `idle: not function 1` (or `stage 0`); note their problem
+   code, if any (they are Net-class devices without an adapter). The KD
+   log shows `bwlsdflt: refused GUID_REENUMERATE_SELF_INTERFACE_STANDARD`
+   once per function.
+5. Taskbar Wi-Fi list: networks appear (`WdiScanTasks`, `WdiBssIndicated`).
+6. Join a WPA2-PSK network, then an open one (a phone hotspot): connected,
    DHCP address, `ping` the gateway, a 100 MB download (note the speed);
    `WdiKeys` 2, `LinkState` 3, `netsh wlan show interfaces` shows rate and
    signal. Disconnect and reconnect; router off and on.
-6. Optional: the firmware's supplicant: `FwSupplicant` 1, `Passphrase`
+7. Optional: the firmware's supplicant: `FwSupplicant` 1, `Passphrase`
    (REG_SZ) on the function 1 key, restart, join that network.
-7. CM5-IO (BCM43752): the same with `install-firmware.ps1 -Chip 43752`.
+8. CM5-IO (BCM43752): the same with `install-firmware.ps1 -Chip 43752`.
 
 The binary binds NetAdapterCx 2.1 and WiFiCx 1.0 (the KMDF stub does it
 before DriverEntry, under either INF). A Windows build must register at
 least those: `reg query HKLM\SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\NetAdapterCx\Versions /s`
 and `...\WifiCx\Versions /s` (the TaishanPi 3M's 22631 lists 2.1 and
-1.1). A 2.2 build bugchecked there before DriverEntry.
+1.1). The 2026-11-26 bugchecks were first blamed on a 2.2 bind; the KD
+capture showed the old W3 driver's removal instead (see below).
 
 Reading a failure: `PreEntry` (same key as below) is written by the
 image's entry point before any WDF code, with the versions it binds;

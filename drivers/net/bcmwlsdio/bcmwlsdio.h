@@ -171,6 +171,9 @@ NTSTATUS BwlWifiReportCapabilities(_In_ PBWL_DEVICE_CONTEXT Ctx);
 VOID BwlWifiRun(_In_ PBWL_DEVICE_CONTEXT Ctx);
 VOID BwlWifiScanBss(_In_ void *Ctx, _In_ const bwl_bss *Bss, _In_reads_(Len) const u8 *Body, _In_ u32 Len);
 VOID BwlWifiReleaseHardware(_In_ PBWL_DEVICE_CONTEXT Ctx);
+/* Suspend (the worker has stopped): refuse and fail WDI requests; Restart: take them again. */
+VOID BwlWifiPause(_In_ PBWL_DEVICE_CONTEXT Ctx);
+VOID BwlWifiResume(_In_ PBWL_DEVICE_CONTEXT Ctx);
 VOID BwlWifiCleanup(_In_ PBWL_DEVICE_CONTEXT Ctx);
 
 EXTERN_C_END

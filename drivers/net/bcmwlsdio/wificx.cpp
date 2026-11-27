@@ -56,6 +56,7 @@
 #define BWL_WIFI_SCAN_MS    10000       /* a scan task ends (aborted) after this */
 #define BWL_WIFI_FW_SCAN_MS 8000        /* a firmware scan still running is given up after this */
 #define BWL_WIFI_LINK_MS    5000        /* rate and signal are read this often while connected */
+#define BWL_WIFI_M4_WAIT_MS 200         /* a pairwise key waits this long at most for message 4 to go out */
 
 #ifndef NDIS_STATUS_REQUEST_ABORTED
 #define NDIS_STATUS_REQUEST_ABORTED ((NDIS_STATUS)0xC001000CL)
@@ -122,6 +123,8 @@ typedef struct _BWL_WIFI {
     ULONG Msgs, Unsupported, Indications, IndicationErrors, Keys, KeyErrors, ScanTasks, ConnectTasks;
     ULONG BssIndicated, Disassociations, LastConnectStatus, LastKeyStatus, Refused, LinkUpdates;
     ULONG ServiceErrors, ServiceErrorRun;
+    ULONG KeyEapolWaitMs;               /* the last pairwise key: how long message 4 took to go out */
+    u32   EapolRx0, EapolTx0;           /* the EAPOL counters at this connection's start or last pairwise key */
     LONG  LastServiceError;
     USHORT Trace[BWL_WIFI_TRACE];
     ULONG TraceCount;
@@ -330,6 +333,7 @@ PutRecords(_In_ PBWL_WIFI W)
     BwlPutULong(ctx, L"WdiKeys", W->Keys);
     BwlPutULong(ctx, L"WdiKeyErrors", W->KeyErrors);
     BwlPutULong(ctx, L"WdiLastKeyStatus", W->LastKeyStatus);
+    BwlPutULong(ctx, L"KeyEapolWaitMs", W->KeyEapolWaitMs);
     BwlPutULong(ctx, L"WdiDisassociations", W->Disassociations);
     BwlPutULong(ctx, L"WdiRadioOn", W->RadioOn);
     BwlPutULong(ctx, L"WdiConnected", W->Connected);
@@ -813,6 +817,8 @@ TaskConnect(_In_ PBWL_WIFI W, _In_ WIFIREQUEST Request, _In_ const WDI_MESSAGE_H
     }
     BwlNetFlush(W->Ctx);
     TaskStart(&W->Conn, H);
+    W->EapolRx0 = d->Wlan.RxEapol;      /* an earlier attempt's unanswered message 1 does not count */
+    W->EapolTx0 = d->Wlan.TxEapol;
     RtlCopyMemory(W->ConnBssid, target.Bssid, 6);
     W->ConnFwSup = UseFwSup(W, &target);
     d->Wlan.RateKbps = 0;
@@ -923,11 +929,27 @@ SetAddCipherKeys(_In_ PBWL_WIFI W, _In_ WIFIREQUEST Request, _In_ const WDI_MESS
             continue;                           /* the firmware has its own keys */
         }
         if (pairwise) {
-            /* message 4 went into the TX FIFO just before this: let it
-             * leave unencrypted before the key is in (brcmfmac waits for
-             * its pending 802.1X frames the same way) */
+            /* Message 4 must leave unencrypted before the key is in
+             * (brcmfmac waits for its pending 802.1X frames the same way).
+             * Windows sent it just before this, but it may still be in
+             * NetAdapterCx's TX ring, not yet in the TX FIFO. Each EAPOL
+             * frame from the AP (M1, M3, a group key message) gets one
+             * answer, so wait until as many went out as came in. */
+            ULONG waited = 0;
+
+            while (ctx->Bwl.Wlan.TxEapol - W->EapolTx0 < ctx->Bwl.Wlan.RxEapol - W->EapolRx0 &&
+                   waited < BWL_WIFI_M4_WAIT_MS && !ctx->WorkerStop) {
+                (VOID)BwlNetTxPump(ctx);
+                (VOID)BwlService(&ctx->Bwl);
+                BwlDelayMs(1);
+                waited++;
+            }
+            W->KeyEapolWaitMs = waited;
             BwlNetTxDrain(ctx, 50);
             BwlDelayMs(10);
+            /* a later rekey counts from here */
+            W->EapolRx0 = ctx->Bwl.Wlan.RxEapol;
+            W->EapolTx0 = ctx->Bwl.Wlan.TxEapol;
         }
         rc = BwlSetKey(&ctx->Bwl, pairwise, id, k->CCMPKey.pElements, 16);
         W->Keys++;
@@ -1201,8 +1223,8 @@ BwlWifiRun(_In_ PBWL_DEVICE_CONTEXT Ctx)
             PutRecords(W);
         }
     }
-    /* stopping (suspend, removal): running tasks end; queued requests stay
-     * for the next start, or ReleaseHardware fails them. The link is left
+    /* stopping (suspend, removal): running tasks end; queued requests are
+     * failed by BwlWifiPause (suspend) or ReleaseHardware. The link is left
      * up for a suspend; ReleaseHardware halts the chip. */
     if (W->Scan.Active) {
         W->Scan.Aborted = TRUE;
@@ -1258,10 +1280,10 @@ BwlWifiPostDeviceCreate(_In_ PBWL_DEVICE_CONTEXT Ctx)
     return STATUS_SUCCESS;
 }
 
-/* ReleaseHardware (the worker has stopped): nothing more is taken, and
- * what waits is failed, so that nobody waits for it. */
+/* The worker has stopped: nothing more is taken, and what waits is
+ * failed, so that nobody waits for it. */
 extern "C" VOID
-BwlWifiReleaseHardware(_In_ PBWL_DEVICE_CONTEXT Ctx)
+BwlWifiPause(_In_ PBWL_DEVICE_CONTEXT Ctx)
 {
     PBWL_WIFI W = Ctx->Wifi;
     WIFIREQUEST r;
@@ -1276,6 +1298,33 @@ BwlWifiReleaseHardware(_In_ PBWL_DEVICE_CONTEXT Ctx)
     while ((r = Pop(W)) != NULL) {
         WifiRequestComplete(r, STATUS_DEVICE_NOT_READY, sizeof(WDI_MESSAGE_HEADER));
     }
+}
+
+/* SelfManagedIoRestart, before the worker starts again. */
+extern "C" VOID
+BwlWifiResume(_In_ PBWL_DEVICE_CONTEXT Ctx)
+{
+    PBWL_WIFI W = Ctx->Wifi;
+    KIRQL irql;
+
+    if (W == NULL) {
+        return;
+    }
+    KeAcquireSpinLock(&W->Lock, &irql);
+    W->Accepting = TRUE;
+    KeReleaseSpinLock(&W->Lock, irql);
+}
+
+/* ReleaseHardware (the worker has stopped). */
+extern "C" VOID
+BwlWifiReleaseHardware(_In_ PBWL_DEVICE_CONTEXT Ctx)
+{
+    PBWL_WIFI W = Ctx->Wifi;
+
+    if (W == NULL) {
+        return;
+    }
+    BwlWifiPause(Ctx);
     W->HwReady = FALSE;
     W->Connected = FALSE;
 }

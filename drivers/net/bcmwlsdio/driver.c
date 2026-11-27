@@ -593,6 +593,13 @@ StartWorker(_In_ PBWL_DEVICE_CONTEXT Ctx)
     }
     status = ObReferenceObjectByHandle(h, THREAD_ALL_ACCESS, *PsThreadType, KernelMode, (PVOID *)&Ctx->Worker,
                                        NULL);
+    if (!NT_SUCCESS(status)) {
+        /* the thread runs, but StopWorker could not wait for it: stop it now */
+        Ctx->Worker = NULL;
+        InterlockedExchange(&Ctx->WorkerStop, 1);
+        KeSetEvent(&Ctx->WakeEvent, IO_NO_INCREMENT, FALSE);
+        (VOID)ZwWaitForSingleObject(h, FALSE, NULL);
+    }
     ZwClose(h);
     return status;
 }
@@ -690,6 +697,13 @@ BwlEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
     }
     status = BwlWifiReportCapabilities(ctx);
     BwlPutULong(ctx, L"WifiCapsStatus", (ULONG)status);
+    if (NT_SUCCESS(status)) {
+        /* WiFiCx may send WDI commands (the port, the adapter) and wait
+         * for them before this device's start reaches SelfManagedIoInit:
+         * the worker has to run from here on */
+        status = StartWorker(ctx);
+        BwlPutULong(ctx, L"WorkerStartStatus", (ULONG)status);
+    }
     return status;
 }
 
@@ -715,7 +729,8 @@ BwlEvtSelfManagedIoInit(_In_ WDFDEVICE Device)
     PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
 
     if (ctx->WifiMode) {
-        /* the worker runs the WDI requests even without firmware, to refuse them */
+        /* started in PrepareHardware; the worker runs the WDI requests
+         * even without firmware, to refuse them */
         return StartWorker(ctx);
     }
     if (ctx->SdOpen && ctx->BringUp != NULL) {
@@ -730,7 +745,11 @@ BwlEvtSelfManagedIoRestart(_In_ WDFDEVICE Device)
     PBWL_DEVICE_CONTEXT ctx = BwlGetContext(Device);
 
     /* back from a low-power state: the firmware was left running */
-    return ctx->WifiMode ? StartWorker(ctx) : STATUS_SUCCESS;
+    if (!ctx->WifiMode) {
+        return STATUS_SUCCESS;
+    }
+    BwlWifiResume(ctx);
+    return StartWorker(ctx);
 }
 
 static NTSTATUS
@@ -740,8 +759,12 @@ BwlEvtSelfManagedIoSuspend(_In_ WDFDEVICE Device)
 
     BWL_LOG("FN%u teardown: self-managed I/O suspend", ctx->Function);
     if (ctx->WifiMode) {
-        /* stop polling; the chip keeps its firmware for the restart */
+        /* stop polling; the chip keeps its firmware for the restart.
+         * WDI requests from now until the restart (or ReleaseHardware)
+         * are failed at once: nobody is left to run them, and WiFiCx may
+         * wait for one while it stops the adapter */
         StopWorker(ctx);
+        BwlWifiPause(ctx);
         return STATUS_SUCCESS;
     }
     StopBringUp(ctx);

@@ -926,7 +926,7 @@ test_wlan(int model)
     fake_chip f;
     bwl_dev d;
     unsigned char eth[64], body[600];
-    unsigned i, before;
+    unsigned i, before, rx0, tx0;
     int open, psk, wep, r;
     bwl_bss b;
 
@@ -1083,16 +1083,27 @@ test_wlan(int model)
     for (i = 0; i < 3; i++) CHECK(BwlService(&d) >= 0);
     d.Wlan.Events = 0;
     seen.NRx = 0;
+    /* wificx.cpp holds the pairwise key back until each EAPOL frame from
+     * the AP since the connect was answered: the counters it compares */
+    rx0 = d.Wlan.RxEapol;
+    tx0 = d.Wlan.TxEapol;
+    CHECK_EQ(rx0 - tx0, 1);                                 /* the first attempt's message 1, unanswered */
     CHECK_EQ(BwlConnect(&d, &b, NULL), 0);
     CHECK_EQ(service_until(&d, BWL_EV_ASSOC, 20), 0);
     CHECK_EQ(d.Wlan.Link, BWL_LINK_ASSOCIATED);
     for (i = 0; i < 3 && seen.NRx == 0; i++) CHECK(BwlService(&d) >= 0);
     CHECK_EQ(seen.NRx, 1);
+    CHECK_EQ(d.Wlan.RxEapol - rx0, 1);
+    CHECK_EQ(d.Wlan.TxEapol - tx0, 0);                      /* message 2 owed */
     CHECK_EQ(send_eapol(&d, 2), 0);                         /* message 2 */
+    CHECK_EQ(d.Wlan.TxEapol - tx0, 1);
     for (i = 0; i < 3 && seen.NRx < 2; i++) CHECK(BwlService(&d) >= 0);
     CHECK_EQ(seen.NRx, 2);
     CHECK_EQ(seen.Rx[1][15], 3);                            /* message 3 */
+    CHECK_EQ(d.Wlan.RxEapol - rx0, 2);
+    CHECK(d.Wlan.TxEapol - tx0 < d.Wlan.RxEapol - rx0);     /* message 4 owed: the key would wait */
     CHECK_EQ(send_eapol(&d, 4), 0);                         /* message 4, then the keys */
+    CHECK_EQ(d.Wlan.TxEapol - tx0, d.Wlan.RxEapol - rx0);   /* all answered: the key goes in */
     CHECK_EQ(BwlSetKey(&d, 1, 0, (const u8 *)"0123456789abcdef", 16), 0);
     CHECK_EQ(BwlSetKey(&d, 0, 1, (const u8 *)"fedcba9876543210", 16), 0);
     CHECK_EQ(f.KeysSet, 3);                                 /* the early one and these two */

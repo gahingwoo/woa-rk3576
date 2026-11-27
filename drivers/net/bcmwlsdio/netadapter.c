@@ -210,10 +210,12 @@ BwlNetTxPump(_In_ PBWL_DEVICE_CONTEXT Ctx)
         BwlFrameqCount(Ctx->TxQ) < BWL_FRAMEQ_SLOTS / 2) {
         Ctx->TxNotify = FALSE;
         notify = Ctx->TxQueue;
+        WdfObjectReference(notify);     /* the queue may be deleted once the lock is dropped */
     }
     KeReleaseSpinLock(&Ctx->DataLock, irql);
     if (notify) {
         NetTxQueueNotifyMoreCompletedPacketsAvailable(notify);
+        WdfObjectDereference(notify);
     }
     return sent;
 }
@@ -329,11 +331,13 @@ BwlNetRxEth(_In_ void *C, _In_reads_(Len) const u8 *Eth, _In_ u32 Len)
         ctx->RxDrops++;
     } else if (ctx->RxNotify && !ctx->RxHold) {
         notify = ctx->RxQueue;
+        WdfObjectReference(notify);
         ctx->RxNotify = FALSE;
     }
     KeReleaseSpinLock(&ctx->DataLock, irql);
     if (notify) {
         NetRxQueueNotifyMoreReceivedPacketsAvailable(notify);
+        WdfObjectDereference(notify);
     }
 }
 
@@ -349,11 +353,13 @@ BwlNetRxRelease(_In_ PBWL_DEVICE_CONTEXT Ctx)
     Ctx->RxHold = FALSE;
     if (Ctx->RxNotify && Ctx->RxQueue && Ctx->RxQ && BwlFrameqPeek(Ctx->RxQ, &len, NULL) != NULL) {
         notify = Ctx->RxQueue;
+        WdfObjectReference(notify);
         Ctx->RxNotify = FALSE;
     }
     KeReleaseSpinLock(&Ctx->DataLock, irql);
     if (notify) {
         NetRxQueueNotifyMoreReceivedPacketsAvailable(notify);
+        WdfObjectDereference(notify);
     }
 }
 
