@@ -577,6 +577,10 @@ BwlWorkerMain(_In_ PVOID Context)
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
+/* ntifs.h, not in the wdm.h this driver builds with; exported by ntoskrnl */
+NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(_In_ HANDLE Handle, _In_ BOOLEAN Alertable,
+                                              _In_opt_ PLARGE_INTEGER Timeout);
+
 static NTSTATUS
 StartWorker(_In_ PBWL_DEVICE_CONTEXT Ctx)
 {
