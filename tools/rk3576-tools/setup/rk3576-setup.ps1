@@ -200,7 +200,7 @@ function Set-NpuAccess {
     $r = @(Set-NpuUserAccessIn $NpuEnum)
     if (-not $r.Count) { Say "NPU: no ACPI\RKCP3576 device (the firmware's NPU option is off); the counter task sets UserAccess once it is there"; return }
     if ($r -contains 'set') {
-        New-Item -Path $Base -Force | Out-Null
+        if (-not (Test-Path $Base)) { New-Item -Path $Base -Force | Out-Null }
         New-ItemProperty -Path $Base -Name NpuUserAccess -PropertyType DWord -Value 1 -Force | Out-Null
         Say 'NPU: UserAccess = 1, ordinary users may use it from the next restart'
     } else { Say "NPU: UserAccess left as it was ($($r -join ', '))" }
@@ -228,14 +228,14 @@ function Set-MachineRegistry {
     $vf = Join-Path $Dir 'VERSION.txt'
     if (Test-Path $vf) { $ver = (Get-Content $vf -TotalCount 1).Trim() }
 
-    New-Item -Path "$Base\Monitor" -Force | Out-Null
+    if (-not (Test-Path "$Base\Monitor")) { New-Item -Path "$Base\Monitor" -Force | Out-Null }
     if ($null -eq (Get-ItemProperty -Path "$Base\Monitor" -Name Widget -ErrorAction SilentlyContinue)) {
         New-ItemProperty -Path "$Base\Monitor" -Name Widget -PropertyType DWord -Value 1 | Out-Null
     }
     New-ItemProperty -Path $Base -Name InstallDir -PropertyType ExpandString -Value '%ProgramFiles%\RK3576' -Force | Out-Null
     New-ItemProperty -Path $Base -Name Version -PropertyType String -Value $ver -Force | Out-Null
 
-    New-Item -Path $Arp -Force | Out-Null
+    if (-not (Test-Path $Arp)) { New-Item -Path $Arp -Force | Out-Null }
     $kb = [int]((Get-ChildItem $Dir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1024)
     $vals = @{
         DisplayName     = 'RK3576 tools'
