@@ -33,11 +33,13 @@ jobs:
         run: bash .github/scripts/check-structure.sh
       - name: Markdown relative links
         run: bash .github/scripts/check-links.sh
+      - name: dwcmshc sdport miniport (IRQL, request ownership)
+        run: python3 .github/scripts/check-sdport-miniport.py
 
   hcd:
     name: bcm4345bt patchram walker (Linux, gcc)
     # The driver's .hcd walker is plain C. Build it with the host tool and
-    # run it over both patchram files install-firmware.ps1 can fetch, at the
+    # run it over the patchram files install-firmware.ps1 can fetch, at the
     # same pinned commits and hashes, so a change to the walker that would
     # reject (or mis-split) the real files fails here. The files are only
     # downloaded into the runner, never stored or uploaded.
@@ -60,11 +62,17 @@ jobs:
           fetch rpi.hcd \
             https://raw.githubusercontent.com/RPi-Distro/bluez-firmware/cdf61dc691a49ff01a124752bd04194907f0f9cd/debian/firmware/broadcom/BCM4345C5.hcd \
             fb9f4ec2df5301bd35f416384e103c012c5983024c49aa72fbbaf90177512caa
+          # the CM5-IO's BCM43752 (Bluetooth core BCM4362A2)
+          fetch bcm4362a2.hcd \
+            https://raw.githubusercontent.com/armbian/firmware/db8cc456dad5ad511b04f8a5130acda392cad20b/brcm/BCM4362A2.hcd \
+            18901a5bef1d418b6895e92d0afae36234f4160b237465dfca3d75e9844e93ef
           ./hcdcheck ampak.hcd --records 198
           ./hcdcheck rpi.hcd --records 235
+          ./hcdcheck bcm4362a2.hcd --records 508
           # the hashes in install-firmware.ps1 must be the ones checked here
           grep -qi f67164f0eda8d4ca96305e177a61542bf8b470f2f1c456b66fe8c660650f1c7a $B/install-firmware.ps1
           grep -qi fb9f4ec2df5301bd35f416384e103c012c5983024c49aa72fbbaf90177512caa $B/install-firmware.ps1
+          grep -qi 18901a5bef1d418b6895e92d0afae36234f4160b237465dfca3d75e9844e93ef $B/install-firmware.ps1
           # a truncated file must be refused
           head -c 1000 ampak.hcd > trunc.hcd
           if ./hcdcheck trunc.hcd; then exit 1; fi
@@ -211,9 +219,12 @@ jobs:
           L=drivers/video/vdpu383/lib
           T=tools/vdpu383test
           gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Werror \
-              -o vdpu383test $T/main.c $T/h264parse.c $T/hevcparse.c $T/dev.c $T/md5.c $T/dxva_check.c \
-              $L/vdpu383_h264.c $L/vdpu383_cabac.c $L/vdpu383_hevc.c $L/vdpu383_hevc_cabac.c
+              -o vdpu383test $T/main.c $T/h264parse.c $T/hevcparse.c $T/vp9parse.c $T/av1parse.c $T/dev.c $T/md5.c \
+              $T/dxva_check.c $L/vdpu383_h264.c $L/vdpu383_cabac.c $L/vdpu383_hevc.c $L/vdpu383_hevc_cabac.c \
+              $L/vdpu383_vp9.c $L/vdpu383_vp9_probs.c $L/vdpu383_av1.c $L/vdpu383_av1_cdf.c
           ./vdpu383test selftest
+          # the driver's session rules (vdpu383_check.h) on the null device
+          ./vdpu383test --null sessiontest
           # the library alone, freestanding: no libc headers, no floats
           gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -mgeneral-regs-only -Wall -Wextra -Werror \
               -c $L/vdpu383_h264.c -o /dev/null
@@ -221,6 +232,12 @@ jobs:
           gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -mgeneral-regs-only -Wall -Wextra -Werror \
               -c $L/vdpu383_hevc.c -o /dev/null
           gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -c $L/vdpu383_hevc_cabac.c -o /dev/null
+          gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -mgeneral-regs-only -Wall -Wextra -Werror \
+              -c $L/vdpu383_vp9.c -o /dev/null
+          gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -c $L/vdpu383_vp9_probs.c -o /dev/null
+          gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -mgeneral-regs-only -Wall -Wextra -Werror \
+              -c $L/vdpu383_av1.c -o /dev/null
+          gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -c $L/vdpu383_av1_cdf.c -o /dev/null
       - name: HEVC conformance streams through the parser and the register builder (no device)
         run: |
           # FFmpeg's fate-suite copies of the JCT-VC conformance streams. Each
@@ -233,10 +250,11 @@ jobs:
           while read -r name frames; do
             curl -sfL --retry 3 -o "$name.bit" "https://fate-suite.ffmpeg.org/hevc-conformance/$name.bit"
             for mode in "" --dxva-only; do
-              out=$(../vdpu383test --null decode "$name.bit" $mode)
+              out=$(../vdpu383test --null --session decode "$name.bit" $mode)
               echo "$out" | grep -E '^(rps check|pictures|RASL)' | sed "s/^/$name ${mode:-sps}: /"
               echo "$out" | grep -q "frames out $frames," || { echo "$name: expected $frames frames"; fail=1; }
               echo "$out" | grep -q "with the SPS's sets 0 differ; rebuilt from DXVA 0 differ, 0 had no table" || fail=1
+              echo "$out" | grep -q "session check: 0 decodes refused" || { echo "$name: session check"; fail=1; }
             done
           done <<'LIST'
           RPS_A_docomo_4 44
@@ -250,6 +268,178 @@ jobs:
           SLIST_D_Sony_9 65
           LIST
           exit $fail
+      - name: VP9 test vectors through the parser and the register builder (no device)
+        run: |
+          # FFmpeg's fate-suite copies of the libvpx test vectors, remuxed to
+          # IVF. Frame counts are FFmpeg's; every frame's address registers
+          # must point into the tool's buffers (the driver's check).
+          set -eu
+          sudo apt-get update -qq > /dev/null
+          sudo apt-get install -y -qq ffmpeg > /dev/null
+          mkdir -p vp9 && cd vp9
+          fail=0
+          while read -r name frames; do
+            case $name in
+              *.ivf) curl -sfL --retry 3 -o "${name%.ivf}.ivf" "https://fate-suite.ffmpeg.org/vp9-test-vectors/$name"
+                     name=${name%.ivf} ;;
+              *) curl -sfL --retry 3 -o "$name.webm" "https://fate-suite.ffmpeg.org/vp9-test-vectors/$name.webm"
+                 ffmpeg -nostdin -v error -i "$name.webm" -c copy -copyinkf -f ivf "$name.ivf" ;;
+            esac
+            for mode in "" --dxva-only; do
+              out=$(../vdpu383test --null --session decode "$name.ivf" $mode) || { echo "$name: exit $?"; fail=1; }
+              echo "$out" | grep -E '^(vp9|address check)' | sed "s/^/$name ${mode:-parser}: /"
+              echo "$out" | grep -q "frames out $frames," || { echo "$name: expected $frames frames"; fail=1; }
+              echo "$out" | grep -q "address check: 0 frames" || fail=1
+              echo "$out" | grep -q "session check: 0 decodes refused" || { echo "$name: session check"; fail=1; }
+            done
+          done <<'LIST'
+          vp90-2-00-quantizer-00 2
+          vp90-2-00-quantizer-63 2
+          vp90-2-01-sharpness-4 10
+          vp90-2-02-size-08x08 10
+          vp90-2-02-size-66x66 10
+          vp90-2-03-size-226x226 10
+          vp90-2-03-deltaq 2
+          vp90-2-05-resize.ivf 10
+          vp90-2-06-bilinear 10
+          vp90-2-09-lf_deltas 30
+          vp90-2-10-show-existing-frame 13
+          vp90-2-10-show-existing-frame2 16
+          vp90-2-15-segkey_adpq 150
+          vp90-2-16-intra-only 7
+          vp90-2-2pass-akiyo 50
+          vp90-2-parallelmode-akiyo 25
+          vp90-2-segmentation-aq-akiyo 25
+          vp90-2-segmentation-sf-akiyo 25
+          vp90-2-tiling-pedestrian 2
+          vp90-2-trac3849 10
+          vp90-2-trac4359 4
+          vp92-2-20-10bit-yuv420 10
+          LIST
+          exit $fail
+      - name: AV1 test vectors through the parser and the register builder (no device)
+        run: |
+          # FFmpeg's fate-suite AV1 vectors (av1-test-vectors/ and av1/), IVF.
+          # Frame counts are dav1d's; every frame's address registers must
+          # point into the tool's buffers, with the frame's OBUs and with the
+          # tile data wrapped as a D3D11 driver would have to (both ways).
+          set -eu
+          mkdir -p av1 && cd av1
+          fail=0
+          while read -r dir name frames; do
+            curl -sfL --retry 3 -o "$name.ivf" "https://fate-suite.ffmpeg.org/$dir/$name.ivf"
+            for mode in "" --dxva-only "--dxva-only --av1-synth 1"; do
+              out=$(../vdpu383test --null --session decode "$name.ivf" $mode) || { echo "$name: exit $?"; fail=1; }
+              echo "$out" | grep -E '^(av1|address check)' | sed "s/^/$name ${mode:-parser}: /"
+              echo "$out" | grep -q "frames out $frames," || { echo "$name: expected $frames frames"; fail=1; }
+              echo "$out" | grep -q "address check: 0 frames" || fail=1
+              echo "$out" | grep -q "session check: 0 decodes refused" || { echo "$name: session check"; fail=1; }
+            done
+          done <<'LIST'
+          av1-test-vectors av1-1-b8-02-allintra 39
+          av1-test-vectors av1-1-b8-03-sizedown 20
+          av1-test-vectors av1-1-b8-03-sizeup 20
+          av1-test-vectors av1-1-b8-04-cdfupdate 2
+          av1-test-vectors av1-1-b8-05-mv 4
+          av1-test-vectors av1-1-b8-06-mfmv 4
+          av1-test-vectors av1-1-b8-22-svc-L1T2 8
+          av1-test-vectors av1-1-b8-22-svc-L2T1 8
+          av1-test-vectors av1-1-b8-22-svc-L2T2 8
+          av1-test-vectors av1-1-b8-23-film_grain-50 10
+          av1-test-vectors av1-1-b10-23-film_grain-50 10
+          av1 decode_model 24
+          av1 film_grain 10
+          av1 frames_refs_short_signaling 50
+          av1 non_uniform_tiling 24
+          av1 seq_hdr_op_param_info 64
+          av1 switch_frame 32
+          LIST
+          exit $fail
+
+  idmactest:
+    name: dwcmshc IDMAC descriptor builder (Linux, gcc)
+    # The SD/SDIO miniport builds its IDMAC descriptor tables and its DMA
+    # FIFOTH value with plain C (drivers/sd/dwcmshc/idmac.h). tools/idmactest
+    # checks sizes, chaining, the last descriptor, the 4 GiB limit, table
+    # overflow and random HAL-style scatter/gather lists against it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and check
+        run: |
+          set -eux
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -o idmactest tools/idmactest/main.c
+          gcc -std=c99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror \
+              -o idmactest-asan tools/idmactest/main.c
+          # the header must build with no libc, and as C++ as the driver does
+          printf '#include "drivers/sd/dwcmshc/idmac.h"\n' > inc.c
+          gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -pedantic -I. -c inc.c -o /dev/null
+          g++ -std=c++14 -Wall -Wextra -Werror -I. -x c++ -c inc.c -o /dev/null
+          ./idmactest
+          ./idmactest-asan
+
+  bwltest:
+    name: bcmwlsdio core against a simulated chip (Linux, gcc)
+    # The Wi-Fi driver's SDIO, chip, firmware and protocol code is plain C
+    # (drivers/net/bcmwlsdio/bwl*.c). Build it with tools/bwltest, which
+    # runs it against a simulated BCM43456 and BCM43752: unit tests, then attach,
+    # download, start and control commands with synthetic files; then the
+    # same bring-up with the real firmware files install-firmware.ps1
+    # fetches, at the same pinned commits and hashes. The files are only
+    # downloaded into the runner, never stored or uploaded.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and check
+        run: |
+          set -eux
+          B=drivers/net/bcmwlsdio
+          SRC="$B/bwl_sdio.c $B/bwl_chip.c $B/bwl_bringup.c $B/bwl_fw.c $B/bwl_proto.c $B/bwl_ctl.c"
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -o bwltest tools/bwltest/main.c tools/bwltest/fakechip.c $SRC
+          gcc -std=c99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror \
+              -o bwltest-asan tools/bwltest/main.c tools/bwltest/fakechip.c $SRC
+          # the core must build with no libc at all, as it does in the driver
+          for f in $SRC; do gcc -std=c99 -ffreestanding -nostdinc -Wall -Wextra -Werror -c "$f" -o /dev/null; done
+          ./bwltest
+          ./bwltest-asan
+          fetch() {
+            curl -fsSL -o "$1" "$2"
+            echo "$3  $1" | sha256sum -c -
+          }
+          A=https://raw.githubusercontent.com/armbian/firmware/db8cc456dad5ad511b04f8a5130acda392cad20b/brcm
+          R=https://raw.githubusercontent.com/RPi-Distro/firmware-nonfree/b1833f18a816cf8fd73ca86e27f9eecea11bf991/debian/added-firmware/brcm
+          mkdir -p armbian rpi
+          fetch armbian/brcmfmac43456-sdio.bin $A/brcmfmac43456-sdio.bin \
+            3167956a7b2cffc4cfcaf6a282b95728c529eebef18a5d9e6d9ff32de32cc67c
+          fetch armbian/brcmfmac43456-sdio.txt $A/brcmfmac43456-sdio.txt \
+            66c71eb53b47c49d42386b66735134578640b0946f3f46e44f384fef5aacfd9e
+          fetch armbian/brcmfmac43456-sdio.clm_blob $A/brcmfmac43456-sdio.clm_blob \
+            2dbd7d22fc9af0eb560ceab45b19646d211bc7b34a1dd00c6bfac5dd6ba25e8a
+          fetch rpi/brcmfmac43456-sdio.bin $R/brcmfmac43456-sdio.bin \
+            dc4429f13b59f8c271e940c28b2a197455a8e02270fcc7a2f9036aa1e4c739fb
+          fetch rpi/brcmfmac43456-sdio.clm_blob $R/brcmfmac43456-sdio.clm_blob \
+            2dbd7d22fc9af0eb560ceab45b19646d211bc7b34a1dd00c6bfac5dd6ba25e8a
+          cp armbian/brcmfmac43456-sdio.txt rpi/
+          ./bwltest-asan files armbian --version 7.45.96.0 --clm-chunks 6
+          ./bwltest-asan files rpi --version 7.45.96.252 --clm-chunks 6
+          # the CM5-IO's BCM43752 set, same Armbian commit, against the simulated 43752
+          fetch armbian/brcmfmac43752-sdio.bin $A/brcmfmac43752-sdio.bin \
+            46f62076768e50938d0e29b306b24d4663de20b07b474c4759d5801fcbf0bdde
+          fetch armbian/brcmfmac43752-sdio.txt $A/brcmfmac43752-sdio.txt \
+            2d2723101fe9c66c853ddb1e2d715851ba100a4390f8ac72fc84dd35736cc66f
+          fetch armbian/brcmfmac43752-sdio.clm_blob $A/brcmfmac43752-sdio.clm_blob \
+            5143146e1923f87f7aab8df043abcf89a657fa9fdc3b22a38806399730d9a97a
+          ./bwltest-asan files armbian --chip 43752 --version 18.35.387.23.7 --clm-chunks 21
+          # the hashes in install-firmware.ps1 must be the ones checked here
+          for h in 3167956a7b2cffc4cfcaf6a282b95728c529eebef18a5d9e6d9ff32de32cc67c \
+                   66c71eb53b47c49d42386b66735134578640b0946f3f46e44f384fef5aacfd9e \
+                   2dbd7d22fc9af0eb560ceab45b19646d211bc7b34a1dd00c6bfac5dd6ba25e8a \
+                   dc4429f13b59f8c271e940c28b2a197455a8e02270fcc7a2f9036aa1e4c739fb \
+                   46f62076768e50938d0e29b306b24d4663de20b07b474c4759d5801fcbf0bdde \
+                   2d2723101fe9c66c853ddb1e2d715851ba100a4390f8ac72fc84dd35736cc66f \
+                   5143146e1923f87f7aab8df043abcf89a657fa9fdc3b22a38806399730d9a97a; do
+            grep -qi "$h" $B/install-firmware.ps1
+          done
 
   pageverify:
     name: pageverify (Linux, gcc)
@@ -379,6 +569,162 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  browser-gpu:
+    name: Browser GPU switch cleanup (tests on Windows PowerShell 5.1, the runner's own Edge and Chrome)
+    # tools/rk3576-tools/setup/rk3576-browser-gpu.ps1 (BROWSER-GPU.md) only
+    # takes out --disable-direct-composition, which its version 1 added. The
+    # unit tests work on a made-up machine under HKCU and on .lnk files in a
+    # temporary folder. Then the real thing on the runner: version 1 (from
+    # git, Mode 2 as the runner has no RK3576) puts the switch on the
+    # runner's Edge and Chrome; version 1's task running this version, then
+    # Install, Uninstall and Revert must each give back exactly what was
+    # there before and remove version 1's task, copy and settings.
+    runs-on: windows-2022
+    env:
+      BG_V1: d16979d80eab6cdff027a2e72b0d1df16081d203
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          foreach ($f in 'tools\rk3576-tools\setup\rk3576-browser-gpu.ps1', 'tools\rk3576-tools\tests\browser-gpu.tests.ps1') {
+            $e = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$e)
+            if ($e) { $e | Out-Host; throw "parse errors in $f" }
+          }
+          $PSVersionTable.PSVersion
+      - name: Unit tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\rk3576-tools\tests\browser-gpu.tests.ps1
+          if ($LASTEXITCODE -ne 0) { throw "browser-gpu.tests.ps1 failed" }
+      - name: Unit tests (PowerShell 7)
+        shell: pwsh
+        run: |
+          & tools\rk3576-tools\tests\browser-gpu.tests.ps1
+          if ($LASTEXITCODE -ne 0) { throw "browser-gpu.tests.ps1 failed under pwsh" }
+      - name: Version 1 of the script, from git
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin "$BG_V1"
+          git show "$BG_V1:tools/rk3576-tools/setup/rk3576-browser-gpu.ps1" > "$RUNNER_TEMP/bg-v1.ps1"
+          grep -q '^\$BgVersion = 1$' "$RUNNER_TEMP/bg-v1.ps1"
+      - name: Version 1's leftovers taken out on the runner's Edge and Chrome
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $s = (Resolve-Path tools\rk3576-tools\setup\rk3576-browser-gpu.ps1).Path
+          $v1 = Join-Path $env:RUNNER_TEMP 'bg-v1.ps1'
+          $copy = "$env:ProgramFiles\RK3576\browser-gpu\rk3576-browser-gpu.ps1"
+          $log = "$env:ProgramData\RK3576\browser-gpu.log"
+          $SW = '--disable-direct-composition'
+          function Snap {
+            $o = [ordered]@{}
+            foreach ($n in 'MSEdgeHTM', 'MSEdgePDF', 'microsoft-edge', 'ChromeHTML', 'ChromePDF') {
+              $k = "HKLM:\SOFTWARE\Classes\$n\shell\open\command"
+              if (Test-Path $k) { $o[$k] = (Get-Item $k).GetValue('', $null, 'DoNotExpandEnvironmentNames') }
+            }
+            $sh = New-Object -ComObject WScript.Shell
+            foreach ($f in Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs", "$env:PUBLIC\Desktop" -Recurse -Filter *.lnk -ErrorAction SilentlyContinue) {
+              $l = $sh.CreateShortcut($f.FullName)
+              if ($l.TargetPath -match '(msedge|chrome)\.exe$') { $o[$f.FullName] = $l.Arguments }
+            }
+            $o['env'] = [Environment]::GetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', 'Machine')
+            $o['wv2'] = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments' -ErrorAction SilentlyContinue).'*'
+            foreach ($p in 'Microsoft\Edge|StartupBoostEnabled', 'Microsoft\Edge|BackgroundModeEnabled', 'Google\Chrome|BackgroundModeEnabled') {
+              $a = $p -split '\|'
+              $o[$p] = (Get-ItemProperty "HKLM:\SOFTWARE\Policies\$($a[0])" -ErrorAction SilentlyContinue).($a[1])
+            }
+            return $o
+          }
+          function Same($a, $b) { ($a | ConvertTo-Json) -eq ($b | ConvertTo-Json) }
+          function Left {
+            $l = @()
+            if (Get-ScheduledTask -TaskPath '\RK3576\' -ErrorAction SilentlyContinue) { $l += 'task' }
+            if (Test-Path "$env:ProgramFiles\RK3576\browser-gpu") { $l += 'files' }
+            if (Test-Path 'HKLM:\SOFTWARE\RK3576\BrowserGpu') { $l += 'settings' }
+            return $l
+          }
+          # what a board that ran version 1 looks like
+          function Seed {
+            reg add HKLM\SOFTWARE\RK3576\BrowserGpu /v Mode /t REG_DWORD /d 2 /f | Out-Null
+            & powershell -NoProfile -ExecutionPolicy Bypass -File $v1 -Action Install -Quiet
+            if ($LASTEXITCODE -ne 0) { throw "version 1 Install exited $LASTEXITCODE" }
+            $x = Snap
+            $c = $x['HKLM:\SOFTWARE\Classes\MSEdgeHTM\shell\open\command']
+            if ($c -notmatch ('\.exe" ' + $SW + ' ')) { throw "version 1 did not add the switch: $c" }
+            if ($x['env'] -notmatch $SW -or $x['Microsoft\Edge|StartupBoostEnabled'] -ne 0) { throw 'version 1 did not set WebView2 and the policies' }
+            if (-not (Test-Path $copy)) { throw 'version 1 copy' }
+          }
+          function Expect-Clean([string]$what) {
+            $now = Snap
+            if (-not (Same $before $now)) {
+              $before | ConvertTo-Json | Write-Host; $now | ConvertTo-Json | Write-Host
+              throw "$what did not give back what was there"
+            }
+          }
+
+          $before = Snap
+          $before | Format-Table -AutoSize | Out-String -Width 300 | Write-Host
+          if (-not ($before.Keys | Where-Object { $_ -like '*MSEdgeHTM*' })) { throw 'the runner has no MSEdgeHTM: the test proves nothing' }
+          foreach ($v in $before.Values) { if ($v -is [string] -and $v -match $SW) { throw 'the runner already has the switch' } }
+
+          # a clean machine: nothing is added
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Install
+          if ($LASTEXITCODE -ne 0) { throw "Install exited $LASTEXITCODE" }
+          Expect-Clean 'Install on a clean machine'
+          if (Left) { throw "a clean Install left: $(Left)" }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Enable
+          Expect-Clean 'Enable on a clean machine'
+
+          # version 1's task, after its copy was replaced by this version
+          Seed
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Status
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Install -DryRun
+          if ((Snap)['HKLM:\SOFTWARE\Classes\MSEdgeHTM\shell\open\command'] -notmatch $SW) { throw 'a dry run changed something' }
+          if (-not (Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Browser GPU' -ErrorAction SilentlyContinue)) { throw 'a dry run removed the task' }
+          Copy-Item -LiteralPath $s -Destination $copy -Force
+          Start-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Browser GPU'
+          $deadline = (Get-Date).AddMinutes(3)
+          do { Start-Sleep 2; $st = (Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Browser GPU').State } while ($st -eq 'Running' -and (Get-Date) -lt $deadline)
+          $info = Get-ScheduledTaskInfo -TaskPath '\RK3576\' -TaskName 'Browser GPU'
+          Write-Host "task result $($info.LastTaskResult)"
+          if ($info.LastTaskResult -ne 0) { throw "the task's run failed: $($info.LastTaskResult)" }
+          Expect-Clean "version 1's task running this version"
+          Get-Content $log
+          # running it again changes nothing and logs nothing
+          $n = (Get-Content $log).Count
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $copy -Action Apply -Quiet
+          if ((Get-Content $log).Count -ne $n) { throw 'a second Apply logged changes' }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Install
+          Expect-Clean 'Install after the task'
+          if (Left) { throw "Install left: $(Left)" }
+
+          # Install straight on version 1's leftovers
+          Seed
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Install
+          if ($LASTEXITCODE -ne 0) { throw "Install exited $LASTEXITCODE" }
+          Expect-Clean 'Install'
+          if (Left) { throw "Install left: $(Left)" }
+
+          # Revert takes the entries out and keeps the install parts; Uninstall removes those
+          Seed
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Revert
+          Expect-Clean 'Revert'
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Uninstall
+          if ($LASTEXITCODE -ne 0) { throw "Uninstall exited $LASTEXITCODE" }
+          Expect-Clean 'Uninstall'
+          if (Left) { throw "Uninstall left: $(Left)" }
+
+          # Uninstall straight on version 1's leftovers
+          Seed
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Action Uninstall
+          if ($LASTEXITCODE -ne 0) { throw "Uninstall exited $LASTEXITCODE" }
+          Expect-Clean 'Uninstall'
+          if (Left) { throw "Uninstall left: $(Left)" }
+          Get-Content $log
+          Write-Host "version 1's switch, policies, WebView2 arguments, task, copy and settings: all gone, everything as it was"
+
   rk3576-tools:
     name: RK3576 tools bundle (install, uninstall, offline install)
     # rk-monitor, rknputest and charsiu_run in the layout of
@@ -426,7 +772,7 @@ jobs:
             Copy-Item npu-built\charsiu_run.exe, npu-built\rknpu-perfcounters.ps1 "$p\npu"
             Copy-Item npu-built\licenses\* "$p\npu\licenses"
             Copy-Item tools\rk3576-tools\setup\* "$p\setup"
-            Copy-Item tools\rk3576-tools\README.md $p
+            Copy-Item tools\rk3576-tools\README.md, tools\rk3576-tools\BROWSER-GPU.md $p
             Copy-Item tools\rk3576-tools\README.md, tools\rk3576-tools\*.cmd $out
             Copy-Item LICENSE "$p\LICENSE.txt"
             $ver = "0.1.0+$($env:GITHUB_SHA.Substring(0,7))"
@@ -455,7 +801,8 @@ jobs:
           Get-Content "$env:ProgramData\RK3576\setup.log"
           foreach ($f in 'rk-monitor.exe', 'npu\rknputest.exe', 'npu\charsiu_run.exe', 'npu\rknpu-perfcounters.ps1',
                          'setup\rk3576-setup.ps1', 'setup\rk3576-counters.ps1', 'setup\uninstall.cmd',
-                         'setup\firstboot.cmd', 'VERSION.txt', 'LICENSE.txt') {
+                         'setup\firstboot.cmd', 'setup\rk3576-browser-gpu.ps1',
+                         'VERSION.txt', 'LICENSE.txt') {
             if (-not (Test-Path (Join-Path $dir $f))) { throw "missing $f" }
           }
           # rk-monitor starts from a logon task for the Users group, not from a Run entry
@@ -476,6 +823,10 @@ jobs:
           New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'RK3576 Monitor' -Value 'x' -Force | Out-Null
           $t = Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Performance counters'
           if ($t.Principal.UserId -ne 'SYSTEM') { throw 'task principal' }
+          # the browser switch cleanup ran and left no task or copy of its own
+          if (Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'Browser GPU' -ErrorAction SilentlyContinue) { throw 'a Browser GPU task' }
+          if (Test-Path (Join-Path $dir 'browser-gpu')) { throw 'a browser-gpu folder' }
+          Get-Content "$env:ProgramData\RK3576\browser-gpu.log"
           Get-Content "$env:ProgramData\RK3576\counters.log"
           # the installed program runs (no RK3576 counters on the runner)
           $p = Start-Process -FilePath (Join-Path $dir 'rk-monitor.exe') -ArgumentList '--once' -Wait -PassThru -NoNewWindow -RedirectStandardOutput once.txt
@@ -697,6 +1048,103 @@ jobs:
           # the suite's own exit code (1: rows FAIL on a VM) is not this step's
           exit 0
 
+  saradc-logic:
+    name: rk3xsaradc thresholds and debounce (Linux, gcc)
+    # The key, jack and HID-mapping decisions of drivers/adc/rk3xsaradc are
+    # plain C with no WDK dependency; run their unit test, and build the
+    # file freestanding the way the kernel build sees it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        run: |
+          set -eux
+          D=drivers/adc/rk3xsaradc
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -o saradc_logic_test $D/test/saradc_logic_test.c $D/saradc_logic.c
+          ./saradc_logic_test
+          gcc -std=c99 -ffreestanding -nostdinc -fno-builtin -Wall -Wextra -Werror -c $D/saradc_logic.c -o /dev/null
+          # the interface header alone, as a host program sees it
+          printf '#include "%s/rk3xsaradc_ioctl.h"\nint main(void){return sizeof(RK3X_SARADC_INFO)==4*54?0:1;}\n' "$PWD/$D" > hdr.c
+          gcc -std=c11 -Wall -Wextra -Werror -o hdr hdr.c && ./hdr
+
+  pin40-scripts:
+    name: 40-pin PowerShell samples (Windows PowerShell 5.1)
+    # The scripts in tools/pin40 load WinRT types (Windows.Devices.Gpio, .I2c,
+    # .Spi, .Enumeration) the way they will on the board. The runner has no
+    # RhProxy, so each script must get as far as asking for a controller and
+    # stop there with its own message: a parse error or "Unable to find
+    # type" fails the job.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and load
+        shell: powershell
+        run: |
+          $fail = $false
+          foreach ($f in Get-ChildItem tools\pin40 -Filter *.ps1) {
+            $tok = $null; $err = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tok, [ref]$err)
+            if ($err) { $err | Out-Host; $fail = $true }
+          }
+          if ($fail) { throw 'parse errors' }
+          $cases = @(
+            @{ Script = 'tools\pin40\gpio-blink.ps1'; Args = @('-List') },
+            @{ Script = 'tools\pin40\i2c-scan.ps1';   Args = @() }
+          )
+          # the scripts end with an error on purpose here; their stderr must
+          # be read, not turned into a failure of this step
+          $ErrorActionPreference = 'Continue'
+          foreach ($c in $cases) {
+            $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $c.Script @($c.Args) 2>&1 | Out-String
+            Write-Host "== $($c.Script)"; Write-Host $out
+            if ($out -match 'Unable to find type|ParserError|TypeNotFound') { throw "$($c.Script): WinRT types did not load" }
+            if ($out -notmatch 'No GPIO controller|No I2C bus|I2C buses:') { throw "$($c.Script): did not reach the controller query" }
+          }
+          # both scripts exit 1 here by design (no RhProxy on the runner)
+          $global:LASTEXITCODE = 0
+
+  ec20-tools:
+    name: EC20 usbnet mode scripts (shellcheck, Windows PowerShell 5.1)
+    # tools/ec20 switches the TaishanPi 3M's EC20 between QMI, MBIM and RNDIS. No
+    # modem on a runner: both scripts must get as far as looking for the AT
+    # port and stop there with exit code 3.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse, ASCII, and run -Status without a modem
+        shell: powershell
+        run: |
+          $f = (Resolve-Path tools\ec20\ec20-mode.ps1).Path
+          $tok = $null; $err = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$tok, [ref]$err)
+          if ($err) { $err | Out-Host; throw 'ec20-mode.ps1 does not parse' }
+          if ([System.IO.File]::ReadAllBytes($f) | Where-Object { $_ -ge 0x80 }) { throw 'ec20-mode.ps1 is not ASCII' }
+          $ErrorActionPreference = 'Continue'
+          $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $f -Status 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 3) { throw "ec20-mode.ps1 -Status exited $code, expected 3 (no AT port)" }
+          if ($out -notmatch 'No COM port on USB VID 2C7C answers AT') { throw 'did not reach the port lookup' }
+          foreach ($a in @(@('-Mode', 'rndis'), @('-Mode', 'mbim'), @('-Revert'), @('-Mode', 'rndis', '-Connect', '-Pin', '918273', '-Apn', 'cmnet'))) {
+            $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $f @a 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 3) { throw "ec20-mode.ps1 $a exited $LASTEXITCODE, expected 3" }
+            if ($out -match '918273') { throw 'the PIN appears in the output' }
+          }
+          $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $f -Status -Connect 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 1) { throw "-Status -Connect exited $LASTEXITCODE, expected 1" }
+          # the step's own exit code would otherwise be the script's 3
+          exit 0
+  ec20-tools-linux:
+    name: EC20 usbnet mode script (shellcheck, Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck and run status without a modem
+        run: |
+          shellcheck -S warning tools/ec20/ec20-mode.sh
+          set +e; tools/ec20/ec20-mode.sh status; code=$?; set -e
+          [ "$code" -eq 3 ] || { echo "::error::ec20-mode.sh status exited $code, expected 3"; exit 1; }
+
   solution:
     name: WDK build (build/RockchipDrivers.sln)
     # The drivers imported from worproject/Rockchip-Windows-Drivers build as one
@@ -730,6 +1178,70 @@ jobs:
           path: build/ARM64/Release/Output/
           if-no-files-found: error
 
+  wifi-package:
+    name: Wi-Fi bring-up package, test-signed (dwcmshc + bcmwlsdio)
+    # For a board session: dwcmshc with the SDIO controller support (W2)
+    # and bcmwlsdio (W3), test-signed with a certificate made for this run,
+    # with signer.cer, install-firmware.ps1 and the README, for pnputil on
+    # an installed Windows (docs/dev/wifi.md). Not put on the WinPE media.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build, catalog and sign
+        shell: pwsh
+        run: |
+          msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:SignMode=Off /p:WoaDriverBuild=${{ github.run_number }} /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'msbuild failed for RockchipDrivers.sln' }
+          msbuild drivers\net\bcmwlsdio\bcmwlsdio.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /p:SignMode=Off /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'msbuild failed for bcmwlsdio' }
+
+          $pkg = 'C:\wifi-pkg'
+          foreach ($n in 'dwcmshc', 'bcmwlsdio') { New-Item -ItemType Directory -Force -Path "$pkg\$n" | Out-Null }
+          Get-ChildItem build\ARM64\Release\Output\dwcmshc -Recurse -Include *.sys,*.inf |
+            Copy-Item -Destination "$pkg\dwcmshc" -Force
+          Get-ChildItem drivers\net\bcmwlsdio\ARM64\Release -Recurse -Include *.sys,*.inf |
+            Copy-Item -Destination "$pkg\bcmwlsdio" -Force
+
+          $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
+          $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
+          $pw = 'rk3576-test'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=woa-rk3576 test signing' `
+                    -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(5)
+          $pfx = 'C:\wifi-test.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $pw -Force -AsPlainText) | Out-Null
+          Export-Certificate -Cert $cert -FilePath "$pkg\signer.cer" | Out-Null
+          foreach ($n in 'dwcmshc', 'bcmwlsdio') {
+            $d = "$pkg\$n"
+            & $i2c /driver:"$d" /os:10_RS3_ARM64 /verbose
+            if ($LASTEXITCODE) { throw "inf2cat failed for ${n}: $LASTEXITCODE" }
+            $files = Get-ChildItem $d -Include *.cat,*.sys -Recurse | Select-Object -ExpandProperty FullName
+            & $st sign /fd sha256 /f $pfx /p $pw $files
+            if ($LASTEXITCODE) { throw "signtool failed for ${n}: $LASTEXITCODE" }
+            foreach ($sig in Get-AuthenticodeSignature $files) {
+              Write-Host ("   {0,-14} {1}" -f $sig.Status, (Split-Path $sig.Path -Leaf))
+              if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
+            }
+            foreach ($f in "$n.inf", "$n.sys", "$n.cat") {
+              if (-not (Test-Path (Join-Path $d $f))) { throw "$n package: $f missing" }
+            }
+          }
+          Copy-Item drivers\net\bcmwlsdio\install-firmware.ps1, drivers\net\bcmwlsdio\README.md $pkg -Force
+          "woa-rk3576 $env:GITHUB_SHA, run ${{ github.run_number }}" | Set-Content "$pkg\VERSION.txt" -Encoding ascii
+          Get-ChildItem $pkg -Recurse -File | Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifi-bringup-signed-arm64
+          path: C:\wifi-pkg\
+          retention-days: 30
+          if-no-files-found: error
+
   build:
     name: WDK build (${{ matrix.name }})
     runs-on: windows-2022
@@ -740,10 +1252,19 @@ jobs:
           - { name: spi,  proj: drivers/spi/rk3xspi/rk3xspi.vcxproj }
           - { name: touch, proj: drivers/input/gt9271/gt9271.vcxproj }
           - { name: bluetooth, proj: drivers/bluetooth/bcm4345bt/bcm4345bt.vcxproj }
+          - { name: uart, proj: drivers/serial/rk3xuart/rk3xuart.vcxproj }
+          - { name: serialtest, proj: tools/serialtest/serialtest.vcxproj }
           - { name: vdpu383, proj: drivers/video/vdpu383/vdpu383.vcxproj }
           - { name: vdpu383test, proj: tools/vdpu383test/vdpu383test.vcxproj }
+          - { name: saradc, proj: drivers/adc/rk3xsaradc/rk3xsaradc.vcxproj }
+          - { name: adctest, proj: tools/adctest/adctest.vcxproj }
+          - { name: pwrkey, proj: drivers/input/rk806pwrkey/rk806pwrkey.vcxproj }
+          - { name: leds, proj: drivers/leds/rkled/rkled.vcxproj }
+          - { name: eeprom, proj: drivers/misc/rkeeprom/rkeeprom.vcxproj }
+          - { name: eepromtool, proj: tools/eeprom/eeprom.vcxproj }
+          - { name: wdthang, proj: tools/wdthang/wdthang.vcxproj }
+          - { name: wifi, proj: drivers/net/bcmwlsdio/bcmwlsdio.vcxproj }
           - { name: wifi-aic8800, proj: drivers/net/aic8800usb/aic8800usb.vcxproj }
-
           - { name: pageverify, proj: tools/pageverify/pageverify.vcxproj }
     steps:
       - uses: actions/checkout@v4
@@ -768,16 +1289,20 @@ jobs:
           # The class extensions do not all ship in Include\<ver>\km: SpbCx and
           # NetAdapterCx live in versioned class-extension trees that the WDK
           # targets add only when the project opts in. Locate them, do not guess.
-          foreach ($h in 'sdport.h','spbcx.h','gpioclx.h','netadaptercx.h','acpiioct.h','bthxddi.h','gpio.h') {
+          foreach ($h in 'sdport.h','spbcx.h','gpioclx.h','netadaptercx.h','acpiioct.h','bthxddi.h','gpio.h','sercx.h','ntddsd.h') {
             Get-ChildItem $kits -Recurse -Filter $h -ErrorAction SilentlyContinue |
               ForEach-Object { Write-Host ("{0,-18} {1}" -f $h, $_.FullName) }
           }
           Write-Host "--- class-extension import libs (arm64) ---"
-          foreach ($l in 'SpbCxStubs.lib','msgpioclxstub.lib','netadaptercxstub.lib','sdport.lib') {
+          foreach ($l in 'SpbCxStubs.lib','msgpioclxstub.lib','netadaptercxstub.lib','sdport.lib','sercx2.lib','sercx.lib','sdbus.lib') {
             Get-ChildItem $kits -Recurse -Filter $l -ErrorAction SilentlyContinue |
               Where-Object { $_.FullName -match 'arm64' } |
               ForEach-Object { Write-Host ("{0,-22} {1}" -f $l, $_.FullName) }
           }
+          Write-Host "--- SerCx libraries (arm64), whatever their name ---"
+          Get-ChildItem "$kits\Lib" -Recurse -Filter '*sercx*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'arm64' } |
+            ForEach-Object { Write-Host $_.FullName }
           Write-Host "--- WDK VS build targets ---"
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           Write-Host "VS: $vs"

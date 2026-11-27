@@ -1,0 +1,71 @@
+;
+; rkeeprom.inf - read-only access to the board's I2C EEPROM
+;
+; Target: Windows on ARM64. Binds ACPI\RKCP2416, an EEPROM the firmware
+; declares (ROCK 4D: BL24C16F on I2C6, \_SB.I2C6.EEP0). The driver only
+; reads (rk3xi2c); tools\eeprom shows or saves the contents. Only
+; administrators and SYSTEM can open it: it may hold serial numbers and
+; MAC addresses.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = rkeeprom.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+rkeeprom.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%RKEEP.DeviceDesc% = RKEEP_Inst,ACPI\RKCP2416
+
+[RKEEP_Inst.NT]
+CopyFiles = RKEEP_CopyFiles
+
+[RKEEP_CopyFiles]
+rkeeprom.sys
+
+[RKEEP_Inst.NT.HW]
+AddReg = RKEEP_Inst.NT.HW.AddReg
+
+[RKEEP_Inst.NT.HW.AddReg]
+; SYSTEM and Administrators only.
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+
+[RKEEP_Inst.NT.Services]
+AddService = rkeeprom,0x00000002,RKEEP_Service
+
+[RKEEP_Service]
+DisplayName   = %RKEEP.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\rkeeprom.sys
+
+[RKEEP_Inst.NT.Wdf]
+KmdfService = rkeeprom, RKEEP_wdfsect
+
+[RKEEP_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName       = "woa-rk3576"
+DiskName           = "RK3576 I2C EEPROM Installation Disk"
+RKEEP.DeviceDesc    = "I2C EEPROM (read-only)"
+RKEEP.SvcDesc       = "Rockchip RK3576 I2C EEPROM Driver"

@@ -13,6 +13,10 @@
  *        these boards, the counter is not)
  *   GPU  \GPU Engine(*)\Utilization Percentage, summed per engine and shown
  *        per engine type, as Task Manager does; \GPU Adapter Memory(*);
+ *        both only for the Mali adapter (found by name through DXGI, matched
+ *        by its LUID in the instance names): without maliwddm the only
+ *        adapter is Microsoft's Basic Render Driver, which renders on the
+ *        CPU, and its numbers are not the GPU's;
  *        \RK3576 GPU\Temperature (C) and Clock (MHz) from maliwddm
  *   NPU  \RK3576 NPU(*)\% Busy Time and Jobs/sec from rknpu.sys
  *
@@ -65,6 +69,8 @@
 #include <shellscalingapi.h>
 #include <pdh.h>
 #include <pdhmsg.h>
+#define COBJMACROS
+#include <dxgi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -443,6 +449,52 @@ static void SampleThermal(void)
     free(it);
 }
 
+/* The Mali adapter's LUID as PDH writes it in instance names:
+ * "luid_0x00000000_0x0000C2E4_". Looked up again every RETRY_TICKS. */
+static BOOL g_maliFound;
+static wchar_t g_maliLuid[40];
+
+typedef HRESULT (WINAPI *PFN_CreateDXGIFactory1)(REFIID, void **);
+/* IID_IDXGIFactory1, spelled out so no dxguid.lib is needed */
+static const IID kIidDxgiFactory1 =
+    { 0x770aae78, 0xf26f, 0x4dba, { 0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87 } };
+
+static void FindMali(void)
+{
+    static HMODULE dxgi;
+    PFN_CreateDXGIFactory1 create;
+    IDXGIFactory1 *f = NULL;
+    IDXGIAdapter1 *a;
+    DXGI_ADAPTER_DESC1 d;
+    UINT i;
+
+    g_maliFound = FALSE;
+    if (!dxgi)
+        dxgi = LoadLibraryW(L"dxgi.dll");
+    if (!dxgi)
+        return;
+    create = (PFN_CreateDXGIFactory1)(void *)GetProcAddress(dxgi, "CreateDXGIFactory1");
+    if (!create || FAILED(create(&kIidDxgiFactory1, (void **)&f)))
+        return;
+    for (i = 0; IDXGIFactory1_EnumAdapters1(f, i, &a) == S_OK; i++) {
+        if (SUCCEEDED(IDXGIAdapter1_GetDesc1(a, &d)) && wcsstr(d.Description, L"Mali")) {
+            swprintf(g_maliLuid, 40, L"luid_0x%08X_0x%08X_",
+                     (unsigned)d.AdapterLuid.HighPart, (unsigned)d.AdapterLuid.LowPart);
+            g_maliFound = TRUE;
+        }
+        IDXGIAdapter1_Release(a);
+        if (g_maliFound)
+            break;
+    }
+    IDXGIFactory1_Release(f);
+}
+
+static BOOL IsMali(const wchar_t *inst)
+{
+    const wchar_t *l = wcsstr(inst, L"luid_");
+    return g_maliFound && l && _wcsnicmp(l, g_maliLuid, wcslen(g_maliLuid)) == 0;
+}
+
 typedef struct {
     wchar_t key[96];                /* "luid_..._phys_0_eng_3" */
     wchar_t type[32];
@@ -458,7 +510,7 @@ static void SampleGpu(void)
     wchar_t types[8][32];
     double tmax[8];
 
-    M.gpuOk = g_ctr[C_GPU_ENG].ok;
+    M.gpuOk = g_ctr[C_GPU_ENG].ok && g_maliFound;
     M.gpu = 0;
     M.gpuTypes[0] = 0;
     it = CtrArray(&g_ctr[C_GPU_ENG], &n, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100);
@@ -466,7 +518,7 @@ static void SampleGpu(void)
         const wchar_t *luid = wcsstr(it[i].szName, L"luid_");
         const wchar_t *et = wcsstr(it[i].szName, L"_engtype_");
         size_t klen;
-        if (!ItemValid(&it[i]) || !luid || !et || et < luid)
+        if (!ItemValid(&it[i]) || !luid || !et || et < luid || !IsMali(it[i].szName))
             continue;
         klen = (size_t)(et - luid);
         if (klen >= 96)
@@ -510,7 +562,7 @@ static void SampleGpu(void)
     }
     SeriesPush(&M.gpuHist, M.gpu);
 
-    /* adapter memory, all adapters together */
+    /* adapter memory, the Mali adapter only */
     M.memOk = FALSE;
     M.gpuDed = M.gpuShared = 0;
     {
@@ -518,7 +570,7 @@ static void SampleGpu(void)
         for (which = 0; which < 2; which++) {
             it = CtrArray(&g_ctr[which ? C_GPU_SH : C_GPU_DED], &n, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100);
             for (i = 0; i < n; i++) {
-                if (!ItemValid(&it[i]))
+                if (!ItemValid(&it[i]) || !IsMali(it[i].szName))
                     continue;
                 if (which)
                     M.gpuShared += it[i].FmtValue.doubleValue;
@@ -633,7 +685,7 @@ static void BuildWidgetRows(void)
     if (M.gpuOk)
         swprintf(r->value, 112, L"%.0f%%", M.gpu);
     else
-        wcscpy_s(r->value, 112, L"no counters");
+        wcscpy_s(r->value, 112, g_maliFound ? L"no counters" : L"no Mali driver");
     if (M.gpuTempOk) {
         swprintf(part, 32, L"   %.0f \x00B0" L"C", M.gpuTemp);
         wcscat_s(r->value, 112, part);
@@ -715,7 +767,9 @@ static void BuildRows(void)
 
     AddRow(R_HEAD, L"GPU", NULL);
     r = AddRow(R_ROW, L"Utilization", M.gpuOk ? &M.gpuHist : NULL);
-    if (!M.gpuOk)
+    if (!g_maliFound)
+        wcscpy_s(r->value, 112, L"Mali driver not installed");
+    else if (!M.gpuOk)
         wcscpy_s(r->value, 112, L"no GPU engine counters");
     else if (M.gpuTypes[0])
         swprintf(r->value, 112, L"%.0f%%   %ls", M.gpu, M.gpuTypes);
@@ -826,8 +880,10 @@ static void Sample(void)
         g_query = NULL;
         return;
     }
-    if (g_tick % RETRY_TICKS == 0)
+    if (g_tick % RETRY_TICKS == 0) {
         CtrAddMissing();
+        FindMali();
+    }
     g_tick++;
     g_warm = FALSE;
     PdhCollectQueryData(g_query);

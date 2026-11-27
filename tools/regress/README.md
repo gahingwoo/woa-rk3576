@@ -58,16 +58,14 @@ sudo ./regress.sh [--board auto|tspi3m|cm5io|rock4d] [--quick] [--out DIR]
 | `-ToolsDir DIR` | where `rknputest.exe` and `vdpu383test.exe` are; also searched: `bin\` next to the script, `%ProgramFiles%\RK3576`, `%ProgramFiles%\RK3576\npu` (the RK3576 tools bundle), `PATH` |
 | `-User NAME` | the desktop user for the session checks (default: the signed-in user) |
 | `-ExpectFirmware REGEX` | also require the firmware version string to match, for example a release tag |
-| `-Require nvme,sd,...` | treat optional parts as required for this run: `nvme`, `sd`, `emmc`, `wifi`, `bluetooth`, `npu`, `vdec`, `analog`, `hdmiaudio` |
+| `-Require nvme,sd,...` | treat optional parts as required for this run: `nvme`, `sd`, `emmc`, `wifi`, `bluetooth`, `npu`, `vdec`, `analog`, `hdmiaudio`, and `jack` (the headphone endpoint must be active: plug something into the jack) |
 | `-FetchStreams` | download missing decode streams on the board itself |
 | `-DryRun -Mock FILE` | evaluate the checks against recorded facts (see Tests) |
 
 ## The checks
 
 Every check is gated by the board manifest in [`boards/`](boards), written
-from the firmware's per-board inventory (edk2-rk3576 `docs/BOARD-FEATURES.md`
-on branch `rock4d-parity`, `docs/boards/cm5io.md` on `cm5io-parity`). A
-manifest value is `true` (must be there: missing is a FAIL), `"optional"`
+from the firmware's per-board feature list. A manifest value is `true` (must be there: missing is a FAIL), `"optional"`
 (missing is a SKIP, for parts that are not always fitted or not always
 enabled) or `false` (N-A). Edit the manifest when a board changes.
 
@@ -86,13 +84,13 @@ enabled) or `false` (N-A). Edit the manifest when a board changes.
 | `gpu.temp` | `\RK3576 GPU(*)\Temperature (C)` between 10 and 90 C | |
 | `display.mode` | in the user's session (`EnumDisplaySettings`): the current mode is the largest one offered at 59 or 60 Hz, and runs at 59 or 60 Hz | |
 | `display.tdr` | no Display event 4101 (driver reset) in the System log since the run started; evaluated last | |
-| `audio.hdmi`, `audio.analog` | an audio endpoint named HDMI / Headphone with status OK. The HDMI endpoint needs a monitor with speakers | csaudiork3x endpoint names |
+| `audio.hdmi`, `audio.analog` | endpoints in every state through the MMDevice API (PnP's present endpoints when that fails). HDMI: an active render endpoint of the csaudiork3x device on the manifest's `hdmiSai` (`ACPI\RKCP3004\6`), found by its KS filter (`topologyhdmi`) or its name (`HDMI` or `Digital Output`); it needs a monitor with speakers. Analog, on a board with `analogCodec`: the codec (`ACPI\RKCP8388`) and the csaudiork3x device on `analogSai` started; an empty jack hides the headphone endpoint, so it is only reported unless `-Require jack`. Without `analogCodec`: an active headphone endpoint | manifest `audio.*Endpoint`, `hdmiSai`, `analogSai`, `analogCodec` |
 | `net.ethernet`, `net.gateway` | the adapter on `ACPI\RKCP6543` is Up with an IPv4 address; the default gateway answers a ping | |
 | `net.wifi`, `net.bluetooth` | an 802.11 adapter (TaishanPi 3M only, optional: its driver is on a branch); the radio's device OK and a Bluetooth device OK. The radio's device is `ACPI\RKCP4345` unless the manifest names another in `network.bluetoothDevice` (ROCK 4D: `USB\VID_A69C&PID_8D81&MI_00`, the AIC8800D80 HCI interface under in-box BthUsb) | |
 | `usb.controllers`, `usb.devices` | at least two `ACPI\PNP0D10` xHCI controllers OK; the USB devices are listed, and on the CM5-IO the onboard hub must be there | |
 | `storage.emmc`, `storage.sd`, `storage.nvme` | a disk behind `ACPI\RKCP0D40` (eMMC), `ACPI\RKCPFE2C` (SD), on PCIe (NVMe); Healthy | |
 | `storage.rw` | 64 MiB (16 with `-Quick`) written to the system disk with write-through, read back, SHA-256 compared, deleted | Maskrom Studio's self-test |
-| `npu.info`, `npu.m3` | when `ACPI\RKCP3576` is there (the NPU setup option is on): bound to `rknpu`, `rknputest info` exits 0, `rknputest m3 --core both --iters 1` exits 0 (bit-exact) | woa-rk3576-npu `tools/rknputest` |
+| `npu.info`, `npu.m3` | when `ACPI\RKCP3576` is there (the NPU setup option is on): bound to `rknpu`, `rknputest info` exits 0 and reports the manifest's `npuCores` (2), `rknputest m3 --core both --iters 1` exits 0 (bit-exact) | woa-rk3576-npu `tools/rknputest` |
 | `vdec.warmup`, `vdec.<codec>.<stream>` | when `ACPI\RKCP0383` is there: bound to `vdpu383`, `vdpu383test warmup` exits 0, then every stream of [`streams.txt`](streams.txt) through `vdpu383test decode` with frame count, hardware errors 0 and the MD5 of the output | `tools/vdpu383test/hevc-conformance.ps1` |
 | `thermal.zones` | at least three ACPI thermal zones, each between 0 and 90 C | rk-monitor's counter |
 | `time.clock`, `time.rtc` | the year is 2026..2040 and the clock is within 120 s of `time.windows.com` (`w32tm /stripchart`, which reads only); `HYMB0001` OK | |
@@ -139,8 +137,7 @@ none, so optional), `time.rtc` (the HYM8563), `time.clock`, and
 [`streams.txt`](streams.txt) lists nine small streams (four H.264, five
 HEVC Main; together about 380 KB) from FFmpeg's fate-suite copies of the
 ITU-T conformance streams, each with its SHA-256, frame count and the MD5
-of the decoded I420 output. Every one matched on a TaishanPi 3M (H.264
-2026-11-24, HEVC 2026-11-25). They are not stored in git:
+of the decoded I420 output. They are not stored in git:
 `fetch-streams.sh` downloads them into `streams/` and checks the hashes,
 and `run-remote.sh` copies them to the board.
 
@@ -152,25 +149,19 @@ No board is needed:
   non-ASCII text has a UTF-8 BOM (Windows PowerShell 5.1 reads it as ANSI
   otherwise), and runs `regress.ps1 -DryRun` against each
   `tests/mock-*.json`. A mock holds the facts a board would report and the
-  result it expects for some checks: an all-good TaishanPi 3M with
-  `-Stress`, a CM5-IO with planted regressions (WDDM 1.3, wrong clock, a
-  problem device, no NVMe, a 4101 event, a wrong MD5), a ROCK 4D with
-  `-Quick`, no counters and nobody signed in, and a TaishanPi 3M with the
-  wrong firmware and a stress run stopped at 90 C. It also checks that
-  the suite writes nothing outside `-Out`.
+  results it expects (good boards, planted regressions, missing counters,
+  a stress run stopped at 90 C). It also checks that the suite writes
+  nothing outside `-Out`.
 * `tests/test-regress-sh.sh` builds `/sys` and `/proc` trees for made-up
   boards (`REGRESS_ROOT`), puts stub `dmesg`, `ip`, `ping` and
-  `timedatectl` first in `PATH`, and checks the rows of five cases; then
-  runs `run-remote.sh` with stub `ssh` and `scp` to check the copy, the
-  arguments and the results coming back.
+  `timedatectl` first in `PATH`, and checks five cases; then runs
+  `run-remote.sh` with stub `ssh` and `scp`.
 
 CI runs both on every push (`regress-linux`, `regress-windows` in
-[`ci.yml`](../../.github/workflows/ci.yml)): shellcheck, the Linux tests,
-the dry runs under PowerShell 7 and Windows PowerShell 5.1, and one live
-run of `regress.ps1` on the Windows runner (an x64 VM, so most rows FAIL),
-which must reach the last check, read the runner's own DSDT header
-through the C# helper, pass the storage check and leave no file or task
-behind.
+[`ci.yml`](../../.github/workflows/ci.yml)), under PowerShell 7 and Windows
+PowerShell 5.1, plus one live `regress.ps1` run on the x64 runner (most
+rows FAIL there; it must finish, pass the storage check and leave nothing
+behind).
 
 ## Adding a check
 

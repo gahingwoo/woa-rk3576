@@ -11,6 +11,8 @@
  *   vdpu383test reset                     IP reset (link 0x44)
  *   vdpu383test decode IN.264 [options]   decode an Annex B file (H.264, or HEVC
  *                                         Main: told apart by the first NAL unit)
+ *                                         or an IVF file (VP9 profile 0 or 2, AV1
+ *                                         Main 8 or 10 bit)
  *   vdpu383test replay DIR/replay.txt     run one dumped picture again
  *   vdpu383test selftest                  checks that need no hardware
  *
@@ -29,7 +31,29 @@
  *   --link-vendor   link 0x54 = 0x7FFFFF and 0x58 = 0x01000000 (vendor kernel)
  *                   instead of mainline's (register 13, 0)
  *   --null          no device: parse and build registers only
+ *   --session       with --null: decode as one of the driver's sessions
+ *                   (vdpu383_check.h): its run rules and address check,
+ *                   "session check" at the end
  *   --hevc, --h264  the codec, when the first NAL unit does not tell
+ *   --vp9-mpp-intra, --vp9-mpp-update, --vp9-mpp
+ *                   VP9: MPP's frame context handling instead of the
+ *                   specification's where the two differ (see
+ *                   lib/vdpu383_vp9.c): every intra frame resets all four
+ *                   contexts; the adapted context is written to the frame's
+ *                   context even when the frame does not keep it; both
+ *
+ * VP9: output is I420 (yuv420p), or with 16-bit samples (yuv420p10le) for
+ * 10 bit, each frame at its own size, as FFmpeg writes them with
+ * -autoscale 0. --dxva-only hands frame_context_idx on as FFmpeg and
+ * Chromium do (0 on intra frames). Every frame's address registers are
+ * checked against the buffers as the driver checks them, on --null too.
+ *
+ * AV1: output as for VP9. The decoder is handed each frame's OBUs as they
+ * are in the file. --dxva-only gives the builder only DXVA_PicParams_AV1
+ * and the tile data, as a D3D11 driver has them, and wraps the tiles in an
+ * OBU_TILE_GROUP (--av1-synth 0, default) or in an OBU_FRAME with 16 zero
+ * bytes of frame header (--av1-synth 1): which of the two the decoder
+ * takes is for the board to tell.
  *
  * HEVC: every picture's reference sets are also derived from its slice
  * headers as the decoder derives them, once with the SPS's sets (the
@@ -69,8 +93,14 @@ static double now_ms(void)
 #endif
 
 #include "dev.h"
+#include "../../drivers/video/vdpu383/vdpu383_check.h"
+
+/* --session: decode as a session of the driver (dev_null_sessions) */
+static int g_session_mode;
 #include "h264parse.h"
 #include "hevcparse.h"
+#include "vp9parse.h"
+#include "av1parse.h"
 #include "md5.h"
 
 /* ------------------------------------------------------------- helpers */
@@ -147,6 +177,30 @@ static void print_status_bits(unsigned s)
 
 /* --------------------------------------------------------------- info */
 
+/* The driver's note of the last failed import (README.md), from its
+ * Device Parameters; nothing printed when there is none. */
+static void print_last_import(void)
+{
+#ifdef _WIN32
+    static const wchar_t key[] = L"SYSTEM\\CurrentControlSet\\Enum\\ACPI\\RKCP0383\\0\\Device Parameters";
+    static const wchar_t *const names[] = { L"LastImportStage", L"LastImportStatus", L"LastImportPages",
+                                            L"LastImportExporterStatus", L"LastImportExporterPages",
+                                            L"LastImportHandle", L"LastImportPid" };
+    static const char *const stages[] = { "?", "parameters or IOMMU off", "no memory", "refresh of an unknown import",
+                                          "no free IO addresses", "no exporter (maliwddm did not start it)",
+                                          "exporter refused", "page count differs", "IOMMU entries" };
+    DWORD v[7], i;
+
+    for (i = 0; i < 7; i++) {
+        DWORD n = sizeof(v[i]);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, key, names[i], RRF_RT_REG_DWORD, NULL, &v[i], &n) != ERROR_SUCCESS)
+            return;
+    }
+    printf("last failed import  stage %lu (%s), status 0x%08lx; %lu pages asked, exporter 0x%08lx with %lu pages; "
+           "handle %lu, process %lu\n", v[0], stages[v[0] < 9 ? v[0] : 0], v[1], v[2], v[3], v[4], v[5], v[6]);
+#endif
+}
+
 static int cmd_info(void)
 {
     VDPU383_INFO in;
@@ -176,12 +230,22 @@ static int cmd_info(void)
                "%u IOMMU faults, paging programmed %u times, %u failed allocations\n",
                in.iommu ? "IO addresses, IOMMU paging on" : "physical, contiguous", in.iommu_setting,
                in.iommu_dt_dma, in.iova_pages, in.mmu_faults, in.mmu_enables, in.alloc_failures);
+    if (in.interface_version >= 3)
+        printf("imports             %u made or refreshed, %u taken back by the display driver, %u failed\n",
+               in.imports, in.revokes, in.import_failures);
+    if (in.interface_version >= 3 && in.import_failures)
+        print_last_import();
+    if (in.interface_version >= 4)
+        printf("sessions            %u open, %u made, %u decodes through them, %u refused; "
+               "IOMMU directory switched %u times; UserAccess %u\n",
+               in.sessions, in.sessions_made, in.session_runs, in.session_refused, in.domain_switches,
+               in.user_access);
     printf("warm-up at D0 entry: ran %u timed_out %u irq 0x%08x status 0x%08x (", in.warmup.ran,
            in.warmup.timed_out, in.warmup.irq, in.warmup.status);
     print_status_bits(in.warmup.status & 0xFFFF);
     printf(") polls %u buffer 0x%08x\n", in.warmup.polls, in.warmup.buffer_dma);
     if (!in.warmup.ran)
-        printf("warm-up at D0 entry: not run (Device Parameters WarmupAtD0 is not 1); "
+        printf("warm-up at D0 entry: not run (Device Parameters WarmupAtD0 is 0, or an older driver); "
                "`vdpu383test warmup` runs it now\n");
     if (in.warmup.ran) {
         int ok = !in.warmup.timed_out && (in.warmup.status & V383_STA_FRAME_RDY) &&
@@ -287,9 +351,9 @@ static int cmd_warmup_direct(void)
     in->regs[149] = 0x00000200;
     in->regs[168] = b.dma + 1344;
     in->regs[216] = b.dma + 2880;
-    for (i = 8; i <= 30; i++) in->write_mask[i / 32] |= 1u << (i % 32);
-    for (i = 64; i <= 106; i++) in->write_mask[i / 32] |= 1u << (i % 32);
-    for (i = 128; i <= 232; i++) in->write_mask[i / 32] |= 1u << (i % 32);
+    for (i = 8; i <= 31; i++) in->write_mask[i / 32] |= 1u << (i % 32);
+    for (i = 64; i <= 107; i++) in->write_mask[i / 32] |= 1u << (i % 32);
+    for (i = 128; i <= 235; i++) in->write_mask[i / 32] |= 1u << (i % 32);
     in->link_ip_timeout = 0x7ffff;
     in->link_ip_enable = 0;
     in->timeout_ms = 200;
@@ -340,6 +404,17 @@ typedef struct Dec {
     /* HEVC */
     V383_HevcRpsTable rebuilt;
     unsigned rps_real_bad, rps_rebuilt_bad, rps_unsupported, rps_logged;
+
+    /* VP9 */
+    V383_Vp9State vp9;
+    unsigned vp9_options, bit_depth, addr_bad;
+    DevBuf   vp9aux, colmv[2];
+    size_t   ref_off;
+
+    /* AV1 */
+    V383_Av1State av1;
+    V383_Av1Surface as[AV1_MAX_SLOTS];
+    unsigned av1_synth, av1_synth_hdr;
 } Dec;
 
 static unsigned popcount(unsigned v)
@@ -831,12 +906,566 @@ static int decode_cb_hevc(void *ctx, const HevcPicture *pic)
     return 0;
 }
 
+/* ----------------------------------------------------------------- VP9 */
+
+static void free_vp9(Dec *d)
+{
+    dev_free(&d->vp9aux);
+    dev_free(&d->colmv[0]);
+    dev_free(&d->colmv[1]);
+}
+
+/* Surfaces for the largest frame of the stream (all frames share them, as
+ * a D3D11 decoder's texture array does), 64-aligned in both directions. */
+static int setup_surfaces_vp9(Dec *d, unsigned width, unsigned height, unsigned bit_depth)
+{
+    unsigned i, bytes = (width * bit_depth + 7) / 8, colmv = v383_vp9_colmv_size(width, height);
+
+    free_surfaces(d);
+    free_vp9(d);
+    d->width = width;
+    d->height = height;
+    d->bit_depth = bit_depth;
+    d->hor = d->stride_mpp ? mpp_stride(bytes) : align_up(bytes, 64);
+    d->ver = align_up(height, 64);
+    d->surf_size = align_up(d->hor * d->ver * 3 / 2, 4096);
+    for (i = 0; i < VP9_MAX_SLOTS; i++) {
+        if (dev_alloc(d->surf_size, &d->surf[i])) {
+            fprintf(stderr, "surface alloc (%u bytes): %s\n", d->surf_size, dev_error());
+            return -1;
+        }
+        memset(d->surf[i].cpu, 0, d->surf_size);
+        d->vs[i].dma = d->surf[i].dma;
+        d->vs[i].colmv_dma = 0;
+    }
+    if (dev_alloc(v383_vp9_rcb_size(width, height) + 4096, &d->rcb) ||
+        dev_alloc(V383_VP9_AUX_SIZE, &d->vp9aux) ||
+        dev_alloc(colmv, &d->colmv[0]) || dev_alloc(colmv, &d->colmv[1])) {
+        fprintf(stderr, "buffer alloc: %s\n", dev_error());
+        return -1;
+    }
+    memset(d->rcb.cpu, 0, d->rcb.size);
+    memset(d->vp9aux.cpu, 0, d->vp9aux.size);
+    memset(d->colmv[0].cpu, 0, d->colmv[0].size);
+    memset(d->colmv[1].cpu, 0, d->colmv[1].size);
+    printf("# VP9 up to %ux%u, %u bit, stride %u x %u, %u surfaces of %u bytes, colmv 2 x %u\n",
+           width, height, bit_depth, d->hor, d->ver, VP9_MAX_SLOTS, d->surf_size, colmv);
+    return 0;
+}
+
+/* The driver's check (V383IsAddrReg/V383AddrOk), on the null device too:
+ * every address register written must point into one of this decode's
+ * buffers, and what the decoder reads from the stream must be in it. */
+static int vp9_in_buf(const DevBuf *b, uint32_t a, uint32_t len)
+{
+    return b->handle && a >= b->dma && (uint64_t)a + len <= (uint64_t)b->dma + b->size;
+}
+
+static unsigned check_vp9_addrs(Dec *d, const V383_RegFile *rf, char *why, size_t why_len)
+{
+    unsigned r, i, bad = 0;
+
+    for (r = 0; r < V383_NUM_REGS; r++) {
+        uint32_t a = rf->regs[r];
+        int ok = 0, addr = 0;
+
+        if (!(rf->write_mask[r / 32] & (1u << (r % 32))))
+            continue;
+        addr = (r >= 128 && r <= 134) || (r >= 140 && r <= 160 && !(r & 1)) || (r >= 168 && r <= 185) ||
+               r == 192 || (r >= 194 && r <= 210) || (r >= 216 && r <= 232);
+        if (!addr || !a)
+            continue;
+        ok = vp9_in_buf(&d->strm, a, 1) || vp9_in_buf(&d->rcb, a, 1) || vp9_in_buf(&d->vp9aux, a, 1) ||
+             vp9_in_buf(&d->colmv[0], a, 1) || vp9_in_buf(&d->colmv[1], a, 1);
+        for (i = 0; i < VP9_MAX_SLOTS && !ok; i++)
+            ok = vp9_in_buf(&d->surf[i], a, 1);
+        if (!ok) {
+            if (!bad++)
+                snprintf(why, why_len, "register %u = 0x%08x is in no buffer", r, a);
+        }
+    }
+    if (!vp9_in_buf(&d->strm, rf->regs[128], rf->regs[66])) {
+        if (!bad++)
+            snprintf(why, why_len, "stream read 0x%08x + %u past the buffer", rf->regs[128], rf->regs[66]);
+    }
+    {
+        unsigned last = 0;
+        for (i = 0; i < 11; i++)
+            if (rf->regs[141 + 2 * i])
+                last = rf->regs[140 + 2 * i] + rf->regs[141 + 2 * i];
+        if (last && !vp9_in_buf(&d->rcb, d->rcb.dma, last - d->rcb.dma)) {
+            if (!bad++)
+                snprintf(why, why_len, "row buffers end at 0x%08x, past the buffer", last);
+        }
+    }
+    return bad;
+}
+
+static int decode_cb_vp9(void *ctx, const Vp9Picture *pic)
+{
+    Dec *d = (Dec *)ctx;
+    const V383_DXVA_PicParams_VP9 *pp = &pic->pp;
+    V383_Vp9Input bi;
+    V383_RegFile rf;
+    VDPU383_RUN_IN *in;
+    VDPU383_RUN_OUT out;
+    unsigned need, r, cur = V383_PIC_INDEX(pp->CurrPic);
+    unsigned intra = !V383_VP9_FRAME_TYPE(pp) || V383_VP9_INTRA_ONLY(pp);
+    int rc;
+    double t0;
+    char hex[33], why[160];
+
+    need = (pp->uncompressed_header_size_byte_aligned & ~15u) + v383_vp9_stream_read_len((unsigned)pic->len) + 16;
+    if (need > d->strm.size) {
+        dev_free(&d->strm);
+        if (dev_alloc(need > (4u << 20) ? need : (4u << 20), &d->strm)) {
+            fprintf(stderr, "stream alloc: %s\n", dev_error());
+            return -1;
+        }
+    }
+    memcpy(d->strm.cpu, pic->data, pic->len);
+    memset(d->strm.cpu + pic->len, 0, need - pic->len);
+
+    memset(&bi, 0, sizeof(bi));
+    bi.pp = pp;
+    bi.state = &d->vp9;
+    bi.options = d->vp9_options;
+    bi.stream_dma = d->strm.dma;
+    bi.stream_len = (unsigned)pic->len;
+    bi.aux_cpu = d->vp9aux.cpu;
+    bi.aux_dma = d->vp9aux.dma;
+    bi.rcb_dma = d->rcb.dma;
+    bi.colmv_dma[0] = d->colmv[0].dma;
+    bi.colmv_dma[1] = d->colmv[1].dma;
+    bi.surfaces = d->vs;
+    bi.num_surfaces = VP9_MAX_SLOTS;
+    bi.hor_stride = d->hor;
+    bi.ver_stride = d->ver;
+
+    rc = v383_vp9_build(&bi, &rf);
+    if (rc) {
+        fprintf(stderr, "frame %u: register builder failed (%d)\n", pic->decode_index, rc);
+        return -1;
+    }
+    if (check_vp9_addrs(d, &rf, why, sizeof(why))) {
+        d->addr_bad++;
+        printf("    frame %u: %s\n", pic->decode_index, why);
+    }
+
+    in = (VDPU383_RUN_IN *)calloc(1, sizeof(*in));
+    if (!in)
+        return -1;
+    memcpy(in->regs, rf.regs, sizeof(in->regs));
+    memcpy(in->write_mask, rf.write_mask, sizeof(in->write_mask));
+    in->link_ip_timeout = d->link_vendor ? 0x7FFFFF : rf.core_timeout;
+    in->link_ip_enable = d->link_vendor ? 0x01000000 : 0;
+    in->timeout_ms = 2000;
+    in->flags = (d->readback ? VDPU383_RUN_READBACK : 0) | VDPU383_RUN_RESET_ON_ERROR;
+
+    if (d->print_regs) {
+        printf("# frame %u registers\n", pic->decode_index);
+        for (r = 0; r < V383_NUM_REGS; r++)
+            if (rf.write_mask[r / 32] & (1u << (r % 32)))
+                printf("reg %3u 0x%08x\n", r, rf.regs[r]);
+    }
+
+    t0 = now_ms();
+    if (dev_run(in, &out)) {
+        fprintf(stderr, "frame %u: %s\n", pic->decode_index, dev_error());
+        free(in);
+        return -1;
+    }
+    d->hw_ms += now_ms() - t0;
+    d->pictures++;
+
+    md5_hex(d->surf[cur].cpu, (size_t)d->hor * d->ver * 3 / 2, hex);
+    printf("pic %4u slot %2u %ux%u %s%s%s q %3d ctx %u%s refresh 0x%02x %u bytes (headers %u + %u)  %s irq 0x%08x status 0x%08x (",
+           pic->decode_index, cur, pp->width, pp->height,
+           !V383_VP9_FRAME_TYPE(pp) ? "K" : (intra ? "I" : "P"), V383_VP9_SHOW_FRAME(pp) ? "" : " hidden",
+           V383_VP9_ERROR_RESILIENT(pp) ? " er" : "", pp->base_qindex, pic->coded_ctx_idx,
+           V383_VP9_REFRESH_CTX(pp) ? (V383_VP9_PARALLEL_MODE(pp) ? "fw" : "bw") : "--",
+           pic->refresh_frame_flags, (unsigned)pic->len, pp->uncompressed_header_size_byte_aligned,
+           pp->first_partition_size, run_result_name(out.result), out.irq, out.status);
+    print_status_bits(out.status & 0xFFFF);
+    printf(") %u us\n", out.elapsed_us);
+    if (out.result != VDPU383_RUN_OK) {
+        d->hw_errors++;
+        if (out.result == VDPU383_RUN_BAD_ADDRESS)
+            printf("    rejected: register %u = 0x%08x is not in a buffer of this process\n",
+                   out.bad_reg, out.bad_reg < V383_NUM_REGS ? in->regs[out.bad_reg] : 0);
+        if (out.result == VDPU383_RUN_MMU_FAULT)
+            printf("    IOMMU fault at IO address 0x%08x\n", out.bad_reg);
+        printf("    mmu status 0x%08x/0x%08x rawstat 0x%08x/0x%08x reset_status 0x%08x\n",
+               out.mmu_status[0], out.mmu_status[1], out.mmu_int_rawstat[0], out.mmu_int_rawstat[1],
+               out.reset_status);
+    }
+    if (d->readback && d->print_regs) {
+        printf("# frame %u readback\n", pic->decode_index);
+        for (r = 0; r < V383_NUM_REGS; r++)
+            printf("rb %3u 0x%08x\n", r, out.regs[r]);
+    }
+    free(in);
+    return 0;
+}
+
+/* One sample of a surface row: 8 bit, or the decoder's 10-bit packing
+ * (4 samples in 5 bytes, least significant bits first). */
+static unsigned vp9_sample(const uint8_t *row, unsigned x, unsigned bit_depth)
+{
+    unsigned bit, v;
+
+    if (bit_depth == 8)
+        return row[x];
+    bit = x * 10;
+    v = row[bit >> 3] | ((unsigned)row[(bit >> 3) + 1] << 8);
+    return (v >> (bit & 7)) & 0x3FF;
+}
+
+/* A shown frame: cropped to its own size, I420 (8 bit) or I420 with 16-bit
+ * little-endian samples (10 bit), as FFmpeg writes yuv420p / yuv420p10le. */
+static void output_cb_vp9(void *ctx, int slot, unsigned w, unsigned h, unsigned decode_index, int existing)
+{
+    Dec *d = (Dec *)ctx;
+    const uint8_t *s = d->surf[slot].cpu;
+    unsigned cw = (w + 1) / 2, ch = (h + 1) / 2, bps = d->bit_depth > 8 ? 2 : 1;
+    size_t fsize = ((size_t)w * h + 2 * (size_t)cw * ch) * bps;
+    unsigned x, y, pl;
+    uint8_t *p;
+    char hex[33];
+
+    if (!s)
+        return;
+    if (d->frame_size < fsize) {
+        free(d->frame);
+        d->frame = (uint8_t *)malloc(fsize);
+        d->frame_size = fsize;
+    }
+    p = d->frame;
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
+            unsigned v = vp9_sample(s + (size_t)y * d->hor, x, d->bit_depth);
+            *p++ = (uint8_t)v;
+            if (bps == 2)
+                *p++ = (uint8_t)(v >> 8);
+        }
+    for (pl = 0; pl < 2; pl++)
+        for (y = 0; y < ch; y++)
+            for (x = 0; x < cw; x++) {
+                unsigned v = vp9_sample(s + (size_t)d->hor * d->ver + (size_t)y * d->hor, 2 * x + pl, d->bit_depth);
+                *p++ = (uint8_t)v;
+                if (bps == 2)
+                    *p++ = (uint8_t)(v >> 8);
+            }
+    md5_update(&d->total, d->frame, fsize);
+    if (d->out)
+        fwrite(d->frame, 1, fsize, d->out);
+    if (d->frame_md5) {
+        md5_hex(d->frame, fsize, hex);
+        printf("frame %4u (pic %u%s) %ux%u md5 %s\n", d->out_count, decode_index,
+               existing ? ", shown again" : "", w, h, hex);
+    }
+    if (d->ref) {
+        if (d->ref_off + fsize > d->ref_len) {
+            if (!d->mismatches++)
+                d->first_mismatch = d->out_count;
+            printf("frame %4u: past the end of the reference\n", d->out_count);
+        } else if (memcmp(d->ref + d->ref_off, d->frame, fsize)) {
+            size_t i, bad[3] = { 0, 0, 0 }, ysz = (size_t)w * h * bps;
+            for (i = 0; i < fsize; i++)
+                if (d->ref[d->ref_off + i] != d->frame[i])
+                    bad[i < ysz ? 0 : (i < ysz + (size_t)cw * ch * bps ? 1 : 2)]++;
+            if (!d->mismatches++)
+                d->first_mismatch = d->out_count;
+            printf("frame %4u (pic %u): MISMATCH Y %zu U %zu V %zu bytes differ\n",
+                   d->out_count, decode_index, bad[0], bad[1], bad[2]);
+        }
+        d->ref_off += fsize;
+    }
+    d->out_count++;
+}
+
+static int run_vp9(Dec *d, const uint8_t *data, size_t len)
+{
+    Vp9Parser *p = (Vp9Parser *)calloc(1, sizeof(*p));
+    int rc;
+
+    if (!p)
+        return -1;
+    /* pass 1: the largest frame and the bit depth, for the surfaces */
+    vp9_init(p, NULL, NULL);
+    rc = vp9_run(p, data, len, d->max_pictures, NULL, NULL);
+    if (rc) {
+        fprintf(stderr, "error: %s\n", p->err);
+        free(p);
+        return -1;
+    }
+    if (setup_surfaces_vp9(d, p->max_width, p->max_height, p->max_bit_depth)) {
+        free(p);
+        return -1;
+    }
+    v383_vp9_reset(&d->vp9);
+    vp9_init(p, output_cb_vp9, d);
+    p->dxva_only = d->dxva_only;
+    rc = vp9_run(p, data, len, d->max_pictures, decode_cb_vp9, d);
+    if (rc)
+        fprintf(stderr, "error: %s\n", p->err);
+    printf("vp9: %u packets, %u superframes, %u frames decoded (%u key, %u intra-only, %u hidden), "
+           "%u shown again, %u size changes, %u scaled references, %u dropped (no reference)\n",
+           p->packets, p->superframes, p->decode_index, p->keyframes, p->intra_only, p->hidden, p->existing,
+           p->resized, p->scaled_refs, p->dropped);
+    printf("address check: %u frames with an address outside the buffers\n", d->addr_bad);
+    free(p);
+    return rc;
+}
+
+/* ----------------------------------------------------------------- AV1 */
+
+/* Surfaces for the largest frame, each with its co-located motion vectors
+ * and its CDF and segment map buffer behind the picture. */
+static int setup_surfaces_av1(Dec *d, unsigned width, unsigned height, unsigned bit_depth)
+{
+    unsigned i, bytes = (width * bit_depth + 7) / 8;
+    unsigned colmv = v383_av1_colmv_size(width, height), cdf = v383_av1_cdf_size(width, height), pic;
+
+    free_surfaces(d);
+    free_vp9(d);
+    d->width = width;
+    d->height = height;
+    d->bit_depth = bit_depth;
+    d->hor = d->stride_mpp ? mpp_stride(bytes) : align_up(bytes, 64);
+    d->ver = align_up(height, 64);
+    pic = align_up(d->hor * d->ver * 3 / 2, 4096);
+    d->colmv_off = pic;
+    d->surf_size = pic + colmv + cdf;
+    for (i = 0; i < AV1_MAX_SLOTS; i++) {
+        if (dev_alloc(d->surf_size, &d->surf[i])) {
+            fprintf(stderr, "surface alloc (%u bytes): %s\n", d->surf_size, dev_error());
+            return -1;
+        }
+        memset(d->surf[i].cpu, 0, d->surf_size);
+        d->as[i].dma = d->surf[i].dma;
+        d->as[i].colmv_dma = d->surf[i].dma + pic;
+        d->as[i].cdf_dma = d->surf[i].dma + pic + colmv;
+    }
+    if (dev_alloc(v383_av1_aux_size(width, height), &d->vp9aux)) {
+        fprintf(stderr, "buffer alloc: %s\n", dev_error());
+        return -1;
+    }
+    memset(d->vp9aux.cpu, 0, d->vp9aux.size);
+    printf("# AV1 up to %ux%u, %u bit, stride %u x %u, %u surfaces of %u bytes (colmv %u, cdf %u)\n",
+           width, height, bit_depth, d->hor, d->ver, AV1_MAX_SLOTS, d->surf_size, colmv, cdf);
+    return 0;
+}
+
+static unsigned check_av1_addrs(Dec *d, const V383_RegFile *rf, char *why, size_t why_len)
+{
+    unsigned r, i, bad = 0, last = 0;
+
+    for (r = 0; r < V383_NUM_REGS; r++) {
+        uint32_t a = rf->regs[r];
+        int ok, addr;
+
+        if (!(rf->write_mask[r / 32] & (1u << (r % 32))))
+            continue;
+        addr = (r >= 128 && r <= 134) || (r >= 140 && r <= 160 && !(r & 1)) || (r >= 168 && r <= 185) ||
+               r == 192 || (r >= 194 && r <= 210) || (r >= 216 && r <= 232);
+        if (!addr || !a)
+            continue;
+        ok = vp9_in_buf(&d->strm, a, 1) || vp9_in_buf(&d->rcb, a, 1) || vp9_in_buf(&d->vp9aux, a, 1);
+        for (i = 0; i < AV1_MAX_SLOTS && !ok; i++)
+            ok = vp9_in_buf(&d->surf[i], a, 1);
+        if (!ok && !bad++)
+            snprintf(why, why_len, "register %u = 0x%08x is in no buffer", r, a);
+    }
+    if (!vp9_in_buf(&d->strm, rf->regs[128], rf->regs[66]) && !bad++)
+        snprintf(why, why_len, "stream read 0x%08x + %u past the buffer", rf->regs[128], rf->regs[66]);
+    for (i = 0; i < 11; i++)
+        if (rf->regs[141 + 2 * i])
+            last = rf->regs[140 + 2 * i] + rf->regs[141 + 2 * i];
+    if (last && !vp9_in_buf(&d->rcb, d->rcb.dma, last - d->rcb.dma) && !bad++)
+        snprintf(why, why_len, "row buffers end at 0x%08x, past the buffer", last);
+    /* the CDF reads: default tables plus a segment map, or a surface's */
+    if (rf->regs[181] && !vp9_in_buf(&d->vp9aux, rf->regs[181], 1)) {
+        for (i = 0; i < AV1_MAX_SLOTS; i++)
+            if (vp9_in_buf(&d->surf[i], rf->regs[181], 1))
+                break;
+        if (i == AV1_MAX_SLOTS && !bad++)
+            snprintf(why, why_len, "segment map read 0x%08x in no buffer", rf->regs[181]);
+    }
+    return bad;
+}
+
+static int decode_cb_av1(void *ctx, const Av1Picture *pic)
+{
+    Dec *d = (Dec *)ctx;
+    const V383_DXVA_PicParams_AV1 *pp = &pic->pp;
+    V383_Av1Input bi;
+    V383_RegFile rf;
+    VDPU383_RUN_IN *in;
+    VDPU383_RUN_OUT out;
+    unsigned need, r, len, cur = pp->CurrPicTextureIndex, ft = V383_AV1_FRAME_TYPE(pp);
+    int rc;
+    double t0;
+    char hex[33], why[160];
+    static const char *types[4] = { "K", "P", "I", "S" };
+
+    if (d->dxva_only) {
+        unsigned tiles = 0, i;
+        for (i = 0; i < pic->num_tiles; i++)
+            tiles += pic->tiles[i].DataSize + 4;
+        need = v383_av1_stream_read_len(tiles + 16 + d->av1_synth_hdr) + 64;
+    } else {
+        need = v383_av1_stream_read_len((unsigned)pic->obu_len) + 64;
+    }
+    if (need > d->strm.size) {
+        dev_free(&d->strm);
+        if (dev_alloc(need > (4u << 20) ? need : (4u << 20), &d->strm)) {
+            fprintf(stderr, "stream alloc: %s\n", dev_error());
+            return -1;
+        }
+    }
+    memset(d->strm.cpu, 0, need);
+    if (d->dxva_only) {
+        len = v383_av1_synth_stream(pp, pic->tiles, pic->num_tiles, pic->tile_data, d->av1_synth,
+                                    d->av1_synth_hdr, d->strm.cpu, d->strm.size);
+        if (!len) {
+            fprintf(stderr, "frame %u: no room for the stream\n", pic->decode_index);
+            return -1;
+        }
+    } else {
+        memcpy(d->strm.cpu, pic->obu, pic->obu_len);
+        len = (unsigned)pic->obu_len;
+    }
+
+    memset(&bi, 0, sizeof(bi));
+    bi.pp = pp;
+    bi.extra = d->dxva_only ? NULL : &pic->extra;
+    bi.state = &d->av1;
+    bi.stream_dma = d->strm.dma;
+    bi.stream_len = len;
+    bi.tile_size_bytes = 4;
+    bi.frame_header_bits = d->av1_synth ? d->av1_synth_hdr * 8 : 0;
+    bi.aux_cpu = d->vp9aux.cpu;
+    bi.aux_dma = d->vp9aux.dma;
+    bi.surfaces = d->as;
+    bi.num_surfaces = AV1_MAX_SLOTS;
+    bi.hor_stride = d->hor;
+    bi.ver_stride = d->ver;
+    if (d->rcb.size < v383_av1_rcb_size(pp) + 4096) {
+        dev_free(&d->rcb);
+        if (dev_alloc(v383_av1_rcb_size(pp) + 4096, &d->rcb)) {
+            fprintf(stderr, "rcb alloc: %s\n", dev_error());
+            return -1;
+        }
+        memset(d->rcb.cpu, 0, d->rcb.size);
+    }
+    bi.rcb_dma = d->rcb.dma;
+
+    rc = v383_av1_build(&bi, &rf);
+    if (rc) {
+        fprintf(stderr, "frame %u: register builder failed (%d)\n", pic->decode_index, rc);
+        return -1;
+    }
+    if (check_av1_addrs(d, &rf, why, sizeof(why))) {
+        d->addr_bad++;
+        printf("    frame %u: %s\n", pic->decode_index, why);
+    }
+
+    in = (VDPU383_RUN_IN *)calloc(1, sizeof(*in));
+    if (!in)
+        return -1;
+    memcpy(in->regs, rf.regs, sizeof(in->regs));
+    memcpy(in->write_mask, rf.write_mask, sizeof(in->write_mask));
+    in->link_ip_timeout = d->link_vendor ? 0x7FFFFF : rf.core_timeout;
+    in->link_ip_enable = d->link_vendor ? 0x01000000 : 0;
+    in->timeout_ms = 2000;
+    in->flags = (d->readback ? VDPU383_RUN_READBACK : 0) | VDPU383_RUN_RESET_ON_ERROR;
+    if (d->print_regs) {
+        printf("# frame %u registers\n", pic->decode_index);
+        for (r = 0; r < V383_NUM_REGS; r++)
+            if (rf.write_mask[r / 32] & (1u << (r % 32)))
+                printf("reg %3u 0x%08x\n", r, rf.regs[r]);
+    }
+    t0 = now_ms();
+    if (dev_run(in, &out)) {
+        fprintf(stderr, "frame %u: %s\n", pic->decode_index, dev_error());
+        free(in);
+        return -1;
+    }
+    d->hw_ms += now_ms() - t0;
+    d->pictures++;
+
+    md5_hex(d->surf[cur].cpu, (size_t)d->hor * d->ver * 3 / 2, hex);
+    printf("pic %4u slot %2u %ux%u %s%s q %3u oh %3u prim %u refresh 0x%02x tiles %u %u bytes (header %u bits)  "
+           "%s irq 0x%08x status 0x%08x (",
+           pic->decode_index, cur, pp->width, pp->height, types[ft & 3], V383_AV1_SHOW_FRAME(pp) ? "" : " hidden",
+           pp->quantization.base_qindex, pp->order_hint, pp->primary_ref_frame, pic->refresh_frame_flags,
+           pic->num_tiles, len, pic->frame_header_bits, run_result_name(out.result), out.irq, out.status);
+    print_status_bits(out.status & 0xFFFF);
+    printf(") %u us\n", out.elapsed_us);
+    if (out.result != VDPU383_RUN_OK) {
+        d->hw_errors++;
+        if (out.result == VDPU383_RUN_BAD_ADDRESS)
+            printf("    rejected: register %u = 0x%08x is not in a buffer of this process\n",
+                   out.bad_reg, out.bad_reg < V383_NUM_REGS ? in->regs[out.bad_reg] : 0);
+        if (out.result == VDPU383_RUN_MMU_FAULT)
+            printf("    IOMMU fault at IO address 0x%08x\n", out.bad_reg);
+        printf("    mmu status 0x%08x/0x%08x rawstat 0x%08x/0x%08x reset_status 0x%08x\n",
+               out.mmu_status[0], out.mmu_status[1], out.mmu_int_rawstat[0], out.mmu_int_rawstat[1],
+               out.reset_status);
+    }
+    if (d->readback && d->print_regs) {
+        printf("# frame %u readback\n", pic->decode_index);
+        for (r = 0; r < V383_NUM_REGS; r++)
+            printf("rb %3u 0x%08x\n", r, out.regs[r]);
+    }
+    free(in);
+    return 0;
+}
+
+static int run_av1(Dec *d, const uint8_t *data, size_t len)
+{
+    Av1Parser *p = (Av1Parser *)calloc(1, sizeof(*p));
+    int rc;
+
+    if (!p)
+        return -1;
+    av1_init(p, NULL, NULL);
+    rc = av1_run(p, data, len, d->max_pictures, NULL, NULL);
+    if (rc) {
+        fprintf(stderr, "error: %s\n", p->err);
+        av1_free(p);
+        free(p);
+        return -1;
+    }
+    if (setup_surfaces_av1(d, p->max_width, p->max_height, p->max_bit_depth)) {
+        av1_free(p);
+        free(p);
+        return -1;
+    }
+    v383_av1_reset(&d->av1);
+    av1_init(p, output_cb_vp9, d);
+    rc = av1_run(p, data, len, d->max_pictures, decode_cb_av1, d);
+    if (rc)
+        fprintf(stderr, "error: %s\n", p->err);
+    printf("av1: %u temporal units, %u frames decoded (%u key, %u intra-only, %u switch, %u hidden), "
+           "%u shown again, %u lower layers not shown, %u superres, %u with film grain, %u with loop restoration, "
+           "%u scaled references, %u short ref signalling, up to %u tiles\n",
+           p->packets, p->decode_index, p->keyframes, p->intra_only, p->switch_frames, p->frames_hidden,
+           p->existing, p->dropped_layers, p->superres, p->grain_frames, p->lr_frames, p->scaled_refs,
+           p->short_signaling, p->tiles_max);
+    printf("address check: %u frames with an address outside the buffers\n", d->addr_bad);
+    av1_free(p);
+    free(p);
+    return rc;
+}
+
 static int cmd_decode(int argc, char **argv)
 {
     Dec d;
     H264Parser p;
     HevcParser *hp = NULL;
-    int codec = 0;              /* 0 by the stream, 1 H.264, 2 HEVC */
+    int codec = 0;              /* 0 by the stream, 1 H.264, 2 HEVC, 3 VP9, 4 AV1 */
     uint8_t *data;
     size_t len;
     const char *in_path = NULL;
@@ -855,9 +1484,16 @@ static int cmd_decode(int argc, char **argv)
         else if (!strcmp(argv[i], "--dxva-only")) d.dxva_only = 1;
         else if (!strcmp(argv[i], "--stride") && i + 1 < argc) d.stride_mpp = !strcmp(argv[++i], "mpp");
         else if (!strcmp(argv[i], "--link-vendor")) d.link_vendor = 1;
-        else if (!strcmp(argv[i], "--null")) ;
+        else if (!strcmp(argv[i], "--null") || !strcmp(argv[i], "--session")) ;
         else if (!strcmp(argv[i], "--hevc")) codec = 2;
         else if (!strcmp(argv[i], "--h264")) codec = 1;
+        else if (!strcmp(argv[i], "--av1-synth") && i + 1 < argc) {
+            d.av1_synth = (unsigned)atoi(argv[++i]);
+            d.av1_synth_hdr = d.av1_synth ? 16 : 0;
+        }
+        else if (!strcmp(argv[i], "--vp9-mpp-intra")) d.vp9_options |= V383_VP9_OPT_MPP_INTRA_RESET;
+        else if (!strcmp(argv[i], "--vp9-mpp-update")) d.vp9_options |= V383_VP9_OPT_MPP_UPDATE_BUF;
+        else if (!strcmp(argv[i], "--vp9-mpp")) d.vp9_options |= V383_VP9_OPT_MPP_INTRA_RESET | V383_VP9_OPT_MPP_UPDATE_BUF;
         else if (argv[i][0] != '-' && !in_path) in_path = argv[i];
         else {
             fprintf(stderr, "unknown option %s\n", argv[i]);
@@ -893,8 +1529,18 @@ static int cmd_decode(int argc, char **argv)
     }
     md5_init(&d.total);
     if (!codec)
-        codec = hevc_probe(data, len) ? 2 : 1;
-    if (codec == 2) {
+        codec = av1_probe(data, len) ? 4 : vp9_probe(data, len) ? 3 : hevc_probe(data, len) ? 2 : 1;
+    if (codec == 4) {
+        if (d.dump_dir)
+            fprintf(stderr, "--dump: H.264 only, ignored\n");
+        d.dump_dir = NULL;
+        rc = run_av1(&d, data, len);
+    } else if (codec == 3) {
+        if (d.dump_dir)
+            fprintf(stderr, "--dump: H.264 only, ignored\n");
+        d.dump_dir = NULL;
+        rc = run_vp9(&d, data, len);
+    } else if (codec == 2) {
         if (d.dump_dir)
             fprintf(stderr, "--dump: H.264 only, ignored\n");
         d.dump_dir = NULL;
@@ -919,7 +1565,14 @@ static int cmd_decode(int argc, char **argv)
     printf("pictures %u, frames out %u, hardware errors %u, %.1f ms in the decoder calls\n",
            d.pictures, d.out_count, d.hw_errors, d.hw_ms);
     printf("output md5 %s\n", hex);
-    if (d.ref) {
+    if (d.ref && codec >= 3) {
+        printf("reference: %s", (d.mismatches || d.ref_off != d.ref_len) ? "MISMATCH" : "MATCH");
+        if (d.mismatches)
+            printf(", %u frames differ, first at output frame %u", d.mismatches, d.first_mismatch);
+        else if (d.ref_off != d.ref_len)
+            printf(" (but the reference has %zu bytes more)", d.ref_len - d.ref_off);
+        printf("\n");
+    } else if (d.ref) {
         size_t fs = d.frame_size ? d.frame_size : 1;
         printf("reference: %zu frames; %s", d.ref_len / fs, d.mismatches ? "MISMATCH" : "MATCH");
         if (d.mismatches)
@@ -931,18 +1584,22 @@ static int cmd_decode(int argc, char **argv)
     if (hp) {
         hevc_free(hp);
         free(hp);
-    } else {
+    } else if (codec == 1) {
         h264_free(&p);
     }
     if (d.out)
         fclose(d.out);
     free_surfaces(&d);
+    free_vp9(&d);
     dev_free(&d.aux);
     dev_free(&d.strm);
     free(data);
     free(d.ref);
     free(d.frame);
-    return (rc || d.hw_errors || d.mismatches || d.rps_real_bad || d.rps_rebuilt_bad ||
+    if (dev_is_null() && g_session_mode)
+        printf("session check: %u decodes refused\n", dev_null_refused());
+    return (rc || d.hw_errors || d.mismatches || d.rps_real_bad || d.rps_rebuilt_bad || d.addr_bad ||
+            (d.ref && codec >= 3 && d.ref_off != d.ref_len) ||
             (d.dxva_only && d.rps_unsupported)) ? 2 : 0;
 }
 
@@ -1075,6 +1732,113 @@ out:
 
 /* ------------------------------------------------------------ selftest */
 
+/* an inter frame with most of the record's fields set */
+static void av1_kat_pp(V383_DXVA_PicParams_AV1 *pp, V383_Av1State *s)
+{
+    unsigned i, j;
+
+    memset(pp, 0, sizeof(*pp));
+    v383_av1_reset(s);
+    for (i = 0; i < 8; i++) {
+        V383_Av1SurfState *t = &s->surf[i];
+        t->valid = 1;
+        t->frame_type = (unsigned char)(i ? 1 : 0);
+        t->order_hint = (unsigned char)(10 + 3 * i);
+        for (j = 0; j < 7; j++)
+            t->ref_hints[j] = (unsigned char)(i + j);
+        t->width = t->upscaled_width = 1280;
+        t->height = 720;
+        t->cdf_valid = 1;
+        pp->RefFrameMapTextureIndex[i] = (unsigned char)i;
+    }
+    s->surf[5].width = 960;
+    s->frames = 9;
+    pp->width = 1280;
+    pp->height = 720;
+    pp->max_width = 1920;
+    pp->max_height = 1080;
+    pp->CurrPicTextureIndex = 8;
+    pp->superres_denom = 8;
+    pp->bitdepth = 8;
+    pp->tiles.cols = 4;
+    pp->tiles.rows = 2;
+    pp->tiles.context_update_id = 5;
+    for (i = 0; i < 4; i++)
+        pp->tiles.widths[i] = 5;
+    pp->tiles.heights[0] = 6;
+    pp->tiles.heights[1] = 6;
+    pp->CodingParamToolFlags = 0x7FFFFFFu & ~(1u << 12) & ~(1u << 21) & ~(1u << 11);
+    pp->FormatAndPictureInfoFlags = 1 | (1 << 2) | (1 << 4) | (1 << 5);
+    pp->primary_ref_frame = 2;
+    pp->order_hint = 30;
+    pp->order_hint_bits = 7;
+    for (i = 0; i < 7; i++) {
+        pp->frame_refs[i].Index = (unsigned char)((i * 3) % 8);
+        pp->frame_refs[i].width = 1280;
+        pp->frame_refs[i].height = 720;
+        for (j = 0; j < 6; j++)
+            pp->frame_refs[i].wmmat[j] = (j % 3 == 2) ? 1 << 16 : 0;
+    }
+    pp->frame_refs[0].GlobalMotionFlags = 2 << 1;                /* ROTZOOM */
+    pp->frame_refs[0].wmmat[2] = (1 << 16) + 2 * 2;
+    pp->frame_refs[0].wmmat[3] = -6;
+    pp->frame_refs[0].wmmat[4] = 6;
+    pp->frame_refs[0].wmmat[5] = (1 << 16) + 4;
+    pp->frame_refs[0].wmmat[0] = 64 * 1024;
+    pp->frame_refs[0].wmmat[1] = -3 * 1024;
+    pp->frame_refs[1].GlobalMotionFlags = 1 | (0 << 1);
+    pp->loop_filter.filter_level[0] = 20;
+    pp->loop_filter.filter_level[1] = 18;
+    pp->loop_filter.filter_level_u = 9;
+    pp->loop_filter.filter_level_v = 7;
+    pp->loop_filter.sharpness_level = 3;
+    pp->loop_filter.ControlFlags = 0xF;
+    pp->loop_filter.ref_deltas[0] = 1;
+    pp->loop_filter.ref_deltas[4] = -1;
+    pp->loop_filter.ref_deltas[6] = -1;
+    pp->loop_filter.ref_deltas[7] = -1;
+    pp->loop_filter.mode_deltas[1] = 2;
+    pp->loop_filter.delta_lf_res = 1;
+    pp->loop_filter.frame_restoration_type[0] = 3;
+    pp->loop_filter.frame_restoration_type[1] = 1;
+    pp->loop_filter.log2_restoration_unit_size[0] = 7;
+    pp->loop_filter.log2_restoration_unit_size[1] = 6;
+    pp->loop_filter.log2_restoration_unit_size[2] = 6;
+    pp->quantization.ControlFlags = 1 | (2 << 1);
+    pp->quantization.base_qindex = 120;
+    pp->quantization.y_dc_delta_q = -3;
+    pp->quantization.u_ac_delta_q = 2;
+    pp->quantization.qm_y = 5;
+    pp->quantization.qm_u = 6;
+    pp->quantization.qm_v = 6;
+    pp->cdef.ControlFlags = 2 | (2 << 2);
+    for (i = 0; i < 4; i++) {
+        pp->cdef.y_strengths[i] = (unsigned char)(i * 3 | ((i & 3) << 6));
+        pp->cdef.uv_strengths[i] = (unsigned char)(i | (1 << 6));
+    }
+    pp->interp_filter = 4;
+    pp->segmentation.ControlFlags = 1 | 2 | 4;
+    pp->segmentation.feature_mask[1] = 1 | 2 | 32;
+    pp->segmentation.feature_data[1][0] = -20;
+    pp->segmentation.feature_data[1][1] = 5;
+    pp->segmentation.feature_data[1][5] = 3;
+    pp->film_grain.ControlFlags = 1 | (1 << 1) | (2 << 4) | (1 << 10);
+    pp->film_grain.grain_seed = 0x1234;
+    pp->film_grain.num_y_points = 2;
+    pp->film_grain.scaling_points_y[0][0] = 10;
+    pp->film_grain.scaling_points_y[0][1] = 40;
+    pp->film_grain.scaling_points_y[1][0] = 200;
+    pp->film_grain.scaling_points_y[1][1] = 60;
+    for (i = 0; i < 12; i++)
+        pp->film_grain.ar_coeffs_y[i] = (unsigned char)(120 + i);
+    pp->film_grain.cb_offset = 256;
+}
+
+static unsigned ceil_div(unsigned a, unsigned b)
+{
+    return (a + b - 1) / b;
+}
+
 static int cmd_selftest(void)
 {
     static const uint8_t sl[] = { 0, 0, 0, 1, 0x65, 0x88, 0x84, 0x00 };  /* first_mb 0, I, pps 0 */
@@ -1127,8 +1891,281 @@ static int cmd_selftest(void)
         CHECK(total == expect);
         printf("rcb 1920x1088: %u bytes\n", total);
     }
+    /* VP9: the packers against MPP's output for the same input (MD5s of
+     * the bytes MPP's hal_vp9d_prob_default(), hal_vp9d_prob_kf() and
+     * vdpu38x_vp9d_uncomp_hdr() write, taken off-board) */
+    {
+        static unsigned char probs[V383_VP9_PROB_BYTES], kf[V383_VP9_KFPROB_BYTES], gbl[V383_VP9_GBL_BYTES];
+        V383_DXVA_PicParams_VP9 vp;
+        V383_Vp9State vs;
+        char hex[33];
+
+        typedef char vp9_pp_size_208[(sizeof(V383_DXVA_PicParams_VP9) == 208) ? 1 : -1];
+        typedef char vp9_seg_size_83[(sizeof(V383_DXVA_segmentation_VP9) == 83) ? 1 : -1];
+        (void)sizeof(vp9_pp_size_208);
+        (void)sizeof(vp9_seg_size_83);
+
+        v383_vp9_write_probs(&v383_vp9_default_probs, probs);
+        md5_hex(probs, sizeof(probs), hex);
+        CHECK(!strcmp(hex, "04f9835c8526b0735efd068f1262c3a0"));
+        v383_vp9_write_kf_probs(kf);
+        md5_hex(kf, sizeof(kf), hex);
+        CHECK(!strcmp(hex, "54ce69eba3fb07e02d00e60045c109c4"));
+
+        /* an inter frame with everything set: scaled references, switchable
+         * filter, deltas, segmentation, 4 x 2 tiles */
+        memset(&vp, 0, sizeof(vp));
+        v383_vp9_reset(&vs);
+        vp.wFormatAndPictureInfoFlags = (1 << V383_VP9_FLAG_FRAME_TYPE) | (1 << V383_VP9_FLAG_SHOW_FRAME) |
+                                        (1 << V383_VP9_FLAG_REFRESH_CTX);
+        vp.width = 1920;
+        vp.height = 1080;
+        vp.interp_filter = V383_VP9_SWITCHABLE;
+        for (i = 0; i < 8; i++) {
+            vp.ref_frame_map[i].bPicEntry = (unsigned char)i;
+            vp.ref_frame_coded_width[i] = 1280;
+            vp.ref_frame_coded_height[i] = 720;
+        }
+        vp.frame_refs[0].bPicEntry = 1;
+        vp.frame_refs[1].bPicEntry = 2;
+        vp.frame_refs[2].bPicEntry = 5;
+        vp.ref_frame_sign_bias[3] = 1;
+        vp.filter_level = 36;
+        vp.sharpness_level = 2;
+        vp.wControlInfoFlags = 3;
+        vp.ref_deltas[0] = 1;
+        vp.ref_deltas[2] = -1;
+        vp.ref_deltas[3] = -1;
+        vp.mode_deltas[1] = -3;
+        vp.base_qindex = 120;
+        vp.y_dc_delta_q = -2;
+        vp.uv_ac_delta_q = 3;
+        vp.stVP9Segments.wSegmentInfoFlags = 0xF;
+        for (i = 0; i < 7; i++)
+            vp.stVP9Segments.tree_probs[i] = (unsigned char)(10 + i);
+        for (i = 0; i < 3; i++)
+            vp.stVP9Segments.pred_probs[i] = (unsigned char)(200 + i);
+        vp.stVP9Segments.feature_mask[3] = 0xB;
+        vp.stVP9Segments.feature_data[3][0] = -40;
+        vp.stVP9Segments.feature_data[3][1] = 12;
+        vp.stVP9Segments.feature_data[3][2] = 2;
+        vp.log2_tile_cols = 2;
+        vp.log2_tile_rows = 1;
+        vp.first_partition_size = 777;
+        vs.last_width = 1920;
+        vs.last_height = 1080;
+        vs.last_show_frame = 1;
+        vs.last_frame_type = 1;
+        vs.last_ref_deltas[0] = 1;
+        vs.last_mode_deltas[0] = -1;
+        vs.last_seg_enabled = 1;
+        v383_vp9_write_gbl(&vp, &vs, gbl);
+        md5_hex(gbl, sizeof(gbl), hex);
+        CHECK(!strcmp(hex, "010f3e418d3ab15045316aeaef5395e3"));
+        printf("vp9 packers: default and key-frame tables and a global record as MPP writes them\n");
+
+        /* RCB sizes for 1920x1080 (aligned to 1920x1088), MPP's float formulas */
+        {
+            double w = 1920, h = 1088, fl = w * (1.6 * 10 + 0.5) * (17.5 + 8);
+            unsigned expect = 2 * RB(ceil_div(1920, 64) * 2368.0) + 2 * RB(((1920 * 24 + 511) / 512) * 512.0) +
+                              2 * RB(fl / 2 + 864 * 16 * 8) + RB(fl) + RB(h * 16.5 * (17.75 + 8));
+            CHECK(v383_vp9_rcb_size(1920, 1080) == expect);
+        }
+    }
+    /* AV1: the global record against MPP's vdpu38x_av1d_uncomp_hdr() for
+     * the same frame (MD5 taken off-board), the RCB sizes against MPP's
+     * float formulas, and the stream wrapper */
+    {
+        static unsigned char gbl[V383_AV1_GBL_BYTES], obu[64];
+        static const unsigned char tile_data[6] = { 1, 2, 3, 4, 5, 6 };
+        V383_DXVA_PicParams_AV1 ap;
+        V383_DXVA_Tile_AV1 t[2];
+        V383_Av1State as;
+        V383_Av1Hdr ah;
+        char hex[33];
+        unsigned n;
+
+        typedef char av1_pp_size_912[(sizeof(V383_DXVA_PicParams_AV1) == 912) ? 1 : -1];
+        typedef char av1_entry_size_36[(sizeof(V383_DXVA_PicEntry_AV1) == 36) ? 1 : -1];
+        typedef char av1_tile_size_16[(sizeof(V383_DXVA_Tile_AV1) == 16) ? 1 : -1];
+        (void)sizeof(av1_pp_size_912);
+        (void)sizeof(av1_entry_size_36);
+        (void)sizeof(av1_tile_size_16);
+
+        av1_kat_pp(&ap, &as);
+        v383_av1_derive(&ap, NULL, &as, &ah);
+        CHECK(ah.skip_ref0 == 3 && ah.skip_ref1 == 6 && ah.last_active == 1 && ah.preskip == 1);
+        v383_av1_write_gbl(&ah, gbl);
+        md5_hex(gbl, sizeof(gbl), hex);
+        CHECK(!strcmp(hex, "720bb65f84f66b1126b7940ab7bcfa88"));
+        {
+            double w = 1280, h = 768, row = w * 16.5 * (12.5 + 6 + 1.5), col = h * 16.5 * (14 + 7 + 26.5 + 6);
+            unsigned expect = RB(ceil_div(1280, 8) * 100.0) + 2 * RB(ceil_div(1280, 64) * 2752.0) +
+                              2 * RB(((1280 * 24 + 511) / 512) * 512.0) + 2 * RB(row / 2 + 864 * 16 * 8) + RB(row) +
+                              RB(col) + RB(ceil_div(720, 64) * 220.0);
+            CHECK(v383_av1_rcb_size(&ap) == expect);
+        }
+        memset(t, 0, sizeof(t));
+        t[0].DataSize = 4;
+        t[1].DataOffset = 4;
+        t[1].DataSize = 2;
+        n = v383_av1_synth_stream(&ap, t, 2, tile_data, 0, 0, obu, sizeof(obu));
+        CHECK(n == 13 && obu[0] == 0x22 && obu[1] == 11 && obu[2] == 0 && obu[3] == 3 && obu[7] == 1 && obu[12] == 6);
+        printf("av1: global record as MPP writes it, row buffers, OBU wrapper checked\n");
+    }
     printf("selftest: %s\n", fails ? "FAILED" : "passed");
     return fails ? 1 : 0;
+}
+
+/* ---------------------------------------------------------- sessions */
+
+/*
+ * The driver's session rules (vdpu383_check.h) on the null device: two
+ * sessions (two processes' display driver sessions), their buffers, an
+ * imported texture, revocation, closing. Each line names what it checks.
+ */
+static unsigned st_fails;
+#define ST_CHECK(c, what) do { int ok_ = (c); printf("sessiontest: %-62s %s\n", what, ok_ ? "ok" : "FAILED"); \
+                               if (!ok_) st_fails++; } while (0)
+
+static void st_set(VDPU383_RUN_IN *in, unsigned r, unsigned v)
+{
+    in->regs[r] = v;
+    in->write_mask[r / 32] |= 1u << (r % 32);
+}
+
+static unsigned st_run(const VDPU383_RUN_IN *in, unsigned *bad)
+{
+    VDPU383_RUN_OUT *out = (VDPU383_RUN_OUT *)calloc(1, sizeof(*out));
+    unsigned r;
+
+    if (!out || dev_run(in, out)) {
+        free(out);
+        return 0xFFFFFFFFu;
+    }
+    r = out->result;
+    *bad = out->bad_reg;
+    free(out);
+    return r;
+}
+
+static int cmd_sessiontest(void)
+{
+    VDPU383_RUN_IN *in = (VDPU383_RUN_IN *)calloc(1, sizeof(*in));
+    VDPU383_INFO info;
+    VDPU383_IMPORT_OUT imp, imp2;
+    DevBuf strm, aux, pic, other, stolen;
+    uint64_t tok, tok2, tokb;
+    unsigned bad = 0, r, in_sz, out_sz;
+    const VDPU383_RUN_IN *seen;
+
+    if (!in)
+        return 1;
+    dev_null_sessions(1);
+
+    /* which calls a session has, and their sizes */
+    ST_CHECK(v383_session_ioctl_ok(IOCTL_VDPU383_RUN) && v383_session_ioctl_ok(IOCTL_VDPU383_ALLOC) &&
+             v383_session_ioctl_ok(IOCTL_VDPU383_FREE) && v383_session_ioctl_ok(IOCTL_VDPU383_IMPORT) &&
+             v383_session_ioctl_ok(IOCTL_VDPU383_GET_INFO), "a session may run, allocate, free, import, ask");
+    ST_CHECK(!v383_session_ioctl_ok(IOCTL_VDPU383_WRITE_REGS) && !v383_session_ioctl_ok(IOCTL_VDPU383_READ_REGS) &&
+             !v383_session_ioctl_ok(IOCTL_VDPU383_WARMUP) && !v383_session_ioctl_ok(IOCTL_VDPU383_RESET) &&
+             !v383_session_ioctl_ok(0x83830000u), "no register access, warm-up, reset or unknown call");
+    ST_CHECK(v383_session_sizes(IOCTL_VDPU383_RUN, &in_sz, &out_sz) && in_sz == sizeof(VDPU383_RUN_IN) &&
+             out_sz == sizeof(VDPU383_RUN_OUT) && !v383_session_sizes(IOCTL_VDPU383_WRITE_REGS, &in_sz, &out_sz),
+             "the sizes of a session's calls");
+
+    /* session 1: a decode of its own buffers */
+    dev_null_select(1);
+    if (dev_alloc(64 << 10, &strm) || dev_alloc(64 << 10, &aux) || dev_alloc(256 << 10, &pic))
+        return 1;
+    st_set(in, 8, 0x1);                 /* a mode register, not an address */
+    st_set(in, 66, 1000);
+    st_set(in, 128, strm.dma);
+    st_set(in, 131, aux.dma + 0x100);
+    st_set(in, 168, pic.dma);
+    st_set(in, 216, pic.dma + (192 << 10));
+    in->flags = VDPU383_RUN_RESET_ON_ERROR;
+    in->timeout_ms = 2000;
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_OK, "session 1 decodes into its own buffers");
+
+    /* an address just past its picture buffer */
+    st_set(in, 168, pic.dma + pic.size);
+    r = st_run(in, &bad);
+    ST_CHECK(r == VDPU383_RUN_BAD_ADDRESS && bad == 168, "an address outside its buffers is refused (register 168)");
+    in->flags |= VDPU383_RUN_NO_ADDR_CHECK;
+    r = st_run(in, &bad);
+    ST_CHECK(r == VDPU383_RUN_BAD_ADDRESS && bad == 168, "and is refused with VDPU383_RUN_NO_ADDR_CHECK too");
+    st_set(in, 168, pic.dma);
+
+    /* what the driver makes of a session's run flags */
+    in->flags = VDPU383_RUN_NO_ADDR_CHECK | VDPU383_RUN_READBACK | VDPU383_RUN_RESET_ON_ERROR;
+    in->timeout_ms = 600000;
+    in->link_ip_enable = 0x01000000;
+    r = st_run(in, &bad);
+    seen = dev_null_last_run();
+    ST_CHECK(r == VDPU383_RUN_OK && seen->flags == VDPU383_RUN_RESET_ON_ERROR &&
+             seen->timeout_ms == V383_SESSION_TIMEOUT_MS && seen->link_ip_enable == 0,
+             "no read-back, no skipped check, a bounded wait, link enable 0");
+    in->flags = VDPU383_RUN_RESET_ON_ERROR;
+    in->timeout_ms = 0;
+    in->link_ip_enable = 0;
+    (void)st_run(in, &bad);
+    ST_CHECK(dev_null_last_run()->timeout_ms == V383_SESSION_TIMEOUT_MS, "timeout 0 becomes the session bound");
+
+    /* session 2 (another process) names session 1's buffers */
+    dev_null_select(2);
+    if (dev_alloc(64 << 10, &other))
+        return 1;
+    r = st_run(in, &bad);
+    ST_CHECK(r == VDPU383_RUN_BAD_ADDRESS && bad == 128, "another session's buffers are refused");
+    stolen = pic;
+    dev_free(&stolen);
+    dev_null_select(1);
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_OK, "another session cannot free them");
+
+    /* an imported texture of session 1's process */
+    tok = dev_null_export(1, 64);
+    tokb = dev_null_export(2, 64);
+    dev_null_select(2);
+    ST_CHECK(dev_import(tok, 64, 0, &imp) != 0, "another process's export token is refused");
+    dev_null_select(1);
+    ST_CHECK(dev_import(tokb, 64, 0, &imp) != 0, "and the other way round");
+    ST_CHECK(dev_import(tok, 64, 0, &imp) == 0 && imp.handle, "session 1 imports its own texture");
+    st_set(in, 168, imp.dma);
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_OK, "and decodes into it");
+    ST_CHECK(dev_import(tok, 64, 0, &imp2) != 0, "a second import of the same export is refused");
+    dev_null_select(2);
+    r = st_run(in, &bad);
+    ST_CHECK(r == VDPU383_RUN_BAD_ADDRESS, "session 2 cannot decode into it");
+    dev_null_select(1);
+
+    /* the display driver takes the pages back (eviction, destruction) */
+    dev_null_revoke(tok);
+    r = st_run(in, &bad);
+    ST_CHECK(r == VDPU383_RUN_REVOKED && bad == 168, "after revocation a decode naming it is refused (revoked)");
+    ST_CHECK(dev_import(tok, 64, imp.handle, &imp2) != 0, "the old token is gone");
+    tok2 = dev_null_export(1, 64);
+    ST_CHECK(dev_import(tok2, 64, imp.handle, &imp2) == 0 && imp2.dma == imp.dma, "a new export refreshes it in place");
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_OK, "and the decode runs again");
+
+    /* session 1's process exits: its session closes */
+    dev_null_close(1);
+    dev_null_select(2);
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_BAD_ADDRESS, "a closed session's buffers stay refused to others");
+    dev_null_select(3);
+    ST_CHECK(st_run(in, &bad) == VDPU383_RUN_BAD_ADDRESS, "and to a new session");
+
+    /* what a session is told */
+    memset(&info, 0x5a, sizeof(info));
+    v383_session_scrub_info(&info);
+    ST_CHECK(info.iommu_dt_dma == 0 && info.mmu_dte[0] == 0 && info.mmu_dte[1] == 0 && info.sram_dma == 0 &&
+             info.link[0] == 0 && info.link[23] == 0 && info.warmup.buffer_dma == 0 &&
+             info.mmu_last_fault_addr[0] == 0 && info.runs == 0x5a5a5a5au,
+             "no physical addresses or registers in GET_INFO, counters kept");
+
+    free(in);
+    printf("sessiontest: %s (%u refused decodes counted)\n", st_fails ? "FAILED" : "passed", dev_null_refused());
+    return st_fails ? 1 : 0;
 }
 
 /* ---------------------------------------------------------------- main */
@@ -1138,8 +2175,9 @@ static void usage(void)
     printf("usage: vdpu383test [--null] info | warmup | warmup-direct | regs [off] [count] | reset |\n"
            "                   decode IN.264 [-o out.yuv] [--ref ref.yuv] [-n N] [--frame-md5]\n"
            "                          [--dump DIR] [--readback] [--regs] [--dxva-only]\n"
-           "                          [--stride mpp] [--link-vendor] |\n"
-           "                   replay DIR/replay.txt | selftest\n");
+           "                          [--stride mpp] [--link-vendor] [--vp9-mpp[-intra|-update]] [--av1-synth 0|1] |\n"
+           "                   replay DIR/replay.txt | selftest | --null sessiontest\n"
+           "       --session (with --null): decode as a session of the driver\n");
 }
 
 int main(int argc, char **argv)
@@ -1151,6 +2189,8 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--null"))
             null_dev = 1;
+        else if (!strcmp(argv[i], "--session"))
+            g_session_mode = 1;
         else if (!cmd) {
             cmd = argv[i];
             first = i + 1;
@@ -1166,7 +2206,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "%s\n", dev_error());
         return 1;
     }
-    if (!strcmp(cmd, "info"))
+    if (null_dev && g_session_mode)
+        dev_null_sessions(1);
+    if (!strcmp(cmd, "sessiontest"))
+        rc = null_dev ? cmd_sessiontest() : 1;
+    else if (!strcmp(cmd, "info"))
         rc = cmd_info();
     else if (!strcmp(cmd, "warmup"))
         rc = cmd_warmup();

@@ -2,16 +2,14 @@
 
 [English](wireless.md) | 简体中文
 
-2026-11-24 的状态：
+| | 泰山派 3M | CM5-IO |
+|---|---|---|
+| 蓝牙 | 板测，用 [bcm4345bt](../../drivers/bluetooth/bcm4345bt)：能配对、传文件，没有语音（SCO） | 仅 CI（bcm4345bt，`RKCP4362`） |
+| Wi-Fi | SDIO 控制器（dwcmshc）和 [bcmwlsdio](../../drivers/net/bcmwlsdio) W3 于 2026-11-26 板测：固件能运行，还没有网络接口（[wifi.md](wifi.md)） | 仅 CI（bcmwlsdio BCM43752） |
 
-- 泰山派 3M 上的蓝牙用 [bcm4345bt](../../drivers/bluetooth/bcm4345bt) 可用（2026-11-22 起）：能配对和传文件，
-  没有语音（SCO）。这个驱动自己驱动 UART6，不另外用 SerCx2 UART 驱动，并把 HCI 链路交给系统自带的 BthMini；具体做法见它的 README。
-- CM5-IO 上的蓝牙：没写。它的模块是另一颗芯片，接在 UART4 上。
-- Wi-Fi：两块板子都不能用，也没有做任何东西。下面的评估仍然成立。
-- ROCK 4D（USB 接口的 AIC8800D80，另一颗芯片）：分支 `aic8800-usb` 上有一个 bring-up 驱动，还没在板子上试过；见 [aic8800.zh-CN.md](aic8800.zh-CN.md)。它的 WiFiCx 模式（Windows 自己的 Wi-Fi）在分支 `aic8800-wificx` 上；见 [wificx.zh-CN.md](wificx.zh-CN.md)。
+ROCK 4D：USB 上的 AIC8800D80 Wi-Fi 和蓝牙，`main` 上没有驱动。`aic8800-usb` 分支上有一个驱动，还没在板上试过（[aic8800.zh-CN.md](aic8800.zh-CN.md)）。它的 WiFiCx 模式（Windows 自己的 Wi-Fi）在分支 `aic8800-wificx` 上；见 [wificx.md](wificx.md)。
 
-2026-11-21 写的评估原文（当时蓝牙还不能用）在
-[history](../history/2026-11-21-wireless-assessment.md)；其中的蓝牙方案（SerCx2 驱动加 cywbtserialbus）最后没有采用。
+bcm4345bt 自己驱动 UART，不另外用 SerCx2 UART 驱动，并把 HCI 链路交给系统自带的 BthMini；具体做法见它的 README。最初的评估见 [history](../history/2026-11-21-wireless-assessment.md)。
 
 ## 硬件
 
@@ -28,7 +26,7 @@
 LPO 时钟。对泰山派 3M 上的蓝牙，固件声明了 `\_SB.BTH0`（`RKCP4345`），带 UART6、BT_REG_ON 和 BT_WAKE，配置了
 UART 引脚复用并设置了它的时钟。
 
-## Wi-Fi：在合理的工作量内做不了
+## Wi-Fi：写一个驱动要做什么
 
 - 这些芯片在 ARM64 上没有任何 Windows 驱动。worproject 的 Raspberry Pi 驱动表把 Pi 3B+/4 的 CYW43455（同一系列）
   列为没有驱动。Windows 10 IoT Core 曾为 Pi 3 提供一个闭源、只有 ARM32 的 Broadcom SDIO 驱动；它在 ARM64 上加载不了。
@@ -43,5 +41,4 @@ UART 引脚复用并设置了它的时钟。
 
 粗略工作量：在一颗芯片上做到扫描、WPA2 连接和漫游要 6 到 9 人月，之后 WPA3、电源管理和加固再要 1 到 2 人月；第二颗芯片还要再单独做一遍适配。
 
-建议：不要开始做。用以太网，它在两块板子上都可用。USB Wi-Fi 网卡只有在它的确切硬件 ID 有 Windows ARM64 驱动时才算办法
-（Microsoft Update Catalog 里按 ARM64 筛选，或 23H2 映像自带的 `net*.inf`）；这次评估中没有确认任何一款。
+在那之前用以太网。USB Wi-Fi 网卡只有在它的确切硬件 ID 有 Windows ARM64 驱动时才能用（Microsoft Update Catalog 里按 ARM64 筛选，或 23H2 映像自带的 `net*.inf`）；目前没有确认任何一款。

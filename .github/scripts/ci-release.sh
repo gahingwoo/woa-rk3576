@@ -5,8 +5,9 @@
 #
 #   ci-release.sh <owned-names-regex> <file>...
 #
-# Two workflows write to this release: winpe.yml (the WinPE image) and
-# ci.yml (the RK3576 tools bundle). Each passes a regular expression for
+# Three workflows write to this release: winpe.yml (the WinPE image),
+# ci.yml (the RK3576 tools bundle) and drivers.yml (the driver package
+# rk3576-drivers-arm64.zip). Each passes a regular expression for
 # the asset names it owns. Assets the caller does not own, and their lines
 # in SHA256SUMS.txt, are kept.
 #
@@ -62,8 +63,10 @@ cat "$work/SHA256SUMS.txt"
 
 cat > "$work/notes.md" <<EOF
 The latest successful builds of main: the WinPE image (its file name
-carries the commit it was built from) and the RK3576 tools bundle
-rk3576-tools-arm64.zip (its RK3576\\VERSION.txt names its commit).
+carries the commit it was built from), the RK3576 tools bundle
+rk3576-tools-arm64.zip (its RK3576\\VERSION.txt names its commit) and the
+RK3576 Windows driver package rk3576-drivers-arm64.zip (its
+rk3576-drivers\\manifest.json names the builds its drivers come from).
 Last updated from ${sha} on ${date} by the ${GITHUB_WORKFLOW:-CI} workflow.
 
 Untested: nothing here has been run on a board. Every successful build of

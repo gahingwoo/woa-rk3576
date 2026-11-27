@@ -1,0 +1,74 @@
+;
+; rk3xsaradc.inf - RK3576 SARADC (ADC keys, headphone jack on an ADC input)
+;
+; Target: Windows on ARM64. Binds ACPI\RKCP0ADC, the SARADC at 0x2AE00000
+; that edk2-rk3576 declares as \_SB.ADC0 with what each board wires to it in
+; _DSD. The driver reads the converter's own registers only (never the CRU);
+; vhf.sys, the in-box Virtual HID Framework, is its lower filter and
+; enumerates the HID buttons child when the firmware describes keys.
+;
+; A firmware without \_SB.ADC0 publishes nothing for this INF to bind, so
+; installing it there changes nothing.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = HIDClass
+ClassGuid   = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = rk3xsaradc.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+rk3xsaradc.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%RKADC.DeviceDesc% = RKADC_Inst,ACPI\RKCP0ADC
+
+[RKADC_Inst.NT]
+CopyFiles = RKADC_CopyFiles
+
+[RKADC_CopyFiles]
+rk3xsaradc.sys
+
+[RKADC_Inst.NT.HW]
+AddReg = RKADC_Inst.NT.HW.AddReg
+
+[RKADC_Inst.NT.HW.AddReg]
+; vhf.sys under this driver, as the VHF documentation requires.
+HKR,,"LowerFilters",0x00010000,"vhf"
+
+[RKADC_Inst.NT.Services]
+AddService = rk3xsaradc,0x00000002,RKADC_Service
+
+[RKADC_Service]
+DisplayName   = %RKADC.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\rk3xsaradc.sys
+
+[RKADC_Inst.NT.Wdf]
+KmdfService = rk3xsaradc, RKADC_wdfsect
+
+[RKADC_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName       = "woa-rk3576"
+DiskName           = "RK3576 SARADC Installation Disk"
+RKADC.DeviceDesc   = "Rockchip RK3576 SARADC (ADC keys and jack detect)"
+RKADC.SvcDesc      = "Rockchip RK3576 SARADC Driver"

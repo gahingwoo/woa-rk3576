@@ -5,13 +5,14 @@
 板上 Ampak AP6256 模块的蓝牙部分（接在 UART6 上的 Broadcom BCM4345C5），给 Windows 蓝牙协议栈使用。
 这是一个 KMDF 总线驱动：它自己驱动 UART，给控制器上电，加载 patchram，再把 HCI 链路交给系统自带的 BthMini。
 
-**在泰山派 3M 上可用**（2026 年 11 月 22 日，Windows 11 23H2）：Bluetooth Radio、BR/EDR 和 LE 枚举器以及 RFCOMM
-都能启动，配对和文件传输可用。还没有语音（SCO），也没有空闲省电。
+| 板子 | 状态 |
+|---|---|
+| 泰山派 3M（`RKCP4345`） | 已在 Windows 11 23H2 上板测试：配对和文件传输可用；没有语音（SCO），没有空闲省电 |
+| CM5-IO（`RKCP4362`） | 仅 CI |
 
 ## 绑定的设备
 
-`ACPI\RKCP4345`，由泰山派 3M 固件（比 0.4.1 新的 edk2-rk3576，2026-11-22 合并；下一个正式版发布前请用它的 `ci` 构建）
-声明为 `\_SB.BTH0`，资源依次是：
+`ACPI\RKCP4345`，由泰山派 3M 固件（比 0.4.1 新的 edk2-rk3576）声明为 `\_SB.BTH0`，资源依次是：
 
 - `Memory32Fixed (0x2ad90000, 0x100)`：UART6 的寄存器；
 - `Interrupt { 114 }`：UART6，高电平触发；
@@ -20,6 +21,17 @@
 
 所以它依赖 [rk3xgpio](../../gpio/rk3xgpio)。固件负责 UART6 引脚（GPIO2 PD2 到 PD5）的复用，并把 UART 时钟设为 24 MHz；
 旧固件里根本没有 `RKCP4345` 这个设备。
+
+### CM5-IO：`ACPI\RKCP4362`
+
+ArmSoM CM5 模组上的 BW3752-50B1 是一颗 BCM43752，Linux 的 btbcm 把它的蓝牙内核叫作 BCM4362A2。
+CM5-IO 的固件把它声明为 `\_SB.BTH0`，HID 为
+`RKCP4362`，四项资源和顺序都一样：UART4（`0x2ad70000`，`Interrupt { 112 }`）、BT_REG_ON 为
+GPIO1 PC7、BT_WAKE 为 GPIO1 PD4，和泰山派 3M 用的 GPIO 相同（ArmSoM-CM5-1V1 原理图第 17 页）。
+固件把 UART4 M1（GPIO1 PC2 到 PC5）切好复用，时钟设为 24 MHz。INF 把它绑到同一个驱动，
+`FirmwarePath` 设为 `BCM4362A2.hcd`；用 `install-firmware.ps1 -Chip 4362a2` 安装这个文件
+（80602 字节，armbian/firmware `db8cc456`，Ampak 的版本，没有给出许可）。还没在板子上试过：
+切到 1500000 波特率，以及这块模组有没有自己的蓝牙地址（驱动只替换 BCM4345C5 的占位地址）。
 
 ## 工作方式
 
@@ -42,7 +54,7 @@ ACPI\RKCP4345          bcm4345bt.sys  (this driver, class System)
 - **没有语音，但声明了 HCI bypass。** `ScoSupport` 设为 `ScoSupportHCIBypass`，带一个 SCO 通道。系统自带的 BthMini（22621）
   只接受这一种：在 `IOCTL_BTHX_QUERY_CAPABILITIES` 之后，除非 `MaxAclTransferInSize` >= 0x103、`ScoSupport` == 2 且
   `MaxScoChannels` == 1，否则它启动失败，返回 `STATUS_DEVICE_CONFIGURATION_ERROR`（0xC0000182，`BCM4345BT\UART_H4` 上显示代码 10）
-  （这是从 BthMini.sys 里读出来的；第一次在板子上跑时用的是 `ScoSupportNone`，正好碰到这个错误）。bypass 的意思是 SCO 音频
+  （这是从 BthMini.sys 里读出来的）。bypass 的意思是 SCO 音频
   应该走模块的 PCM 引脚（这块板子上是 SAI2），而这条路径没有音频驱动：数据类协议（A2DP 播放、HID、文件传输）可用，
   通话和耳机麦克风不能用。
 - **不休眠。** 驱动处于 D0 时控制器一直上电（`IsDeviceIdleCapable` 为 FALSE）。没有使用 HOST_WAKE。
@@ -70,9 +82,8 @@ ACPI\RKCP4345          bcm4345bt.sys  (this driver, class System)
 2. 以管理员身份运行 `powershell -ExecutionPolicy Bypass -File install-firmware.ps1`。
 3. 信任驱动包里的 `signer.cer`（Root 和 TrustedPublisher，和其他驱动一样，见 [INSTALL](../../../docs/INSTALL.zh-CN.md)）。
    签名好的驱动包是 WinPE workflow 的 `bcm4345bt-signed-arm64` 构建产物。
-4. 首次安装（设备还没有驱动时）：`pnputil /add-driver bcm4345bt.inf /install`。要替换已经装好的版本，先用
-   `pnputil /add-driver bcm4345bt.inf`（不加 `/install`）暂存，再重启：在运行中的系统上停掉旧版本的本驱动，
-   有两次都以 DPC_WATCHDOG_VIOLATION 告终。
+4. 不论首次安装还是替换已经装好的版本，都用 `pnputil /add-driver bcm4345bt.inf`（不加 `/install`）暂存，
+   再重启：在运行中的系统上停掉本驱动曾导致 DPC_WATCHDOG_VIOLATION。
 
 ## 查看发生了什么
 

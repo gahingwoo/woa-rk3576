@@ -1,0 +1,37 @@
+# av1-conformance.txt - AV1 Main streams for vdpu383test: FFmpeg's fate-suite
+# av1-test-vectors/ and av1/ (IVF; the two .obu files there are left out:
+# Annex B, and 4:4:4), and eight made here 2026-11-25 with FFmpeg 6.1.1's
+# libaom-av1 and libsvtav1 from testsrc2 (gen-*: segmentation with feature
+# data, delta q, 10 bit, 4 x 2 tiles at 720p, loop restoration with
+# quantizer matrices, sb64, SVT-AV1 film grain).
+# References: FFmpeg 6.1.1 with libdav1d, every frame at its own size
+# (-autoscale 0), yuv420p or yuv420p10le; libaom gives the same MD5 where
+# checked. MD5 is dav1d's output with film grain applied, MD5-NOGRAIN
+# without it (-export_side_data film_grain); equal for streams without
+# grain. The decoder's grain is not known to be bit-exact with dav1d's.
+#
+# NAME FRAMES MD5 MD5-NOGRAIN WxH PIXFMT
+av1-1-b10-23-film_grain-50 10 be596f5921854b9a9a5be81c302a5327 5bdd8c25c73321c741e167b1365cf811 352x288 yuv420p10le
+av1-1-b8-02-allintra 39 4f00f5a1a173a99c1bf0406dea809182 4f00f5a1a173a99c1bf0406dea809182 352x288 yuv420p
+av1-1-b8-03-sizedown 20 075252f55c207f437c412e0f45eb7b84 075252f55c207f437c412e0f45eb7b84 1280x720 yuv420p
+av1-1-b8-03-sizeup 20 9fc474a2842a5632757e4e0cb7492ad4 9fc474a2842a5632757e4e0cb7492ad4 352x288 yuv420p
+av1-1-b8-04-cdfupdate 2 4e8baa992bc9af05f78c38a54dbab132 4e8baa992bc9af05f78c38a54dbab132 352x288 yuv420p
+av1-1-b8-05-mv 4 c2d7f9d19297ce835c9023a6533330b4 c2d7f9d19297ce835c9023a6533330b4 352x288 yuv420p
+av1-1-b8-06-mfmv 4 a61843f9d9d5ed0bd8100044b34d6169 a61843f9d9d5ed0bd8100044b34d6169 352x288 yuv420p
+av1-1-b8-22-svc-L1T2 8 3987b4852874d3fba06999ee9b4d117c 3987b4852874d3fba06999ee9b4d117c 640x360 yuv420p
+av1-1-b8-22-svc-L2T1 8 f8305c4b796b620388fee614df3ebac6 f8305c4b796b620388fee614df3ebac6 1280x720 yuv420p
+av1-1-b8-22-svc-L2T2 8 4d86bc8f55bae0ac0e688fb7fa2fe741 4d86bc8f55bae0ac0e688fb7fa2fe741 1280x720 yuv420p
+av1-1-b8-23-film_grain-50 10 392a4adc567fa05b210eebe15bcbb491 858a70f071c0d5ecda1f7407a192e5b2 352x288 yuv420p
+decode_model 24 8566478b3b017c838bb38414309a956a 8566478b3b017c838bb38414309a956a 240x100 yuv420p
+film_grain 10 26200d3d72f97956f24d7f505c71e861 90b309e1e722586cc5637fdf5cc848f7 320x240 yuv420p10le
+frames_refs_short_signaling 50 11e09f68996af8b5566a08be68a2caa7 11e09f68996af8b5566a08be68a2caa7 640x360 yuv420p
+gen-10bit 12 bfc0ee84eb3da44eab2b06a78660192d bfc0ee84eb3da44eab2b06a78660192d 352x288 yuv420p10le
+gen-aq-seg 12 ac66b0cf613fbaf30ab15b5b2f51042e ac66b0cf613fbaf30ab15b5b2f51042e 352x288 yuv420p
+gen-cyclic-deltaq 12 76acc49ffe8d26b4b02423baadffd57b 76acc49ffe8d26b4b02423baadffd57b 352x288 yuv420p
+gen-errres-sb64 12 2a5042db490ba139c495c5a24b70b575 2a5042db490ba139c495c5a24b70b575 352x288 yuv420p
+gen-lr-qm 12 9dddd4b9dccd3c25d534af72b172b5bf 9dddd4b9dccd3c25d534af72b172b5bf 352x288 yuv420p
+gen-svt-grain 12 4877f0ef813754144a4916d980ecfaed d83c8c5d32ed9ce5b54e1e6cfe71a7fe 352x288 yuv420p
+gen-tiles-720p 6 2411a48ca84037dd03a6875f23f3a54a 2411a48ca84037dd03a6875f23f3a54a 1280x720 yuv420p
+non_uniform_tiling 24 43d8ce1effb7fc38d3503d3d0f515dcb 43d8ce1effb7fc38d3503d3d0f515dcb 720x300 yuv420p
+seq_hdr_op_param_info 64 2ff74754025320e6894e389032f029c1 2ff74754025320e6894e389032f029c1 320x176 yuv420p
+switch_frame 32 2caef06aa243e1dbaf4bddd15e01480f 2caef06aa243e1dbaf4bddd15e01480f 852x480 yuv420p

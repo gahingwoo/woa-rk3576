@@ -47,14 +47,13 @@ sudo ./regress.sh [--board auto|tspi3m|cm5io|rock4d] [--quick] [--out DIR]
 | `-ToolsDir DIR` | `rknputest.exe` 和 `vdpu383test.exe` 所在目录；还会查找脚本旁的 `bin\`、`%ProgramFiles%\RK3576`、`%ProgramFiles%\RK3576\npu`（RK3576 工具包）和 `PATH` |
 | `-User NAME` | 会话类检查使用的桌面用户（默认：当前已登录用户） |
 | `-ExpectFirmware REGEX` | 额外要求固件版本字符串匹配，例如某个发布标签 |
-| `-Require nvme,sd,...` | 本次运行把可选部件当作必需：`nvme`、`sd`、`emmc`、`wifi`、`bluetooth`、`npu`、`vdec`、`analog`、`hdmiaudio` |
+| `-Require nvme,sd,...` | 本次运行把可选部件当作必需：`nvme`、`sd`、`emmc`、`wifi`、`bluetooth`、`npu`、`vdec`、`analog`、`hdmiaudio`，以及 `jack`（耳机端点必须处于活动状态：耳机孔要插着东西） |
 | `-FetchStreams` | 在板子上直接下载缺少的解码码流 |
 | `-DryRun -Mock FILE` | 用记录好的数据评估各项检查（见“测试”） |
 
 ## 检查项
 
-每项检查都受 [`boards/`](boards) 里板子清单的约束。清单根据固件的各板功能清单编写（edk2-rk3576 分支 `rock4d-parity`
-上的 `docs/BOARD-FEATURES.md`，`cm5io-parity` 上的 `docs/boards/cm5io.md`）。清单中的值为 `true`（必须存在：缺失即
+每项检查都受 [`boards/`](boards) 里板子清单的约束。清单根据固件的各板功能清单编写。清单中的值为 `true`（必须存在：缺失即
 FAIL）、`"optional"`（缺失为 SKIP，用于不一定装配或不一定开启的部件）或 `false`（N-A）。板子有变化时请修改清单。
 
 ### Windows（regress.ps1）
@@ -72,13 +71,13 @@ FAIL）、`"optional"`（缺失为 SKIP，用于不一定装配或不一定开�
 | `gpu.temp` | `\RK3576 GPU(*)\Temperature (C)` 在 10 到 90 C 之间 | |
 | `display.mode` | 在用户会话中（`EnumDisplaySettings`）：当前模式是 59 或 60 Hz 下可选的最大模式，且运行在 59 或 60 Hz | |
 | `display.tdr` | 运行开始后系统日志中没有 Display 事件 4101（驱动重置）；最后评估 | |
-| `audio.hdmi`、`audio.analog` | 有名称含 HDMI / Headphone 且状态 OK 的音频端点。HDMI 端点需要接带扬声器的显示器 | csaudiork3x 的端点名称 |
+| `audio.hdmi`、`audio.analog` | 通过 MMDevice API 读取所有状态的端点（失败时退回 PnP 的在位端点）。HDMI：清单 `hdmiSai`（`ACPI\RKCP3004\6`）上 csaudiork3x 设备的活动播放端点，按 KS 筛选器（`topologyhdmi`）或名称（`HDMI` 或 `Digital Output`）识别；需要接带扬声器的显示器。模拟音频，在有 `analogCodec` 的板子上：编解码器（`ACPI\RKCP8388`）和 `analogSai` 上的 csaudiork3x 设备已启动；耳机孔空着时耳机端点不出现，所以只作提示，除非 `-Require jack`。没有 `analogCodec` 时：要有活动的耳机端点 | 清单的 `audio.*Endpoint`、`hdmiSai`、`analogSai`、`analogCodec` |
 | `net.ethernet`、`net.gateway` | `ACPI\RKCP6543` 上的网卡为 Up 且有 IPv4 地址；默认网关能 ping 通 | |
 | `net.wifi`、`net.bluetooth` | 一个 802.11 网卡（仅泰山派 3M，可选：驱动还在分支上）；蓝牙芯片本身的设备正常且有一个蓝牙设备正常。芯片设备默认是 `ACPI\RKCP4345`，清单里 `network.bluetoothDevice` 可以指定别的（ROCK 4D：`USB\VID_A69C&PID_8D81&MI_00`，AIC8800D80 的 HCI 接口，由系统自带的 BthUsb 驱动） | |
 | `usb.controllers`、`usb.devices` | 至少两个 `ACPI\PNP0D10` xHCI 控制器正常；列出 USB 设备，CM5-IO 上必须有板载 Hub | |
 | `storage.emmc`、`storage.sd`、`storage.nvme` | `ACPI\RKCP0D40`（eMMC）、`ACPI\RKCPFE2C`（SD）下的磁盘，PCIe 上的磁盘（NVMe）；状态 Healthy | |
 | `storage.rw` | 以直写方式向系统盘写入 64 MiB（`-Quick` 时 16 MiB），读回，比较 SHA-256，删除 | Maskrom Studio 的自检 |
-| `npu.info`、`npu.m3` | 当 `ACPI\RKCP3576` 存在时（设置里开启了 NPU）：绑定到 `rknpu`，`rknputest info` 退出码 0，`rknputest m3 --core both --iters 1` 退出码 0（逐位一致） | woa-rk3576-npu 的 `tools/rknputest` |
+| `npu.info`、`npu.m3` | 当 `ACPI\RKCP3576` 存在时（设置里开启了 NPU）：绑定到 `rknpu`，`rknputest info` 退出码 0 且报告清单 `npuCores` 个核心（2），`rknputest m3 --core both --iters 1` 退出码 0（逐位一致） | woa-rk3576-npu 的 `tools/rknputest` |
 | `vdec.warmup`、`vdec.<编码>.<码流>` | 当 `ACPI\RKCP0383` 存在时：绑定到 `vdpu383`，`vdpu383test warmup` 退出码 0，然后用 `vdpu383test decode` 解 [`streams.txt`](streams.txt) 里的每个码流，比较帧数、硬件错误为 0 以及输出的 MD5 | `tools/vdpu383test/hevc-conformance.ps1` |
 | `thermal.zones` | 至少三个 ACPI 热区，每个在 0 到 90 C 之间 | rk-monitor 用的计数器 |
 | `time.clock`、`time.rtc` | 年份在 2026..2040 之间，且与 `time.windows.com` 相差不超过 120 秒（`w32tm /stripchart`，只读）；`HYMB0001` 正常 | |
@@ -115,26 +114,21 @@ N-A：套件从不关闭板子。
 ## 解码码流
 
 [`streams.txt`](streams.txt) 列出九个小码流（四个 H.264、五个 HEVC Main，总共约 380 KB），取自 FFmpeg fate-suite 中
-ITU-T 一致性码流的副本，每个都带 SHA-256、帧数和解码后 I420 输出的 MD5。它们都在泰山派 3M 上匹配过（H.264 2026-11-24，
-HEVC 2026-11-25）。码流不存进 git：`fetch-streams.sh` 把它们下载到 `streams/` 并校验哈希，`run-remote.sh` 把它们拷到板子上。
+ITU-T 一致性码流的副本，每个都带 SHA-256、帧数和解码后 I420 输出的 MD5。码流不存进 git：`fetch-streams.sh` 把它们下载到 `streams/` 并校验哈希，`run-remote.sh` 把它们拷到板子上。
 
 ## 测试
 
 不需要板子：
 
 * `tests/run-dryrun.ps1` 解析这里的每个 `.ps1`，检查含非 ASCII 文本的文件是否带 UTF-8 BOM（否则 Windows PowerShell 5.1
-  会按 ANSI 读取），并对每个 `tests/mock-*.json` 运行 `regress.ps1 -DryRun`。mock 文件里是板子会报告的数据，以及某些检查
-  预期的结果：一切正常且带 `-Stress` 的泰山派 3M、埋了回归问题的 CM5-IO（WDDM 1.3、频率不对、问题设备、没有 NVMe、一个
-  4101 事件、一个 MD5 不对）、带 `-Quick`、没有计数器且没人登录的 ROCK 4D，以及固件不对且压力测试在 90 C 被停止的泰山派 3M。
-  它还检查套件不会在 `-Out` 之外写任何东西。
+  会按 ANSI 读取），并对每个 `tests/mock-*.json` 运行 `regress.ps1 -DryRun`。mock 文件里是板子会报告的数据和预期结果
+  （正常的板子、埋好的回归问题、缺少计数器、在 90 C 被停止的压力测试）。它还检查套件不会在 `-Out` 之外写任何东西。
 * `tests/test-regress-sh.sh` 为虚构的板子构造 `/sys` 和 `/proc` 目录树（`REGRESS_ROOT`），把桩程序 `dmesg`、`ip`、`ping`
-  和 `timedatectl` 放在 `PATH` 最前面，检查五种情况的结果行；然后用桩程序 `ssh` 和 `scp` 运行 `run-remote.sh`，检查拷贝、
-  参数传递和结果回传。
+  和 `timedatectl` 放在 `PATH` 最前面，检查五种情况；然后用桩程序 `ssh` 和 `scp` 运行 `run-remote.sh`。
 
-CI 在每次推送时运行这两项（[`ci.yml`](../../.github/workflows/ci.yml) 中的 `regress-linux`、`regress-windows`）：
-shellcheck、Linux 测试、PowerShell 7 和 Windows PowerShell 5.1 下的 dry run，以及在 Windows runner（x64 虚拟机，所以大部分
-行是 FAIL）上真实运行一次 `regress.ps1`：它必须跑到最后一项检查，通过 C# 辅助代码读到 runner 自己的 DSDT 表头，通过存储
-检查，并且不留下任何文件或任务。
+CI 在每次推送时运行这两项（[`ci.yml`](../../.github/workflows/ci.yml) 中的 `regress-linux`、`regress-windows`），
+分别在 PowerShell 7 和 Windows PowerShell 5.1 下运行，另外在 x64 runner 上真实运行一次 `regress.ps1`（那里大部分行是 FAIL；
+它必须跑完、通过存储检查并且不留下任何东西）。
 
 ## 添加检查
 

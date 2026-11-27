@@ -1,0 +1,71 @@
+;
+; rk3xuart.inf - RK3576 UART on the 40-pin header (SerCx2 controller driver)
+;
+; Target: Windows on ARM64. Binds ACPI\RKCP3006, which edk2-rk3576 gives the
+; header's UARTs (Silicon/Rockchip/RK3576/AcpiTables/Uart40.asl) when the
+; "40-pin UART" setup option is on. Off by default: the pins are GPIOs then.
+;
+; The port is a GUID_DEVINTERFACE_COMPORT interface named by the firmware's
+; "SerCx-FriendlyName" (UART4, ...), and also a COM name. The device is in
+; the Ports class so that its class installer (msports.dll) claims a free
+; COM number from the COM name arbiter (ComDB) and stores it as "PortName"
+; in the device's hardware key; the driver claims one itself when there is
+; none. Editing "PortName" renames it, an empty one drops it (README.md).
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Ports
+ClassGuid   = {4D36E978-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = rk3xuart.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+rk3xuart.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%RKUART.DeviceDesc% = RKUART_Inst,ACPI\RKCP3006
+
+[RKUART_Inst.NT]
+CopyFiles = RKUART_CopyFiles
+
+[RKUART_CopyFiles]
+rk3xuart.sys
+
+[RKUART_Inst.NT.Services]
+AddService = rk3xuart,0x00000002,RKUART_Service
+
+[RKUART_Service]
+DisplayName    = %RKUART.SvcDesc%
+ServiceType    = 1 ; SERVICE_KERNEL_DRIVER
+StartType      = 3 ; SERVICE_DEMAND_START
+ErrorControl   = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\rk3xuart.sys
+LoadOrderGroup = Extended Base
+Dependencies   = SerCx2
+
+[RKUART_Inst.NT.Wdf]
+KmdfService = rk3xuart, RKUART_wdfsect
+
+[RKUART_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName      = "woa-rk3576"
+DiskName          = "RK3576 UART Installation Disk"
+RKUART.DeviceDesc = "Rockchip RK3576 UART (40-pin header)"
+RKUART.SvcDesc    = "Rockchip RK3576 UART Driver"

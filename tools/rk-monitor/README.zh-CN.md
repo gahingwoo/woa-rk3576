@@ -5,21 +5,19 @@
 RK3576 板子在 Windows on Arm 下用的托盘图标。这些板子能跑的最新版本 Windows 11 23H2，任务管理器里没有 NPU 页，
 也不显示温度；这个工具把它们显示出来，旁边还有 CPU 和 GPU 的状态。
 
-<!-- screenshot placeholder: the popup on the TaishanPi 3M, to be taken on
-     the board and added here as rk-monitor.png -->
-*截图稍后补上（泰山派 3M 上的弹出窗口）。*
-
-图标显示的是最热的 ACPI 热区的温度，单位摄氏度（85 °C 起变红）。鼠标悬停提示里有每个簇的 CPU 占用、温度、GPU 占用和
+图标显示的是最热的 ACPI 热区的温度，单位摄氏度（85 C 起变红）。鼠标悬停提示里有每个簇的 CPU 占用、温度、GPU 占用和
 NPU 忙碌度。左键单击打开弹出窗口，每秒刷新一次：
 
 | 分区 | 行 | 数据来源 |
 |---|---|---|
 | CPU | `A53, cores 0-3`、`A72, cores 4-7`：占用和频率，带 60 秒历史 | `\Processor(*)\% Processor Time`、`\Processor Information(*)\Processor Frequency` |
 | CPU | 每个热区一行 | `\Thermal Zone Information(*)\High Precision Temperature`（单位为十分之一开尔文）。不用 WMI 的 `MSAcpi_ThermalZoneTemperature`，它在这些板子上返回的是过时的缓存值 |
-| GPU | 利用率，按引擎类型，带历史 | `\GPU Engine(*)\Utilization Percentage`，像任务管理器那样按引擎求和 |
-| GPU | 显存 | `\GPU Adapter Memory(*)\Shared Usage` 和 `Dedicated Usage`，所有适配器 |
+| GPU | 利用率，按引擎类型，带历史 | `\GPU Engine(*)\Utilization Percentage`，像任务管理器那样按引擎求和，只算 Mali |
+| GPU | 显存 | `\GPU Adapter Memory(*)\Shared Usage` 和 `Dedicated Usage`，只算 Mali |
 | GPU | 忙碌度、温度、频率、降频 | 来自 maliwddm 的 `\RK3576 GPU(*)\% busy`、`Temperature (C)`、`Clock (MHz)`、`Throttled` |
 | NPU | `core0`、`core1`：忙碌百分比和每秒任务数，带历史 | 来自 rknpu.sys 的 `\RK3576 NPU(*)\% Busy Time`、`Jobs/sec` |
+
+GPU 这几行只统计 Mali 适配器（通过 DXGI 按名字找到）。没装 maliwddm 时 Windows 用的是微软基本渲染驱动，它在 CPU 上画图，它的引擎计数器不是 GPU 的，所以弹窗会显示 "Mali driver not installed"。
 
 簇的划分来自 Windows 报告的效率等级；如果它对所有核心只报告一个等级，并且共有 8 个核心，就把 0-3 号核心当作
 A53，4-7 号当作 A72。
@@ -30,7 +28,7 @@ rk-monitor 每 30 秒重新查找一次，所以驱动装上或注册完成后�
 - GPU：maliwddm 驱动包（wddm-mali-g52）里的 `maliwddm-counters.cmd install`，每次驱动更新后运行；
 - NPU：rknpu 驱动包（woa-rk3576-npu，docs/PERFCOUNTERS.md）里的 `rknpu-perfcounters.ps1`，以管理员身份运行，每次驱动更新后运行。
 
-内核模式的计数器提供程序要用 lodctr 注册，而 INF 不能运行 lodctr，所以需要单独这一步。
+（内核模式的计数器提供程序要用 lodctr 注册，而 INF 不能运行 lodctr。）
 
 ## 桌面小部件
 
@@ -40,8 +38,7 @@ rk-monitor 每 30 秒重新查找一次，所以驱动装上或注册完成后�
 （如果那台显示器不在了，就回到默认位置，即主屏幕右上角）。**Widget click-through**（小部件点击穿透）让点击落到桌面上；
 关掉它之后才能再次移动小部件。在小部件上右键会打开托盘菜单。
 
-只有上面的内容变化时它才重绘，在空闲的板子上就是图表在移动；每次取样的开销是每秒一次 PDH 收集。如果
-Explorer 重启，小部件会和托盘图标一起回来。如果桌面窗口不能接受子窗口，小部件就退回为一个置底的普通窗口，
+Explorer 重启后，小部件会和托盘图标一起回来。如果桌面窗口不能接受子窗口，小部件就退回为一个置底的普通窗口，
 这时 Win+D 会把它隐藏。
 
 和 RK3576 工具（[../rk3576-tools](../rk3576-tools/README.zh-CN.md)）一起安装时，小部件默认打开
@@ -56,9 +53,8 @@ Explorer 重启，小部件会和托盘图标一起回来。如果桌面窗口�
 指向 exe 当前所在的位置；如果安装程序已经通过登录任务为所有用户启动它，这一项会显示为已勾选并变灰）和 **Exit**（退出）。
 再启动一次会打开已在运行的那个实例的弹出窗口。它跟随应用的浅色或深色模式，图标则跟随任务栏的模式。
 
-登录任务和 Start with Windows 项都用 `rk-monitor.exe --autostart` 启动它：如果已经有一个在运行就什么也不做；
-托盘图标和小部件立刻出现，数值显示 "..."；第一个样本在 5 秒后；第一分钟以后台模式运行（低 CPU、I/O 和内存优先级），
-因为会话的第一分钟最忙。
+`rk-monitor.exe --autostart`（登录任务和 Start with Windows 用的就是它）在已有实例运行时什么也不做，
+5 秒后取第一个样本，第一分钟以后台优先级运行。
 
 ## 耳机
 
@@ -88,4 +84,4 @@ msbuild tools\rk-monitor\rk-monitor.vcxproj /p:Configuration=Release /p:Platform
 ```
 
 用 C 和 Win32 写成（PDH、GDI、外壳的通知区域），另有一个 C++ 文件处理音频端点通知（MMDevice API），C 运行时静态链接。
-CI 在每次 push 时构建 ARM64 和 x64，用 `--once` 运行 x64 版本，并上传 `rk-monitor-arm64` 和 `rk-monitor-x64`。
+CI 构建 ARM64 和 x64，用 `--once` 运行 x64 版本，并上传 `rk-monitor-arm64` 和 `rk-monitor-x64`。

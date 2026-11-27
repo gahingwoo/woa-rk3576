@@ -33,6 +33,18 @@
  * has no GpioInt in _CRS either, and the driver then creates no interrupt
  * object (es8323.c, OnPrepareHardware).
  *
+ * A board whose jack is read on an ADC input instead (ROCK 4D: the
+ * microphone contact on SARADC channel 3) says so with
+ *
+ *   rockchip,hp-det-saradc       1: the state comes from rk3xsaradc.sys
+ *
+ * and no rockchip,hp-det-gpio-io.  The driver then registers on
+ * \Callback\Rk3xSaradcJack (protocol in drivers/adc/rk3xsaradc/
+ * rk3xsaradc_ioctl.h), asks for the current state, and passes every
+ * debounced change on to csaudiork3x and the amplifier gate exactly as a
+ * GPIO edge would.  Until the SARADC driver has answered (or when it is not
+ * installed) the endpoint stays plugged.
+ *
  * Overrides, REG_DWORD in the device's "Device Parameters" key
  * (HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP8388\0\Device Parameters),
  * read at start:
@@ -42,7 +54,8 @@
  * and written by the driver:
  *   JackSetupStatus, JackOpenStatus, JackReadStatus (NTSTATUS),
  *   JackHpDetIndex, JackActiveHigh, JackDebounceMs, JackLevel,
- *   JackConnected, JackEdges, JackChanges, JackNotifies
+ *   JackConnected, JackEdges, JackChanges, JackNotifies,
+ *   JackSaradc (1: following rk3xsaradc), JackSaradcStates
  *
  * Copyright (c) 2026, Jiaxing Hu <gahing@gahingwoo.com>
  * SPDX-License-Identifier: MIT
@@ -53,6 +66,7 @@
 #include <reshub.h>
 #include <acpiioct.h>
 #include <ntstrsafe.h>
+#include "../../../adc/rk3xsaradc/rk3xsaradc_ioctl.h"
 
 DEFINE_GUID(ES8388_GUID_ACPI_DSD,
 	0xdaffd814, 0x6eba, 0x4d8c, 0x8a, 0x91, 0xbc, 0x9b, 0xbf, 0x4a, 0xa3, 0x01);
@@ -133,6 +147,8 @@ static void Es8388JackDiagSave(_In_ PES8323_CONTEXT pDevice) {
 	JackPut(key, L"JackEdges", (ULONG)pDevice->JackEdges);
 	JackPut(key, L"JackChanges", pDevice->JackChanges);
 	JackPut(key, L"JackNotifies", pDevice->JackNotifies);
+	JackPut(key, L"JackSaradc", pDevice->HpDetSaradcActive);
+	JackPut(key, L"JackSaradcStates", pDevice->SaradcStates);
 	WdfRegistryClose(key);
 }
 
@@ -256,6 +272,9 @@ static NTSTATUS Es8388JackReadDsd(_In_ PES8323_CONTEXT pDevice) {
 			else if (DsdNameIs(name, "rockchip,hp-det-active-high") && DsdInteger(value, &v)) {
 				pDevice->HpDetActiveHigh = (v != 0);
 			}
+			else if (DsdNameIs(name, "rockchip,hp-det-saradc") && DsdInteger(value, &v)) {
+				pDevice->HpDetSaradc = (v != 0);
+			}
 			else if (DsdNameIs(name, "rockchip,hp-det-debounce-ms") && DsdInteger(value, &v)) {
 				pDevice->HpDetDebounceMs = min(v, ES8388_JACK_MAX_DEBOUNCE_MS);
 			}
@@ -268,7 +287,7 @@ static NTSTATUS Es8388JackReadDsd(_In_ PES8323_CONTEXT pDevice) {
 			}
 		}
 	}
-	status = haveIndex ? STATUS_SUCCESS : STATUS_NOT_FOUND;
+	status = (haveIndex || pDevice->HpDetSaradc) ? STATUS_SUCCESS : STATUS_NOT_FOUND;
 
 exit:
 	WdfObjectDelete(outputMemory);
@@ -281,6 +300,7 @@ VOID Es8388JackSelectGpios(_In_ PES8323_CONTEXT pDevice) {
 	ULONG ampIndex = ES8388_NO_INDEX;
 
 	pDevice->HpDetIoIndex = ES8388_NO_INDEX;
+	pDevice->HpDetSaradc = FALSE;
 	pDevice->DsdOutputRoute = ES8388_NO_INDEX;
 	pDevice->DsdInputSelect = ES8388_NO_INDEX;
 	pDevice->HpDetActiveHigh = TRUE;
@@ -289,7 +309,11 @@ VOID Es8388JackSelectGpios(_In_ PES8323_CONTEXT pDevice) {
 
 	if (pDevice->Rk3576Sai) {
 		pDevice->JackSetupStatus = Es8388JackReadDsd(pDevice);
-		if (!NT_SUCCESS(pDevice->JackSetupStatus) || pDevice->HpDetIoIndex >= pDevice->GpioIoCount ||
+		if (NT_SUCCESS(pDevice->JackSetupStatus) && pDevice->HpDetSaradc &&
+			pDevice->HpDetIoIndex == ES8388_NO_INDEX) {
+			// The jack comes from the SARADC driver; no GPIO to check.
+		}
+		else if (!NT_SUCCESS(pDevice->JackSetupStatus) || pDevice->HpDetIoIndex >= pDevice->GpioIoCount ||
 			pDevice->HpDetIoIndex >= ES8388_MAX_GPIOIO) {
 			if (NT_SUCCESS(pDevice->JackSetupStatus)) {
 				pDevice->JackSetupStatus = STATUS_INVALID_PARAMETER;
@@ -344,6 +368,7 @@ static NTSTATUS Es8388JackOpenTarget(_In_ PES8323_CONTEXT pDevice, ULONG shareAc
 static VOID Es8388JackTimer(_In_ WDFTIMER timer);
 static VOID Es8388JackWork(_In_ WDFWORKITEM workItem);
 static VOID Es8388JackCsAudioCallback(PVOID context, PVOID argument1, PVOID argument2);
+static VOID Es8388JackSaradcCallback(PVOID context, PVOID argument1, PVOID argument2);
 
 //
 // From OnPrepareHardware, after Es8388JackSelectGpios and the SPB target.
@@ -357,8 +382,12 @@ VOID Es8388JackPrepare(_In_ PES8323_CONTEXT pDevice) {
 
 	pDevice->JackOpenStatus = STATUS_NOT_FOUND;
 	pDevice->JackAmpGate = TRUE;
+	pDevice->HpDetSaradcActive = FALSE;
+	pDevice->SaradcConnected = -1;
 
-	if (pDevice->HpDetIoIndex == ES8388_NO_INDEX) {
+	BOOLEAN useSaradc = (BOOLEAN)(pDevice->HpDetIoIndex == ES8388_NO_INDEX && pDevice->HpDetSaradc);
+
+	if (pDevice->HpDetIoIndex == ES8388_NO_INDEX && !useSaradc) {
 		goto out;
 	}
 
@@ -375,6 +404,9 @@ VOID Es8388JackPrepare(_In_ PES8323_CONTEXT pDevice) {
 	}
 	if (invert) {
 		pDevice->HpDetActiveHigh = !pDevice->HpDetActiveHigh;
+	}
+	if (useSaradc) {
+		goto workitem;
 	}
 
 	// The detect line, read only.
@@ -414,6 +446,7 @@ VOID Es8388JackPrepare(_In_ PES8323_CONTEXT pDevice) {
 			goto out;
 		}
 	}
+workitem:
 	if (!pDevice->JackWorkItem) {
 		WDF_WORKITEM_CONFIG workConfig;
 		WDF_WORKITEM_CONFIG_INIT(&workConfig, Es8388JackWork);
@@ -443,6 +476,38 @@ VOID Es8388JackPrepare(_In_ PES8323_CONTEXT pDevice) {
 		pDevice->CsAudioCallbackReg = ExRegisterCallback(pDevice->CsAudioCallback,
 			Es8388JackCsAudioCallback, pDevice);
 	}
+
+	// The SARADC driver's jack channel; again whichever driver comes first
+	// creates it.  Ask for the state now: the answer comes later, from the
+	// SARADC driver's work item, and only once it has decided one.
+	if (useSaradc) {
+		UNICODE_STRING name;
+		OBJECT_ATTRIBUTES objAttributes;
+
+		if (!pDevice->JackWorkItem) {
+			pDevice->JackSetupStatus = STATUS_INSUFFICIENT_RESOURCES;
+			goto out;
+		}
+		RtlInitUnicodeString(&name, RK3X_SARADC_JACK_CALLBACK_NAME);
+		InitializeObjectAttributes(&objAttributes, &name,
+			OBJ_KERNEL_HANDLE | OBJ_OPENIF | OBJ_CASE_INSENSITIVE | OBJ_PERMANENT, NULL, NULL);
+		status = ExCreateCallback(&pDevice->SaradcCallback, &objAttributes, TRUE, TRUE);
+		if (!NT_SUCCESS(status)) {
+			pDevice->SaradcCallback = NULL;
+			pDevice->JackSetupStatus = status;
+			goto out;
+		}
+		pDevice->SaradcCallbackReg = ExRegisterCallback(pDevice->SaradcCallback,
+			Es8388JackSaradcCallback, pDevice);
+		if (!pDevice->SaradcCallbackReg) {
+			ObDereferenceObject(pDevice->SaradcCallback);
+			pDevice->SaradcCallback = NULL;
+			pDevice->JackSetupStatus = STATUS_INSUFFICIENT_RESOURCES;
+			goto out;
+		}
+		pDevice->HpDetSaradcActive = TRUE;
+		ExNotifyCallback(pDevice->SaradcCallback, RK3X_SARADC_JACK_QUERY, NULL);
+	}
 	pDevice->JackSetupStatus = STATUS_SUCCESS;
 
 out:
@@ -457,12 +522,21 @@ VOID Es8388JackRelease(_In_ PES8323_CONTEXT pDevice) {
 		ExUnregisterCallback(pDevice->CsAudioCallbackReg);
 		pDevice->CsAudioCallbackReg = NULL;
 	}
+	if (pDevice->SaradcCallbackReg) {
+		ExUnregisterCallback(pDevice->SaradcCallbackReg);
+		pDevice->SaradcCallbackReg = NULL;
+	}
+	pDevice->HpDetSaradcActive = FALSE;
 	if (pDevice->JackWorkItem) {
 		WdfWorkItemFlush(pDevice->JackWorkItem);
 	}
 	if (pDevice->CsAudioCallback) {
 		ObDereferenceObject(pDevice->CsAudioCallback);
 		pDevice->CsAudioCallback = NULL;
+	}
+	if (pDevice->SaradcCallback) {
+		ObDereferenceObject(pDevice->SaradcCallback);
+		pDevice->SaradcCallback = NULL;
 	}
 	if (pDevice->HpDetTarget) {
 		WdfIoTargetClose(pDevice->HpDetTarget);
@@ -535,10 +609,60 @@ static VOID Es8388JackTimer(_In_ WDFTIMER timer) {
 	Es8388JackDiagSave(pDevice);
 }
 
-// csaudiork3x (re)started: give it the state it missed.
+//
+// The latest state rk3xsaradc sent, applied the way Es8388JackTimer applies
+// a GPIO level.  Work item, PASSIVE_LEVEL.
+//
+static VOID Es8388JackSaradcApply(_In_ PES8323_CONTEXT pDevice) {
+	LONG state = InterlockedCompareExchange(&pDevice->SaradcConnected, 0, 0);
+
+	if (!pDevice->HpDetSaradcActive || state < 0) {
+		return;
+	}
+	BOOLEAN connected = (state != 0);
+	BOOLEAN changed = !pDevice->JackKnown || connected != pDevice->JackConnected;
+	pDevice->JackConnected = connected;
+	pDevice->JackKnown = TRUE;
+	pDevice->JackLevel = (ULONG)state;
+
+	if (pDevice->JackInD0 && pDevice->JackAmpGate && pDevice->AmpGpioTarget &&
+		(pDevice->AmpWriteValue != (ULONG)connected || !NT_SUCCESS(pDevice->AmpWriteStatus))) {
+		Es8388SaiSetAmp(pDevice, connected);
+	}
+	if (changed) {
+		pDevice->JackChanges++;
+	}
+	Es8388JackDiagSave(pDevice);
+}
+
+// csaudiork3x (re)started: give it the state it missed.  Also where a
+// state from rk3xsaradc lands.
 static VOID Es8388JackWork(_In_ WDFWORKITEM workItem) {
 	WDFDEVICE device = (WDFDEVICE)WdfWorkItemGetParentObject(workItem);
-	Es8388JackNotify(GetDeviceContext(device));
+	PES8323_CONTEXT pDevice = GetDeviceContext(device);
+
+	Es8388JackSaradcApply(pDevice);
+	Es8388JackNotify(pDevice);
+}
+
+//
+// \Callback\Rk3xSaradcJack.  Only RK3X_SARADC_JACK_STATE matters here; our
+// own query (and anyone else's) comes through too and is ignored.  The
+// info is valid only during the call: copy what is needed and queue.
+//
+static VOID Es8388JackSaradcCallback(PVOID context, PVOID argument1, PVOID argument2) {
+	PES8323_CONTEXT pDevice = (PES8323_CONTEXT)context;
+	PRK3X_SARADC_JACK_INFO info = (PRK3X_SARADC_JACK_INFO)argument2;
+
+	if (!pDevice || argument1 != RK3X_SARADC_JACK_STATE || !info ||
+		info->Size < sizeof(RK3X_SARADC_JACK_INFO) || !info->Known) {
+		return;
+	}
+	InterlockedExchange(&pDevice->SaradcConnected, info->Connected ? 1 : 0);
+	pDevice->SaradcStates++;
+	if (pDevice->JackWorkItem) {
+		WdfWorkItemEnqueue(pDevice->JackWorkItem);
+	}
 }
 
 static VOID Es8388JackCsAudioCallback(PVOID context, PVOID argument1, PVOID argument2) {
@@ -562,6 +686,10 @@ static VOID Es8388JackCsAudioCallback(PVOID context, PVOID argument1, PVOID argu
 
 VOID Es8388JackD0Entry(_In_ PES8323_CONTEXT pDevice) {
 	pDevice->JackInD0 = TRUE;
+	if (pDevice->HpDetSaradcActive && pDevice->JackWorkItem) {
+		// The amplifier was just switched on; gate it on the state we have.
+		WdfWorkItemEnqueue(pDevice->JackWorkItem);
+	}
 	if (pDevice->JackTimer && pDevice->HpDetTarget) {
 		// The first read, once the line has settled after power-up.
 		WdfTimerStart(pDevice->JackTimer, WDF_REL_TIMEOUT_IN_MS(pDevice->HpDetDebounceMs));

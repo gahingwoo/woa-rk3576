@@ -7,6 +7,12 @@ replace one that is already running. The same rules apply to the drivers of
 this repository, [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)
 and [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu).
 
+## All of them at once
+
+The [driver package](../tools/rk3576-drivers/README.md)
+(`rk3576-drivers-arm64.zip` on the releases) holds every driver for the
+three boards and an `install.cmd` that installs the board's list.
+
 ## Before anything: the clock
 
 Sync the clock first (`w32tm /resync /force`). The TaishanPi 3M's RTC holds
@@ -43,17 +49,25 @@ first:
    certutil -addstore -f TrustedPublisher signer.cer
    ```
 
-3. Install a driver that is not yet running:
+3. Stage the package and restart:
 
    ```
-   pnputil /add-driver gt9271.inf /install
+   pnputil /add-driver gt9271.inf
+   shutdown /r /t 0
    ```
+
+   A device that has no driver yet picks the staged package up at the next
+   boot. Do not use `/install` on a running board.
+
+Never reinstall the SD/eMMC host drivers (`dwcsdhc`, `dwcmshc`) in the
+running Windows, not even by the steps below: on the eMMC boards Windows
+runs from them. Update them offline from WinPE.
 
 ## Replacing a driver that is already bound and running
 
-`pnputil /add-driver` followed by a restart keeps the old driver, and
-`/install` on a running audio, DMA, display or Bluetooth driver has
-bugchecked the TaishanPi 3M. Instead:
+For a device that already has a driver, `pnputil /add-driver` followed by a
+restart keeps the old driver, and `/install` on a running audio, DMA,
+display or Bluetooth driver has bugchecked the TaishanPi 3M. Instead:
 
 1. Stage the package only: `pnputil /add-driver <name>.inf`.
 2. As SYSTEM, set bit 0x20 (`CONFIGFLAG_REINSTALL`) in `ConfigFlags` under

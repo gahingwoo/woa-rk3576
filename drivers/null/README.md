@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-`rk3576-null.inf` installs four ACPI devices with no driver, so Device
+`rk3576-null.inf` installs five ACPI devices with no driver, so Device
 Manager lists them under *System devices* by name instead of as unknown
 devices with a yellow mark (problem code 28). No binary, no service: the
 install is the documented null-driver form (`AddService = ,2` with no
@@ -14,6 +14,7 @@ service name), and Windows only records the devices' resources.
 | `ACPI\RKCP0806` | `\_SB.I2C1.PMC0` | RK806 power management IC (managed by the firmware) | rails and power-off are the firmware's |
 | `ACPI\RKCP3005` | `\_SB.PINC` | RK3576 pin controller (managed by the firmware) | the firmware sets the pins before Windows starts |
 | `ACPI\HISI0031` | `\_SB.UAR2` | RK3576 UART2 (no Windows driver) | inbox serial.sys handles byte-spaced 16550 registers only |
+| `ACPI\AMZN0001` | `\_SB.PCIn.RES0` | RK3576 PCIe controller registers (not used by Windows) | Windows reaches PCIe config space through the MCFG's ECAM window; the range is described for other OSes |
 
 `RKCP0806` and `RKCP3005` need edk2-rk3576 with commits "give the RK806 PMIC
 its own _HID" and "give the pin controller its own _HID" (2026-11-24).
@@ -42,7 +43,7 @@ shutdown /r /t 0
 After the restart:
 
 ```powershell
-Get-PnpDevice -PresentOnly | Where-Object InstanceId -match 'HYMB0001|RKCP0806|RKCP3005|HISI0031' |
+Get-PnpDevice -PresentOnly | Where-Object InstanceId -match 'HYMB0001|RKCP0806|RKCP3005|HISI0031|AMZN0001' |
   Format-Table Status, Class, FriendlyName, InstanceId -AutoSize
 ```
 

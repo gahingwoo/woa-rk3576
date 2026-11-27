@@ -2,24 +2,19 @@
 
 English | [简体中文](wireless.zh-CN.md)
 
-Status on 2026-11-24:
+| | TaishanPi 3M | CM5-IO |
+|---|---|---|
+| Bluetooth | board-tested with [bcm4345bt](../../drivers/bluetooth/bcm4345bt): pairing, file transfer, no voice (SCO) | CI only (bcm4345bt, `RKCP4362`) |
+| Wi-Fi | SDIO controller (dwcmshc) and [bcmwlsdio](../../drivers/net/bcmwlsdio) W3 board-tested 2026-11-26: firmware runs, no network interface yet ([wifi.md](wifi.md)) | CI only (bcmwlsdio BCM43752) |
 
-- Bluetooth works on the TaishanPi 3M with [bcm4345bt](../../drivers/bluetooth/bcm4345bt)
-  (since 2026-11-22): pairing and file transfer, no voice (SCO). The driver
-  runs UART6 itself instead of a separate SerCx2 UART driver, and hands the
-  HCI link to the in-box BthMini; how is in its README.
-- Bluetooth on the CM5-IO: not written. Its module is a different chip on
-  UART4.
-- Wi-Fi: not working on either board, and nothing is built. The assessment
-  below still holds.
-- ROCK 4D (AIC8800D80 on USB, a different chip): a bring-up driver is on
-  branch `aic8800-usb`, not tried on a board; see [aic8800.md](aic8800.md).
-  Its WiFiCx mode (Windows' own Wi-Fi) is on branch `aic8800-wificx`; see
-  [wificx.md](wificx.md).
+ROCK 4D: AIC8800D80 Wi-Fi and Bluetooth on USB, no driver on `main`. A
+driver is on branch `aic8800-usb`, not tried on the board
+([aic8800.md](aic8800.md)). Its WiFiCx mode (Windows' own Wi-Fi) is on
+branch `aic8800-wificx`; see [wificx.md](wificx.md).
 
-The assessment as written on 2026-11-21, before Bluetooth worked, is in
-[history](../history/2026-11-21-wireless-assessment.md); its Bluetooth plan
-(a SerCx2 driver plus cywbtserialbus) was not the way it was done.
+bcm4345bt runs the UART itself instead of a separate SerCx2 UART driver and
+hands the HCI link to the in-box BthMini; how is in its README. The original
+assessment is in [history](../history/2026-11-21-wireless-assessment.md).
 
 ## The hardware
 
@@ -37,7 +32,7 @@ sequences the Wi-Fi supply, reset and LPO clock through `mmc-pwrseq`. For
 Bluetooth on the TaishanPi 3M the firmware declares `\_SB.BTH0` (`RKCP4345`)
 with UART6, BT_REG_ON and BT_WAKE, muxes the UART pins and sets its clock.
 
-## Wi-Fi: not feasible at a reasonable size
+## Wi-Fi: what a driver takes
 
 - No Windows driver exists for these chips on ARM64. worproject's Raspberry
   Pi driver table lists the Pi 3B+/4's CYW43455 (the same family) as having
@@ -60,7 +55,6 @@ Rough size: 6 to 9 person-months to scan, connect with WPA2 and roam on one
 chip, then 1 to 2 more for WPA3, power management and hardening; the second
 chip is a further bring-up.
 
-Recommendation: do not start it. Use Ethernet, which works on both boards.
-A USB Wi-Fi adapter is only an answer if its exact hardware ID has a Windows
-ARM64 driver (Microsoft Update Catalog, ARM64 filter, or the inbox `net*.inf`
-of the 23H2 image); none was confirmed during this assessment.
+Until then use Ethernet. A USB Wi-Fi adapter works only if its exact
+hardware ID has a Windows ARM64 driver (Microsoft Update Catalog, ARM64
+filter, or the inbox `net*.inf` of the 23H2 image); none is confirmed.

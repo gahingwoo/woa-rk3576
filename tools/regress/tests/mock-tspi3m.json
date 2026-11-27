@@ -75,16 +75,6 @@
     "1280x720@60"
    ]
   },
-  "audio": [
-   {
-    "name": "Rockchip HDMI (Rockchip I2S Audio)",
-    "status": "OK"
-   },
-   {
-    "name": "Rockchip Headphones (Rockchip I2S Audio)",
-    "status": "OK"
-   }
-  ],
   "network": [
    {
     "name": "Ethernet",
@@ -183,12 +173,80 @@
    "present": true,
    "status": "OK",
    "service": "maliwddm"
-  }
+  },
+  "audioEndpoints": [
+   {
+    "flow": "render",
+    "state": 1,
+    "name": "Digital Output (Rockchip I2S Audio (WDM))",
+    "adapter": "Rockchip I2S Audio (WDM)",
+    "formFactor": "9",
+    "filter": "{2}.\\\\?\\csaudio#rk&cltr#5&1a2b3c4d&0&00000000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\topologyhdmi/00010001"
+   },
+   {
+    "flow": "render",
+    "state": 1,
+    "name": "Headphones (Rockchip I2S Audio (WDM))",
+    "adapter": "Rockchip I2S Audio (WDM)",
+    "formFactor": "3",
+    "filter": "{2}.\\\\?\\csaudio#rk&cltr#5&5e6f7a8b&0&00000000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\topologyheadphonessai/00010001"
+   },
+   {
+    "flow": "render",
+    "state": 1,
+    "name": "Speakers (AC Interface)",
+    "adapter": "AC Interface",
+    "formFactor": "1",
+    "filter": "{2}.\\\\?\\usb#vid_2c7c&pid_0125&mi_02#6&abc&0&0002#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\global/00010001"
+   },
+   {
+    "flow": "capture",
+    "state": 1,
+    "name": "Microphone (AC Interface)",
+    "adapter": "AC Interface",
+    "formFactor": "4",
+    "filter": "{2}.\\\\?\\usb#vid_2c7c&pid_0125&mi_02#6&abc&0&0002#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\global/00010001"
+   },
+   {
+    "flow": "capture",
+    "state": 1,
+    "name": "Microphone (3- Rockchip I2S Audio (WDM))",
+    "adapter": "Rockchip I2S Audio (WDM)",
+    "formFactor": "4",
+    "filter": "{2}.\\\\?\\csaudio#rk&cltr#5&5e6f7a8b&0&00000000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\topologymicjack/00010001"
+   }
+  ],
+  "audioDevices": [
+   {
+    "name": "Rockchip I2S Audio (WDM)",
+    "instanceId": "CSAUDIO\\RK&CLTR\\5&1a2b3c4d&0&00000000",
+    "status": "OK",
+    "parent": "ACPI\\RKCP3004\\6"
+   },
+   {
+    "name": "Rockchip I2S Audio (WDM)",
+    "instanceId": "CSAUDIO\\RK&CLTR\\5&5e6f7a8b&0&00000000",
+    "status": "OK",
+    "parent": "ACPI\\RKCP3004\\1"
+   },
+   {
+    "name": "AC Interface",
+    "instanceId": "USB\\VID_2C7C&PID_0125&MI_02\\6&ABC&0&0002",
+    "status": "OK",
+    "parent": "USB\\VID_2C7C&PID_0125\\0123456789AB"
+   },
+   {
+    "name": "Everest 8388 Audio Codec (RK3576 SAI)",
+    "instanceId": "ACPI\\RKCP8388\\0",
+    "status": "OK",
+    "parent": "ACPI\\RKCP3001\\2"
+   }
+  ]
  },
  "tools": {
   "rknputest info": {
    "exit": 0,
-   "output": "rknputest info: all checks passed\n"
+   "output": "interface 7 (this tool 7), struct 1024 bytes, flags 0x00000007 interrupts clocks domains-on\nregisters 0x27700000 + 0x10000, 2 cores\ncore 0: version=0x00010200 version_num=0x00000000\ncore 1: version=0x00010200 version_num=0x00000000\nchecks:\n  ok    driver and tool agree on the interface\nRKNPU INFO: OK\n"
   },
   "rknputest m3": {
    "exit": 0,

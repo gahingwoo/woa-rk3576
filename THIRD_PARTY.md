@@ -32,6 +32,10 @@ Not from worproject. The vendor code is dual licensed; the option used is named:
 |---|---|---|
 | `drivers/video/vdpu383/lib/vdpu383_cabac.c` | Rockchip Electronics (MPP) | Apache-2.0 OR MIT (file header) |
 | `drivers/video/vdpu383/lib/vdpu383_h264.c`, register layouts | ported from Rockchip MPP, mpp/hal/rkdec | Apache-2.0 OR MIT, used as MIT; the file as a whole, with the changes made here, is GPL-2.0-only (file header) |
+| `drivers/video/vdpu383/lib/vdpu383_vp9.c`, register values and buffer handling | ported from Rockchip MPP, mpp/hal/rkdec/vp9d/hal_vp9d_vdpu383.c | Apache-2.0 OR MIT, used as MIT; the file is GPL-2.0-only (file header). The bit layouts of its packers follow MPP's hal_vp9d_com.c, which is Apache-2.0 only and of which no code is copied |
+| `drivers/video/vdpu383/lib/vdpu383_vp9_probs.c`, the VP9 probability tables | mainline Linux drivers/media/v4l2-core/v4l2-vp9.c, Collabora (values from libvpx) | GPL-2.0 (file header) |
+| `drivers/video/vdpu383/lib/vdpu383_av1.c`, register values, global record and buffer handling | ported from Rockchip MPP, mpp/hal/rkdec/av1d/hal_av1d_vdpu383.c and hal_av1d_com.c, and the derivations of mpp/codec/dec/av1 | Apache-2.0 OR MIT, used as MIT; the file is GPL-2.0-only (file header) |
+| `drivers/video/vdpu383/lib/vdpu383_av1_cdf.c`, the default CDF tables | Rockchip MPP, hal_av1d_com.c g_av1d_default_prob | Apache-2.0 OR MIT, used as MIT; the file is GPL-2.0-only (file header) |
 | `drivers/video/vdpu383/warmup.c`, warm-up data and sequence | Rockchip Electronics, vendor kernel mpp_hack_rk3576.c | GPL-2.0+ OR MIT, used as GPL-2.0; the file is GPL-2.0-only (file header) |
 | `drivers/net/aic8800usb`: protocol values, message layouts, download sequence | AICSemi, RivieraWaves (Linux driver in radxa-pkg/aic8800) | GPL-2; no code copied; the files are GPL-2.0-only (`LICENSING.md`) |
 
@@ -56,6 +60,14 @@ made under that licence:
 Each driver is built as its own binary, so the repository only distributes
 them side by side.
 
+## Code followed from other projects
+
+`drivers/net/bcmwlsdio` (the BCM43456 Wi-Fi driver) is written here, under
+GPL-2.0-only. Its chip and protocol files follow OpenBSD's `bwfm`
+(Copyright Broadcom Corporation and Patrick Wildt, ISC licence), whose
+notice is kept in `bwl_regs.h`; Linux brcmfmac (ISC) was used to check it.
+See the driver's `LICENSING.md`.
+
 ## Firmware not carried
 
 `drivers/bluetooth/bcm4345bt` needs Broadcom's BCM4345C5 patchram, which is
@@ -68,6 +80,13 @@ and checks its SHA-256. Microsoft's SerialHCIBus sample (MS-PL) was read for
 the BthX interface; no code from it is used, since MS-PL and GPL-2.0 cannot
 be combined.
 
+`drivers/net/bcmwlsdio` needs `brcmfmac43456-sdio.bin`, `.txt` (the AP6256
+NVRAM) and `.clm_blob`. They are not in this repository either: Armbian's
+copies have no stated licence, and Raspberry Pi's build is under a Synaptics
+binary licence (object code only, for Synaptics chips). Its
+`install-firmware.ps1` downloads them on the board at pinned commits and
+checks their SHA-256; docs/dev/wifi.md has the details.
+
 `drivers/net/aic8800usb` needs AICSemi's AIC8800D80 firmware and ROM
 patches, which AICSemi publishes without a licence. They are not in this
 repository or in any package it builds; the driver's `install-firmware.ps1`
@@ -76,7 +95,7 @@ checks each SHA-256.
 
 ## Not imported
 
-- `drivers/storage_fix/*.sys` and `drivers/usb/usbehci_nointerlocked`: patched
+- worproject's `drivers/storage_fix/*.sys` and `drivers/usb/usbehci_nointerlocked`: patched
   Microsoft system binaries (`storahci.sys`, `stornvme.sys`, `usbehci.sys`).
   Modified Windows binaries are not redistributable. Neither is needed here:
   NVMe works with the inbox `stornvme.sys`, and the firmware does not publish

@@ -6,14 +6,25 @@
   "dtCompatible": "lckfb,tspi-3m-rk3576",
   "cpu": { "count": 8, "minMHz": 1600, "note": "CPU Maximum Frequency setup option: 1608 MHz default, about 2200 with Max" },
   "devmgrAllow": [
-    { "id": "USB\\VID_2C7C&PID_0125&MI_04", "why": "Quectel EC20 interface 4 has no driver (Maskrom Studio self-test whitelist)" }
+    { "id": "USB\\VID_2C7C&PID_0125&MI_04", "why": "Quectel EC20 interface 4 has no driver in QMI mode (Maskrom Studio self-test whitelist)" },
+    { "id": "USB\\VID_2C7C&PID_0125&MI_00", "why": "Quectel EC20 DM port (FF/FF/FF) in QMI and MBIM mode: ec20-ports.inf 2.0 binds only FF/00/00" },
+    { "id": "USB\\VID_2C7C&PID_0125&MI_02", "why": "Quectel EC20 DM port in RNDIS mode (interfaces move up by two)" }
   ],
   "gpu": { "clockMHz": 702, "wddmVersion": 20, "tempMaxC": 90, "note": "702 MHz needs the 775 mV GPU rail, approved for this board only" },
   "display": { "refreshHz": 60 },
-  "audio": { "hdmi": true, "analog": true },
+  "audio": {
+    "hdmi": true, "analog": true,
+    "note": "csaudiork3x on SAI6 (_UID 6, tplg hdmi) names its HDMI endpoint Digital Output; the ES8388 (RKCP8388) plays through SAI1 (_UID 1, tplg i2s-jack), whose headphone endpoint shows only while something is plugged into the jack",
+    "hdmiSai": "ACPI\\RKCP3004\\6",
+    "hdmiEndpoint": { "filter": "\\\\topologyhdmi", "name": "HDMI|Digital Output", "adapter": "Rockchip I2S Audio" },
+    "analogSai": "ACPI\\RKCP3004\\1",
+    "analogCodec": "ACPI\\RKCP8388",
+    "analogEndpoint": { "filter": "\\\\topologyheadphones", "name": "Headphone", "adapter": "Rockchip I2S Audio" }
+  },
   "network": { "ethernet": true, "wifi": "optional", "bluetooth": true },
   "usb": { "controllers": 2, "hub": false },
   "storage": { "emmc": true, "sd": "optional", "nvme": "optional" },
+  "npuCores": 2,
   "npu": true,
   "vdec": true,
   "thermal": { "zones": 3, "maxC": 90 },

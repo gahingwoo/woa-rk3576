@@ -137,22 +137,59 @@ function Run-Tool {
         return [pscustomobject]@{ ExitCode = -1; Output = "no mock for '$Key'"; TimedOut = $false }
     }
     $o = Join-Path $script:OutDir ('tool-' + ($Key -replace '[^A-Za-z0-9_.-]', '_') + '.txt')
-    $e = "$o.err"
-    $quoted = @()
-    foreach ($a in $Arguments) { if ($a -match '\s') { $quoted += '"' + $a + '"' } else { $quoted += $a } }
-    $sp = @{ FilePath = $Exe; RedirectStandardOutput = $o; RedirectStandardError = $e; PassThru = $true; NoNewWindow = $true }
-    if ($quoted.Count) { $sp.ArgumentList = $quoted }
-    $p = Start-Process @sp
-    $null = $p.Handle  # keeps the exit code readable after the process ends
+    # System.Diagnostics.Process owns the process from CreateProcess on, so
+    # the exit code is always there. Start-Process with redirection does not:
+    # Windows PowerShell 5.1 starts the process itself and looks it up again
+    # by PID, and a tool that exits before that (rknputest info does) leaves
+    # a Process object whose ExitCode is $null.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Exe
+    $psi.Arguments = Join-Arguments $Arguments
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $psi
+    try { [void]$p.Start() }
+    catch {
+        $text = "could not start ${Exe}: $($_.Exception.Message)"
+        Set-Content -Path $o -Value $text -Encoding UTF8
+        return [pscustomobject]@{ ExitCode = -1; Output = $text; TimedOut = $false }
+    }
+    # both pipes read at once, or a tool that fills one of them blocks
+    $so = $p.StandardOutput.ReadToEndAsync()
+    $se = $p.StandardError.ReadToEndAsync()
     $timedOut = -not $p.WaitForExit($TimeoutSec * 1000)
-    if ($timedOut) { try { $p.Kill() } catch {} }
+    if ($timedOut) { try { $p.Kill() } catch {}; [void]$p.WaitForExit(5000) }
+    else { $p.WaitForExit() }  # the no-timeout overload also waits for the pipes to drain
     $text = ''
-    if (Test-Path $o) { $text = Get-Content -Raw $o }
-    if ((Test-Path $e) -and (Get-Item $e).Length) { $text += "`n" + (Get-Content -Raw $e) }
-    Remove-Item $e -ErrorAction SilentlyContinue
+    if ($so.Wait(5000)) { $text = $so.Result }
+    if ($se.Wait(5000) -and $se.Result) { $text += "`n" + $se.Result }
     $code = -1
-    if (-not $timedOut) { $code = $p.ExitCode }
+    if (-not $timedOut) { $code = [int]$p.ExitCode }
+    $p.Dispose()
+    [System.IO.File]::WriteAllText($o, [string]$text, (New-Object System.Text.UTF8Encoding($false)))
     return [pscustomobject]@{ ExitCode = $code; Output = [string]$text; TimedOut = $timedOut }
+}
+
+# One command line from an argument list, quoted the way the C runtime
+# splits it again (CommandLineToArgvW rules).
+function Join-Arguments {
+    param([string[]]$Arguments = @())
+    $parts = @()
+    foreach ($a in $Arguments) {
+        if ($a -and $a -notmatch '[\s"]') { $parts += $a; continue }
+        $s = '"'; $bs = 0
+        foreach ($ch in $a.ToCharArray()) {
+            if ($ch -eq '\') { $bs++; continue }
+            if ($ch -eq '"') { $s += ('\' * (2 * $bs + 1)) + '"' } else { $s += ('\' * $bs) + $ch }
+            $bs = 0
+        }
+        $s += ('\' * (2 * $bs)) + '"'
+        $parts += $s
+    }
+    return ($parts -join ' ')
 }
 
 # The native helpers: English-name PDH counters (the names do not change
@@ -217,6 +254,77 @@ public static class RkRegressNative {
             System.Text.Encoding.ASCII.GetString(b, 16, 8).TrimEnd(' ', '\0'),
             BitConverter.ToUInt32(b, 24).ToString()
         };
+    }
+
+    // Audio endpoints through the MMDevice API, in every state: PnP lists
+    // only present endpoints, and a jack-detected endpoint with nothing
+    // plugged in is not present.
+    [StructLayout(LayoutKind.Sequential)] struct PROPERTYKEY { public Guid fmtid; public int pid; }
+    [StructLayout(LayoutKind.Explicit, Size = 24)] struct PROPVARIANT {
+        [FieldOffset(0)] public ushort vt;
+        [FieldOffset(8)] public IntPtr p;
+        [FieldOffset(8)] public uint ul;
+    }
+    [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPropertyStore {
+        [PreserveSig] int GetCount(out uint n);
+        [PreserveSig] int GetAt(uint i, out PROPERTYKEY k);
+        [PreserveSig] int GetValue(ref PROPERTYKEY k, out PROPVARIANT v);
+    }
+    [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMMDevice {
+        [PreserveSig] int Activate(ref Guid iid, int ctx, IntPtr p, [MarshalAs(UnmanagedType.IUnknown)] out object o);
+        [PreserveSig] int OpenPropertyStore(int access, out IPropertyStore ps);
+        [PreserveSig] int GetId([MarshalAs(UnmanagedType.LPWStr)] out string id);
+        [PreserveSig] int GetState(out int state);
+    }
+    [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMMDeviceCollection {
+        [PreserveSig] int GetCount(out uint n);
+        [PreserveSig] int Item(uint i, out IMMDevice d);
+    }
+    [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMMDeviceEnumerator {
+        [PreserveSig] int EnumAudioEndpoints(int flow, int stateMask, out IMMDeviceCollection c);
+    }
+    [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumerator { }
+    [DllImport("ole32.dll")] static extern int PropVariantClear(ref PROPVARIANT v);
+
+    static string Prop(IPropertyStore ps, string fmtid, int pid) {
+        PROPERTYKEY k = new PROPERTYKEY(); k.fmtid = new Guid(fmtid); k.pid = pid;
+        PROPVARIANT v;
+        if (ps.GetValue(ref k, out v) != 0) return "";
+        try {
+            if (v.vt == 31) return Marshal.PtrToStringUni(v.p) ?? "";   // VT_LPWSTR
+            if (v.vt == 19) return v.ul.ToString();                     // VT_UI4
+            return "";
+        } finally { PropVariantClear(ref v); }
+    }
+
+    // flow (render/capture), state (1 active, 2 disabled, 4 not present,
+    // 8 unplugged), friendly name, adapter name, form factor, KS filter path
+    public static List<string[]> AudioEndpoints() {
+        var r = new List<string[]>();
+        var en = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+        for (int flow = 0; flow < 2; flow++) {
+            IMMDeviceCollection c;
+            int hr = en.EnumAudioEndpoints(flow, 0xF, out c);
+            if (hr != 0) throw new Exception("EnumAudioEndpoints 0x" + hr.ToString("X8"));
+            uint n; c.GetCount(out n);
+            for (uint i = 0; i < n; i++) {
+                IMMDevice d; if (c.Item(i, out d) != 0) continue;
+                int st; d.GetState(out st);
+                IPropertyStore ps; if (d.OpenPropertyStore(0, out ps) != 0) continue;
+                r.Add(new string[] {
+                    flow == 0 ? "render" : "capture", st.ToString(),
+                    Prop(ps, "a45c254e-df1c-4efd-8020-67d146a850e0", 14),  // PKEY_Device_FriendlyName
+                    Prop(ps, "026e516e-b814-414b-83cd-856d6fef4822", 2),   // PKEY_DeviceInterface_FriendlyName
+                    Prop(ps, "1da5d803-d492-4edd-8c23-e0c0ffee7f0e", 0),   // PKEY_AudioEndpoint_FormFactor
+                    Prop(ps, "b3f8fa53-0004-438e-9003-51a46e139bfc", 2)    // the KS filter and pin behind it
+                });
+            }
+        }
+        return r;
     }
 }
 '@
@@ -676,25 +784,136 @@ if (-not $disp -or (-not @($disp.modes).Count)) {
 }
 
 # Audio --------------------------------------------------------------------
-$audio = Fact 'audio' {
+# Endpoints in every state from the MMDevice API (an unplugged headphone
+# endpoint is not a present PnP device); PnP's present-only list when the
+# helper cannot read them. An endpoint is tied to its SAI through the KS
+# filter behind it: \\?\csaudio#rk&cltr#<instance>#{...}\topologyhdmi is the
+# csaudiork3x device enumerated on that SAI (rk3xi2sbus, ACPI\RKCP3004\<_UID>).
+$audioEp = Fact 'audioEndpoints' {
+    if (-not (Load-Native)) { throw 'no native helper' }
     $l = @()
-    foreach ($e in (Get-PnpDevice -PresentOnly -Class AudioEndpoint -ErrorAction SilentlyContinue)) {
-        $l += [pscustomobject]@{ name = $e.FriendlyName; status = [string]$e.Status }
+    foreach ($e in [RkRegressNative]::AudioEndpoints()) {
+        $l += [pscustomobject]@{ flow = $e[0]; state = [int]$e[1]; name = $e[2]; adapter = $e[3]; formFactor = $e[4]; filter = $e[5] }
     }
     , $l
 }
-function Audio-Check([string]$Id, [string]$Name, $CapValue, [string]$CapName, [string]$Pattern, [string]$Hint) {
-    $c = Cap $CapValue $CapName
-    if ($c -eq 'no') { Add-Result $Id $Name 'N-A' '' '' 'not on this board'; return }
-    $hit = @(@($audio) | Where-Object { $_ -and $_.name -match $Pattern })
-    $okHit = @($hit | Where-Object { $_.status -eq 'OK' })
-    if ($okHit.Count) { Add-Result $Id $Name 'PASS' (($okHit | ForEach-Object { $_.name }) -join '; ') "an endpoint matching '$Pattern'"; return }
-    $v = (($hit | ForEach-Object { "$($_.name) ($($_.status))" }) -join '; ')
-    if ($c -eq 'optional') { Add-Result $Id $Name 'SKIP' $v "an endpoint matching '$Pattern'" "optional here: $Hint"; return }
-    Add-Result $Id $Name 'FAIL' $v "an endpoint matching '$Pattern'" $Hint
+$audioSrc = 'MMDevice, all states'
+if ($null -eq $audioEp) {
+    $audioSrc = 'PnP, present endpoints only'
+    $pnpEp = Fact 'audio' {
+        $l = @()
+        foreach ($e in (Get-PnpDevice -PresentOnly -Class AudioEndpoint -ErrorAction SilentlyContinue)) {
+            $l += [pscustomobject]@{ name = $e.FriendlyName; status = [string]$e.Status }
+        }
+        , $l
+    }
+    $audioEp = @(@($pnpEp) | Where-Object { $_ } | ForEach-Object {
+            [pscustomobject]@{ flow = ''; state = $(if ($_.status -eq 'OK') { 1 } else { 0 }); name = $_.name; adapter = ''; formFactor = ''; filter = '' } })
 }
-Audio-Check 'audio.hdmi' 'Audio: HDMI endpoint' $M.audio.hdmi 'hdmiaudio' 'HDMI' 'needs a monitor with speakers on HDMI'
-Audio-Check 'audio.analog' 'Audio: analog (headphone) endpoint' $M.audio.analog 'analog' 'Headphone' 'ES8388 endpoint'
+$audioDev = Fact 'audioDevices' {
+    $l = @()
+    foreach ($d in (Get-PnpDevice -PresentOnly -Class MEDIA -ErrorAction SilentlyContinue)) {
+        $l += [pscustomobject]@{
+            name = $d.FriendlyName; instanceId = $d.InstanceId; status = [string]$d.Status
+            parent = [string](Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_Parent' -ErrorAction SilentlyContinue).Data
+        }
+    }
+    , $l
+}
+$audioDev = @(@($audioDev) | Where-Object { $_ })
+$epState = @{ 0 = 'not OK'; 1 = 'active'; 2 = 'disabled'; 4 = 'not present'; 8 = 'unplugged' }
+
+# The PnP device of the KS filter behind an endpoint, from its path.
+function Ep-Adapter($Ep) {
+    if ([string]$Ep.filter -match '\\\\\?\\([^#\\]+)#([^#\\]+)#([^#\\]+)#') {
+        $id = "$($Matches[1])\$($Matches[2])\$($Matches[3])"
+        return @($audioDev | Where-Object { $_.instanceId -eq $id }) | Select-Object -First 1
+    }
+    return $null
+}
+
+# The render endpoints of one role ('hdmi', 'analog'), from the manifest:
+# audio.<role>Endpoint.filter (the KS filter), .name and .adapter (the
+# endpoint's name, when no filter path is known), audio.<role>Sai (the SAI
+# the csaudiork3x device must sit on, when that is known).
+function Audio-Endpoints($Cfg, [string]$Sai) {
+    $hits = @()
+    foreach ($e in @($audioEp)) {
+        if (-not $e -or $e.flow -eq 'capture') { continue }
+        $full = "$($e.name) $($e.adapter)"
+        $byFilter = $e.filter -and $Cfg.filter -and ($e.filter -match $Cfg.filter)
+        $byName = $Cfg.name -and ($e.name -match $Cfg.name) -and (-not $Cfg.adapter -or $full -match $Cfg.adapter)
+        if (-not ($byFilter -or $byName)) { continue }
+        $a = Ep-Adapter $e
+        if ($Sai -and $a -and $a.parent -and ($a.parent -notlike $Sai)) { continue }
+        $hits += $e
+    }
+    return , $hits
+}
+function Ep-Text($List) { return ((@($List) | Where-Object { $_ } | ForEach-Object { "$($_.name) ($($epState[[int]$_.state]))" }) -join '; ') }
+
+function Audio-Role-Cfg([string]$Role, [string]$DefName) {
+    $cfg = $M.audio."${Role}Endpoint"
+    if (-not $cfg) { $cfg = [pscustomobject]@{ filter = ''; name = $DefName; adapter = '' } }
+    return $cfg
+}
+
+$ca = Cap $M.audio.hdmi 'hdmiaudio'
+if ($ca -eq 'no') {
+    Add-Result 'audio.hdmi' 'Audio: HDMI endpoint' 'N-A' '' '' 'not on this board'
+} else {
+    $cfg = Audio-Role-Cfg 'hdmi' 'HDMI'
+    $exp = "an active render endpoint on $(if ($M.audio.hdmiSai) { $M.audio.hdmiSai } else { 'the HDMI SAI' })"
+    $hit = Audio-Endpoints $cfg $M.audio.hdmiSai
+    $act = @($hit | Where-Object { $_.state -eq 1 })
+    if ($act.Count) {
+        Add-Result 'audio.hdmi' 'Audio: HDMI endpoint' 'PASS' (Ep-Text $act) $exp "read via $audioSrc"
+    } else {
+        $why = 'no HDMI render endpoint'
+        if ($hit.Count) { $why = 'the HDMI endpoint is not active: needs a monitor with speakers on HDMI' }
+        $v = Ep-Text $hit
+        if (-not $hit.Count) { $v = "render endpoints: " + (Ep-Text (@($audioEp) | Where-Object { $_ -and $_.flow -ne 'capture' })); if ($v -eq 'render endpoints: ') { $v = 'no render endpoint' } }
+        $st = 'FAIL'; if ($ca -eq 'optional') { $st = 'SKIP'; $why = "optional here: $why" }
+        Add-Result 'audio.hdmi' 'Audio: HDMI endpoint' $st $v $exp "$why (read via $audioSrc)"
+    }
+}
+
+# Analog: with a codec in the manifest (audio.analogCodec, an ACPI hardware
+# ID), the check is the codec started and the csaudiork3x device on its SAI
+# started; the headphone endpoint only shows while something is plugged into
+# the jack, so it is required only with -Require jack.
+$cn = Cap $M.audio.analog 'analog'
+$needJack = $script:RequireList -contains 'jack'
+if ($cn -eq 'no') {
+    Add-Result 'audio.analog' 'Audio: analog (headphone) endpoint' 'N-A' '' '' 'not on this board'
+} else {
+    $cfg = Audio-Role-Cfg 'analog' 'Headphone'
+    $hit = Audio-Endpoints $cfg $M.audio.analogSai
+    $act = @($hit | Where-Object { $_.state -eq 1 })
+    $codecHid = [string]$M.audio.analogCodec
+    $st = 'PASS'; $why = ''; $v = ''; $exp = 'an active headphone endpoint'
+    if ($codecHid) {
+        $exp = "$codecHid started, its SAI's render device started$(if ($needJack) { ', headphone endpoint active' })"
+        $codec = @($audioDev | Where-Object { $_.instanceId -like "$codecHid\*" }) | Select-Object -First 1
+        $rdev = @($audioDev | Where-Object { $_.parent -and $M.audio.analogSai -and $_.parent -like $M.audio.analogSai }) | Select-Object -First 1
+        if (-not $codec) { $st = 'FAIL'; $why = "no $codecHid device" }
+        elseif ($codec.status -ne 'OK') { $st = 'FAIL'; $why = "codec status $($codec.status)" }
+        elseif ($M.audio.analogSai -and -not $rdev) { $st = 'FAIL'; $why = "no render device on $($M.audio.analogSai)" }
+        elseif ($rdev -and $rdev.status -ne 'OK') { $st = 'FAIL'; $why = "$($rdev.name) status $($rdev.status)" }
+        $v = "$(if ($codec) { "$($codec.name) $($codec.status)" } else { 'no codec' })"
+        if ($rdev) { $v += "; $($rdev.name) $($rdev.status)" }
+        if ($act.Count) { $v += '; ' + (Ep-Text $act) }
+        elseif ($st -eq 'PASS') {
+            if ($needJack) { $st = 'FAIL'; $why = "no active headphone endpoint: $(if ($hit.Count) { Ep-Text $hit } else { 'none listed' })" }
+            else { $why = 'jack unplugged: the headphone endpoint shows only while something is plugged in (-Require jack to insist)' }
+        }
+    } elseif (-not $act.Count) {
+        $st = 'FAIL'; $why = 'ES8388 endpoint'; $v = Ep-Text $hit
+    } else { $v = Ep-Text $act }
+    if ($st -eq 'FAIL' -and $cn -eq 'optional' -and -not $needJack) { $st = 'SKIP'; $why = "optional here: $why" }
+    if ($why) { $why += "; read via $audioSrc" } else { $why = "read via $audioSrc" }
+    Add-Result 'audio.analog' 'Audio: analog (headphone) endpoint' $st $v $exp $why
+}
 
 # Network ------------------------------------------------------------------
 $net = Fact 'network' {
@@ -870,8 +1089,19 @@ if ($cn -eq 'no') {
             Add-Result 'npu.info' 'NPU: rknputest info' 'SKIP' 'rknpu OK' 'exit 0' 'rknputest.exe not found (RK3576 tools, -ToolsDir)'
         } else {
             $r = Run-Tool 'rknputest info' $exe @('info') 60
-            $st = 'FAIL'; if ($r.ExitCode -eq 0) { $st = 'PASS' }
-            Add-Result 'npu.info' 'NPU: rknputest info' $st "exit $($r.ExitCode)" 'exit 0' $(if ($r.TimedOut) { 'timed out' } else { '' })
+            # "registers 0x<base> + 0x<len>, 2 cores" and "RKNPU INFO: OK"
+            $wantCores = 2; if ($M.npuCores) { $wantCores = [int]$M.npuCores }
+            $cores = $null; if ($r.Output -match 'registers 0x[0-9a-fA-F]+ \+ 0x[0-9a-fA-F]+, (\d+) cores') { $cores = [int]$Matches[1] }
+            $verdict = ''; if ($r.Output -match 'RKNPU INFO: ([A-Z ]+)') { $verdict = $Matches[1].Trim() }
+            $st = 'FAIL'; $why = ''
+            if ($r.TimedOut) { $why = 'timed out' }
+            elseif ($r.ExitCode -ne 0) { $why = @{ 1 = 'could not open the device or read its info'; 2 = 'a check failed (see tool-rknputest_info.txt)' }[[int]$r.ExitCode] }
+            elseif ($null -ne $cores -and $cores -ne $wantCores) { $why = "$cores cores, expected $wantCores" }
+            else { $st = 'PASS'; if ($null -eq $cores) { $why = 'core count not in the output (older rknputest?)' } }
+            $v = "exit $($r.ExitCode)"
+            if ($null -ne $cores) { $v += ", $cores cores" }
+            if ($verdict) { $v += ", $verdict" }
+            Add-Result 'npu.info' 'NPU: rknputest info' $st $v "exit 0, $wantCores cores" $why
             if ($st -eq 'PASS') {
                 $r = Run-Tool 'rknputest m3' $exe @('m3', '--core', 'both', '--iters', '1') 120
                 $st = 'FAIL'; if ($r.ExitCode -eq 0) { $st = 'PASS' }

@@ -2,15 +2,16 @@
 
 [English](audio.md) | 简体中文
 
-音频驱动怎样驱动 RK3576 的 SAI，以及固件为它们做了什么。2026-11-24 的状态：
+音频驱动怎样驱动 RK3576 的 SAI，以及固件为它们做了什么。
 
 | 端点 | 板子 | 固件设置 | Windows 驱动 | 状态 |
 |---|---|---|---|---|
-| 耳机孔和耳机孔麦克风（ES8388） | 泰山派 3M | `PcdAnalogAudioPreset`（这块板子上为 TRUE） | rk3xi2sbus、csaudiork3x 1.0.0.135 或更新、es8323、pl330dma | 2026-11-22 起可用 |
-| HDMI 输出，48 kHz 立体声 | 泰山派 3M | `PcdHdmiAudioPreset`（TRUE） | 同上，另加负责 HDMI 的 wddm-mali-g52 | 2026-11-23 起可用 |
-| HDMI 输出 | CM5-IO | `PcdHdmiAudioPreset`（TRUE） | 同上 | 未试过 |
-| ES8388：CN3 排针（OUT2 在测试点上），LIN2/RIN2 差分麦克风焊盘 | CM5-IO | edk2-rk3576 分支 `cm5io-parity` | 同上，es8323 中断可选（`es83-optional-irq`） | 未试过 |
-| ES8388：耳机孔，LIN1 耳机麦克风 | ROCK 4D | edk2-rk3576 分支 `rock4d-parity` | 同上 | 未试过 |
+| 耳机孔和耳机孔麦克风（ES8388） | 泰山派 3M | `PcdAnalogAudioPreset`（这块板子上为 TRUE） | rk3xi2sbus、csaudiork3x 1.0.0.135 或更新、es8323、pl330dma | 板测 |
+| HDMI 输出，48 kHz 立体声 | 泰山派 3M | `PcdHdmiAudioPreset`（TRUE） | 同上，另加负责 HDMI 的 wddm-mali-g52 | 板测 |
+| HDMI 输出 | CM5-IO | `PcdHdmiAudioPreset`（TRUE） | 同上 | 仅 CI |
+| ES8388：CN3 排针（OUT2 在测试点上），LIN2/RIN2 差分麦克风焊盘 | CM5-IO | edk2-rk3576 分支 `cm5io-parity` | 同上，es8323 中断可选 | 分支 |
+| ES8388：耳机孔，LIN1 麦克风 | ROCK 4D | edk2-rk3576 `main` | 同上 | 板测（插拔检测没试过） |
+| HDMI 输出 | ROCK 4D | edk2-rk3576 `main` | 同上，另加负责 HDMI 的 wddm-mali-g52 | 板测 |
 
 这些需要比 0.4.1 新的 edk2-rk3576 固件（下一个正式版发布前用 `ci` 构建）。USB 音频设备用 Windows 自带的
 USB Audio Class 驱动就能用。
@@ -18,8 +19,7 @@ USB Audio Class 驱动就能用。
 CM5-IO 和 ROCK 4D 没有耳机检测线，ES8388 的接法也和泰山派 3M 不同，见
 [其他板子](#其他板子没有插拔检测以及路由属性)。
 
-这一页最初来自音频还不能用时写的计划，见
-[history](../history/2026-11-21-audio-plan.md)。
+最初的计划见 [history](../history/2026-11-21-audio-plan.md)。
 
 ## 硬件
 
@@ -78,7 +78,7 @@ GPIO4 PB2，高电平有效），耳机检测在 GPIO4 PB0（上拉），板载�
 I²S，两者共用一个 LRCK，LOUT1/ROUT1 为 0 dB，OUT2 关闭，板载麦克风（LINPUT1）接到两个录音声道，PGA +24 dB。
 功放使能由 ACPI GpioIo 控制。
 
-### 耳机插拔检测（分支 tspi3m-hp-jack，未在硬件上运行）
+### 耳机插拔检测（仅 CI）
 
 固件（edk2-rk3576 分支 `tspi3m-hp-jack`，基于 `rk3576-gpio-pull`，后者给 GPIO4 PB0 加上上拉）：codec 的
 `_CRS` 把检测线同时声明为双边沿触发的 GpioInt 和 GpioIo 输入，都是 Shared、上拉；还有一个 `_DSD`，包含
@@ -130,24 +130,31 @@ GpioIo、没有 GpioInt，也没有 `rockchip,hp-det-*` 属性。es8323 这时�
 | CM5-IO | LOUT1/ROUT1 接 3 针排针 CN3（HPR、HPL、HP_GND）；LOUT2/ROUT2（AUD_LINEOUT_L/R）只接到测试点 T36/T37，没有接 40 针排针；麦克风焊盘 T34/T35（MIC2P/MIC2N，经 R56/R57/R58 偏置）接 LIN2/RIN2，标注“Differential routing”。HP_DET_L 被 R411 拉低，不能检测 | 3 | 4 |
 | ROCK 4D | LOUT1/ROUT1 接耳机孔 J18；LOUT2/ROUT2 只接未贴片的喇叭功放；耳机麦克风 MIC_INP_PHONE 接 LIN1，RIN1 接 HP_GND，LIN2/RIN2 悬空 | 1 | 1 |
 
+## ROCK 4D：用 ADC 输入读耳机孔
+
+ROCK 4D 的 J18 没有检测开关。它的麦克风触点从 VCCA3V3_CODEC 经 100R + 2.2K 偏置，再经 100K/100K 分压接到 `SARADC_VIN3_HP_HOOK`（原理图 V1.12 第 16 页）：没插时约 1.63 V，插三段插头时接近 0 V（触点落在套筒上），插耳麦时约 0.5 到 1.2 V。所以耳机孔由 SARADC 驱动（[rk3xsaradc](../../drivers/adc/rk3xsaradc/README.md)）读取，带迟滞（低于 1.45 V 算插入，高于 1.52 V 算拔出）和 150 ms 去抖；es8323 的 `_DSD` 里有下面这个属性时跟随它：
+
+| 属性 | 值 |
+|---|---|
+| `rockchip,hp-det-saradc` | 1：插拔状态来自 rk3xsaradc，而不是 GPIO |
+
+（固件：与 `BOARD_CODEC_NO_HPDET` 并列的 `BOARD_CODEC_HPDET_SARADC`。）es8323 在 `\Callback\Rk3xSaradcJack` 上注册，先询问当前状态，之后像处理 GPIO 边沿一样处理每次变化：控制功放，并把 `CSAudioEndpointJackState` 发给 csaudiork3x。SARADC 驱动还没应答或没安装时，端点保持插入状态。它在其他 `Jack*` 值旁边写入 `JackSaradc`（跟随 rk3xsaradc 时为 1）和 `JackSaradcStates`。`JackDetect` 设为 0 同样会关掉它。仅 CI。
+
 ## 还没做的
 
-- 耳机插拔检测已经写好（见上文），还没在板子上运行过。
 - 硬件音量：Windows 的音量在软件里实现，codec 固定在 0 dB。
 - 耳麦麦克风（RINPUT）、48 kHz 以外的采样率，以及 16 位格式。
-- CM5-IO 和 ROCK 4D 的 ES8388：已描述和配置，两块板子上都没运行过。
+- CM5-IO 的 ES8388：已描述和配置，没在板子上运行过。
+- ROCK 4D 用 SARADC 做的耳机插拔检测：没在板子上运行过。
 
 ## 安装
 
 1. 固件：比 0.4.1 新的 edk2-rk3576（见上文）。
 2. 已签名的驱动包在 WinPE 介质的 `woa-audio\` 里，旁边是这次构建的测试证书。部署脚本不会注入它们。
    按[驱动](../drivers.zh-CN.md)一页的方法安装：先信任证书，然后对 rk3xi2sbus、csaudiork3x 和 es8323 运行
-   `pnputil /add-driver ... /install`。`pl330dma` 已经从 `woa-drivers\` 装好了。CI 工作流的 artifact
+   `pnputil /add-driver ...`（只暂存，不加 `/install`），再重启。`pl330dma` 已经从 `woa-drivers\` 装好了。CI 工作流的 artifact
    里是未签名的 catalog，装不上。
 3. 设备管理器里，DSDT 发布的每个 SAI 会出现一个 "Rockchip SAI Bus"，每个下面有一个 "Rockchip I2S Audio (WDM)"；
    泰山派 3M 上还有 "Everest 8388 Audio Codec (RK3576 SAI)"。
 4. 声音设置里会出现 "Rockchip HDMI"（接了带扬声器的 HDMI 显示器时），泰山派 3M 上还有 "Rockchip Headphones" 和
    "Rockchip Microphone"。
-
-2026-11-21 之前，Windows 用 RK3588 I2S-TDM 的寄存器布局驱动 SAI，TX 从未启动（XFER 为 0x3 而不是 0x7，DMACR 为
-0x70010 而不是同一块板子上 Linux 的 0xF0110）；csaudiork3x 1.0.0.135 改用 RK3576 SAI 的布局。

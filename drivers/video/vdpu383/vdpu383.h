@@ -13,6 +13,8 @@
 #include <intrin.h>
 
 #include "vdpu383_ioctl.h"
+#include "vdpu383_import.h"
+#include "vdpu383_check.h"
 
 #define V383_LOG(fmt, ...) \
     DbgPrintEx(DPFLTR_IHVVIDEO_ID, DPFLTR_ERROR_LEVEL, "vdpu383: " fmt "\n", __VA_ARGS__)
@@ -57,10 +59,40 @@
  * until the decode has been stopped, so a runaway core cannot storm */
 #define V383_MMU_FAULTS_PER_RUN 32
 
+/*
+ * One IOMMU directory and its page tables (made on first use). Dom0 is the
+ * device's: the SRAM, the warm-up buffer and every buffer of a user-mode
+ * handle. Each session (vdpu383_check.h) has one of its own with only its
+ * buffers and imports in it, and the decoder runs a session's decode with
+ * that directory, so it cannot reach anything else. IO addresses are handed
+ * out from one bitmap for all of them, so an address names one buffer.
+ */
+typedef struct _V383_DOMAIN {
+    PULONG          Dt;
+    PHYSICAL_ADDRESS DtPa;
+    PULONG          PtVa[V383_PT_COUNT];
+    ULONG64         PtPa[V383_PT_COUNT];
+} V383_DOMAIN, *PV383_DOMAIN;
+
+/* Per file object. A session: opened from kernel mode (maliwddm, for the
+ * process Pid; vdpu383_check.h). */
+typedef struct _V383_FILE {
+    BOOLEAN         Session;
+    BOOLEAN         CountedUser;    /* a user-mode open counted against UserAccess 0's one handle */
+    HANDLE          Pid;
+    PV383_DOMAIN    Dom;            /* session: its directory, NULL with the IOMMU off */
+} V383_FILE, *PV383_FILE;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(V383_FILE, GetFileContext)
+
+/* Sessions open at once, all processes together */
+#define V383_MAX_SESSIONS   64
+
 typedef struct _V383_ALLOC {
     LIST_ENTRY      Link;
     ULONG           Handle;
     WDFFILEOBJECT   Owner;
+    PV383_DOMAIN    Dom;        /* the directory its pages are entered in (Iova) */
     PEPROCESS       Process;
     BOOLEAN         Iova;       /* pages from MmAllocatePagesForMdlEx, mapped at Dma */
     PVOID           Kva;        /* contiguous path only */
@@ -69,6 +101,13 @@ typedef struct _V383_ALLOC {
     SIZE_T          Size;
     PMDL            Mdl;
     PVOID           UserVa;
+    /* IOCTL_VDPU383_IMPORT: another driver's pages at Dma (Iova TRUE, no
+     * Mdl, no UserVa, no Process). Dead: the exporter took them back (or
+     * they were never entered), the entries are clear, the IO addresses
+     * stay reserved for a refresh. Token: the export the pages are from. */
+    BOOLEAN         Import;
+    BOOLEAN         Dead;
+    ULONG64         Token;
 } V383_ALLOC, *PV383_ALLOC;
 
 /* Contiguous memory one open handle may hold (V383Alloc). */
@@ -101,7 +140,8 @@ typedef struct _DEVICE_CONTEXT {
 
     /* breadcrumbs (Device Parameters), settings */
     volatile LONG   StepSeq;
-    ULONG           WarmupAtD0;     /* Device Parameters WarmupAtD0, default 0 */
+    ULONG           WarmupAtD0;     /* Device Parameters WarmupAtD0, default 1: at D0 entry and after an IP reset */
+    ULONG           WarmRuns;       /* warm-ups the driver ran by itself */
     ULONG           UserAccess;     /* Device Parameters UserAccess, default 0 (EvtDeviceAdd) */
 
     /* warm-up */
@@ -120,10 +160,9 @@ typedef struct _DEVICE_CONTEXT {
     BOOLEAN         SramMapped;
     ULONG           WarmMappedIova; /* the warm-up buffer's identity mapping, or 0 */
     FAST_MUTEX      MmuLock;
-    PULONG          Dt;
-    PHYSICAL_ADDRESS DtPa;
-    PULONG          PtVa[V383_PT_COUNT];
-    ULONG64         PtPa[V383_PT_COUNT];
+    V383_DOMAIN     Dom0;
+    PV383_DOMAIN    ActiveDom;      /* the directory the IOMMU is given (MmuLock) */
+    ULONG           DomainSwitches;
     RTL_BITMAP      IovaMap;
     PULONG          IovaBits;
     ULONG           IovaHint;
@@ -134,6 +173,18 @@ typedef struct _DEVICE_CONTEXT {
     ULONG           RunFaultStatus;
     volatile LONG   MmuFaults;      /* all of them */
     ULONG           AllocFailures;
+
+    /* The decode gate: held across a decode (address check to completion),
+     * an import and a revoke, so the exporter's revoke returns only once
+     * the decoder no longer uses the pages. A synchronization event, not a
+     * mutex: the registry breadcrumbs of a run need PASSIVE_LEVEL. Taken
+     * before AllocLock and MmuLock. */
+    KEVENT          RunGate;
+    ULONG           Imports, Revokes, ImportFailures;
+
+    /* sessions (vdpu383_check.h) and user-mode opens, under AllocLock */
+    ULONG           Sessions, SessionsMade, SessionRuns, SessionRefused;
+    ULONG           UserOpens;
 
     /* DMA buffers handed to user mode */
     WDFWAITLOCK     AllocLock;

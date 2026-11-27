@@ -1,6 +1,7 @@
 ;
 ; bcm4345bt.inf - Broadcom BCM4345C5 Bluetooth on the RK3576 UART6
-; (AP6256 module, LCKFB TaishanPi 3M)
+; (AP6256 module, LCKFB TaishanPi 3M), and the BCM43752's Bluetooth core
+; (BCM4362A2) on UART4 (BW3752-50B1 module, ArmSoM CM5 on the CM5-IO)
 ;
 ; Target: Windows on ARM64. Binds ACPI\RKCP4345, which the TaishanPi 3M
 ; firmware (edk2-rk3576, branch tspi3m-bt-acpi) publishes as \_SB.BTH0 with
@@ -10,8 +11,14 @@
 ; MS_BTHX_BTHMINI, on which the in-box bth.inf installs BthMini and the
 ; Windows Bluetooth stack.
 ;
-; The patchram (BCM4345C5.hcd) is not part of this package; see README.md
-; and install-firmware.ps1. Without it the controller runs its ROM firmware.
+; ACPI\RKCP4362 is the CM5-IO's \_SB.BTH0 (edk2-rk3576, branch
+; cm5io-parity): the same resources in the same order, UART4 instead of
+; UART6. The driver is the same; only the patchram file differs, so that
+; device has an install section of its own that sets FirmwarePath.
+;
+; The patchram (BCM4345C5.hcd, BCM4362A2.hcd) is not part of this package;
+; see README.md and install-firmware.ps1. Without it the controller runs its
+; ROM firmware.
 ;
 ; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
 ; SPDX-License-Identifier: GPL-2.0-only
@@ -40,6 +47,7 @@ bcm4345bt.sys = 1
 
 [Standard.NTARM64.10.0...16299]
 %BCM4345BT.DeviceDesc% = BCM4345BT_Inst,ACPI\RKCP4345
+%BCM4362BT.DeviceDesc% = BCM4362BT_Inst,ACPI\RKCP4362
 
 [BCM4345BT_Inst.NT]
 CopyFiles = BCM4345BT_CopyFiles
@@ -59,6 +67,24 @@ HKR,,"FirmwarePath",0x00000002,"\SystemRoot\System32\drivers\brcm\BCM4345C5.hcd"
 [BCM4345BT_Inst.NT.Services]
 AddService = bcm4345bt,0x00000002,BCM4345BT_Service
 
+; ACPI\RKCP4362: the same driver and service, the BCM4362A2 patchram.
+[BCM4362BT_Inst.NT]
+CopyFiles = BCM4345BT_CopyFiles
+
+[BCM4362BT_Inst.NT.HW]
+AddReg = BCM4362BT_Inst.NT.HW.AddReg
+
+[BCM4362BT_Inst.NT.HW.AddReg]
+HKR,,"OperatingBaud",0x00010003,1500000
+HKR,,"UartClock",0x00010003,24000000
+HKR,,"FirmwarePath",0x00000002,"\SystemRoot\System32\drivers\brcm\BCM4362A2.hcd"
+
+[BCM4362BT_Inst.NT.Services]
+AddService = bcm4345bt,0x00000002,BCM4345BT_Service
+
+[BCM4362BT_Inst.NT.Wdf]
+KmdfService = bcm4345bt, BCM4345BT_wdfsect
+
 [BCM4345BT_Service]
 DisplayName   = %BCM4345BT.SvcDesc%
 ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
@@ -76,4 +102,5 @@ KmdfLibraryVersion = 1.33
 ProviderName          = "woa-rk3576"
 DiskName              = "BCM4345C5 Bluetooth Installation Disk"
 BCM4345BT.DeviceDesc  = "Broadcom BCM4345C5 Bluetooth (UART)"
+BCM4362BT.DeviceDesc  = "Broadcom BCM43752 Bluetooth (UART)"
 BCM4345BT.SvcDesc     = "Broadcom BCM4345C5 Bluetooth UART Driver"
