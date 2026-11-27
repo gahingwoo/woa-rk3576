@@ -7,7 +7,7 @@ RK3576 H.264/HEVC/VP9/AV1 解码器（RKVDEC，Rockchip 的叫法是 VDPU383）�
 计划作为显示驱动（[wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)）里的 VIDEO_DECODE 节点；
 [lib](lib) 里的寄存器生成代码是纯 C（不调用 KMDF、WDM 或 C 库，不分配内存，不用浮点），可以原样搬过去。
 
-只有在固件设置里打开 *Video Decoder (VDPU383)*（0.4.1 之后的 edk2-rk3576 默认打开，0.4.1 默认关闭，见[硬件功能](../../../docs/features.zh-CN.md#视频解码器)）后，
+只有在固件设置里打开 *Video Decoder (VDPU383)*（edk2-rk3576 从 0.5.0 起默认打开，见[硬件功能](../../../docs/features.zh-CN.md#视频解码器)）后，
 `ACPI\RKCP0383` 这个设备才存在。
 
 | 编码格式 | 状态 |

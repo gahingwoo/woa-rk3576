@@ -23,8 +23,8 @@ The firmware's `_DSD` gives the default per LED, from the board's device tree:
 | ROCK 4D | green (power) | GPIO0_B4 | on |
 | ROCK 4D | blue (user, heartbeat) | GPIO0_C4, active low | heartbeat |
 
-(The CM5-IO table is on that board's firmware branch; the ROCK 4D's is on
-edk2-rk3576 `main`, not tried on the board.)
+(The CM5-IO and ROCK 4D tables are in edk2-rk3576 0.5.0, not tried on
+those boards.)
 
 To change one, as administrator, then restart the device or the board:
 

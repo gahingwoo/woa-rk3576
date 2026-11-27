@@ -30,11 +30,9 @@ Then: [using the hardware](docs/features.md),
 ## Status
 
 Windows 11 23H2 (22631). board-tested: seen working on that board.
-CI only: builds in CI, not run on that board. branch: needs a firmware
-branch that is not on `main`. "ci fw": needs edk2-rk3576 newer than 0.4.1
-(its `ci` build until the next release). not tried: not run on that board.
-The ROCK 4D runs Windows from its NVMe drive and needs ci fw for all of it
-(its ACPI tables are only on edk2-rk3576 `main`).
+CI only: builds in CI, not run on that board. not tried: not run on that
+board. Everything here needs firmware [edk2-rk3576 0.5.0](https://github.com/gahingwoo/edk2-rk3576/releases/tag/0.5.0) or later.
+The ROCK 4D runs Windows from its NVMe drive.
 
 | Feature | Driver | CM5-IO | TaishanPi 3M | ROCK 4D | Note |
 |---|---|---|---|---|---|
@@ -42,22 +40,22 @@ The ROCK 4D runs Windows from its NVMe drive and needs ci fw for all of it
 | SD card | dwcmshc | board-tested | CI only | not tried | TaishanPi 3M: driver starts, no card tried |
 | NVMe | inbox stornvme | board-tested | n/a | board-tested | ROCK 4D: the boot disk |
 | USB-A | inbox usbxhci | board-tested | board-tested | not tried | |
-| USB-C | inbox usbxhci | board-tested | board-tested | not tried | CM5-IO: USB 2.0. TaishanPi 3M: device attached at power-on only, ci fw |
-| Ethernet | dwc_eqos | board-tested | board-tested | board-tested | ROCK 4D: ci fw (RTL8211F RGMII delays) |
+| USB-C | inbox usbxhci | board-tested | board-tested | not tried | CM5-IO: USB 2.0. TaishanPi 3M: device attached at power-on only |
+| Ethernet | dwc_eqos | board-tested | board-tested | board-tested | |
 | GPIO, I2C, SPI, DMA | rk3xgpio, rk3xi2c, rk3xspi, pl330dma | board-tested | board-tested | not tried | drivers start |
-| 40-pin header for apps | rk3xuart, inbox rhproxy | branch | CI only | CI only | off by default in firmware; [40-pin header](docs/pin40.md) |
+| 40-pin header for apps | rk3xuart, inbox rhproxy | CI only | CI only | CI only | off by default in firmware; [40-pin header](docs/pin40.md) |
 | Display, framebuffer | inbox BasicDisplay | board-tested | board-tested | board-tested | one mode |
 | Display, GPU | [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52) | CI only | board-tested | board-tested | |
-| Touch (DSI screen) | gt9271 | CI only | board-tested | n/a | ci fw |
-| Headphone jack, microphone | rk3xi2sbus, csaudiork3x, es8323 | n/a | board-tested | board-tested | ci fw. ROCK 4D: jack detect (rk3xsaradc) not tried |
-| HDMI audio | the same | CI only | board-tested | board-tested | with wddm-mali-g52, ci fw |
-| Bluetooth | bcm4345bt | CI only | board-tested | none | no voice, ci fw |
+| Touch (DSI screen) | gt9271 | CI only | board-tested | n/a | |
+| Headphone jack, microphone | rk3xi2sbus, csaudiork3x, es8323 | n/a | board-tested | board-tested | ROCK 4D: jack detect (rk3xsaradc) not tried |
+| HDMI audio | the same | CI only | board-tested | board-tested | with wddm-mali-g52 |
+| Bluetooth | bcm4345bt | CI only | board-tested | none | no voice |
 | Wi-Fi | none | none | none | none | [wireless](docs/dev/wireless.md) |
 | NPU | [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu) | none | board-tested | board-tested | |
 | Video decoder (VDPU383) | vdpu383 | CI only | board-tested | board-tested | test tool only, no players yet |
 | ADC keys | [rk3xsaradc](drivers/adc/rk3xsaradc) | CI only | CI only | CI only | TaishanPi 3M: Recovery key = power button |
-| Power button (RK806) | [rk806pwrkey](drivers/input/rk806pwrkey) | branch | n/a | CI only | |
-| Board LEDs | [rkled](drivers/leds/rkled) | branch | CI only | CI only | |
+| Power button (RK806) | [rk806pwrkey](drivers/input/rk806pwrkey) | CI only | n/a | CI only | |
+| Board LEDs | [rkled](drivers/leds/rkled) | CI only | CI only | CI only | |
 | Hardware watchdog | inbox (firmware WDAT) | CI only | CI only | CI only | test with [wdthang](tools/wdthang) |
 | RTC, PMIC, pin controller | [null](drivers/null) | CI only | board-tested | board-tested | no driver needed, only names the devices |
 | EEPROM | [rkeeprom](drivers/misc/rkeeprom) | n/a | n/a | CI only | |
@@ -66,9 +64,11 @@ Each result is from one board. Details: [features](docs/features.md).
 
 ## Releases
 
-Tagged releases carry the WinPE image (`woa-rk3576-winpe-<tag>.img.xz`),
-the drivers and `SHA256SUMS.txt`. The touch, Bluetooth and audio drivers are
-newer than 0.1.1.
+[Release 0.5.0](https://github.com/gahingwoo/woa-rk3576/releases/tag/0.5.0)
+carries the WinPE image (`woa-rk3576-winpe-0.5.0.img.xz`), one driver
+package for all three boards (`rk3576-drivers-arm64-0.5.0.zip`, with
+`install.cmd`), the tools (`rk3576-tools-arm64-0.5.0.zip`) and
+`SHA256SUMS.txt`. Use it with firmware edk2-rk3576 0.5.0.
 
 The [`ci`](https://github.com/gahingwoo/woa-rk3576/releases/tag/ci)
 pre-release holds the WinPE image of the latest successful build of `main`

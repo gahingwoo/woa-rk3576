@@ -10,7 +10,7 @@ and [woa-rk3576-npu](https://github.com/gahingwoo/woa-rk3576-npu).
 ## All of them at once
 
 The [driver package](../tools/rk3576-drivers/README.md)
-(`rk3576-drivers-arm64.zip` on the releases) holds every driver for the
+(`rk3576-drivers-arm64-0.5.0.zip` in [release 0.5.0](https://github.com/gahingwoo/woa-rk3576/releases/tag/0.5.0)) holds every driver for the
 three boards and an `install.cmd` that installs the board's list.
 
 ## Before anything: the clock

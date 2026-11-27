@@ -41,7 +41,7 @@ boot. So the image is applied with DISM from this repository's WinPE.
   image". How: [edk2-rk3576 flashing](https://edk2.gahingwoo.com/flash.html).
 - The WinPE image from this repository's
   [latest release](https://github.com/gahingwoo/woa-rk3576/releases/latest)
-  (0.1.1 or later), and a USB stick large enough for it and `install.wim`.
+  (0.5.0), and a USB stick large enough for it and `install.wim`.
 - `install.wim` or `install.esd` from a Windows 11 23H2 ARM64 ISO.
 - A USB keyboard. On the TaishanPi 3M, an HDMI monitor or LCKFB's DSI screen.
 
@@ -49,10 +49,8 @@ Do not use older parts: firmware before 0.3.0 (TaishanPi 3M) or 0.4.0
 (CM5-IO) and the 0.1.0 drivers ran the eMMC at 148.5 MHz and could corrupt
 files silently.
 
-On the TaishanPi 3M, touch, Bluetooth, the headphone jack, HDMI audio and the
-USB-C port need firmware newer than 0.4.1: the edk2-rk3576
-[`ci` build](https://edk2.gahingwoo.com/flash.html#the-rolling-ci-build)
-until the next release. The install itself works with 0.4.1.
+Use edk2-rk3576 [0.5.0](https://github.com/gahingwoo/edk2-rk3576/releases/tag/0.5.0) or later. Older releases cannot start Windows on the
+ROCK 4D, and lack touch, Bluetooth, audio and USB-C on the TaishanPi 3M.
 
 The finished layout: firmware in eMMC partition 1 (untouched), Windows on the
 rest of the eMMC, any NVMe untouched.
@@ -108,8 +106,9 @@ After the first boot:
 
 - set the clock up as in [troubleshooting](troubleshooting.md#the-clock-is-wrong-after-every-boot)
   (TaishanPi 3M);
-- add the drivers you want: [features](features.md),
-  [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52) for the GPU.
+- install the [driver package](https://github.com/gahingwoo/woa-rk3576/releases/tag/0.5.0) `rk3576-drivers-arm64-0.5.0.zip`:
+  `install.cmd /online <board>`, then restart. It has every driver,
+  the GPU's included ([driver package](../tools/rk3576-drivers/README.md)).
 
 `tools/woa-deploy/add-drivers.cmd` adds or updates drivers in an existing
 installation from WinPE without erasing it. Other ways:
@@ -142,8 +141,8 @@ installation from WinPE without erasing it. Other ways:
 ### Radxa ROCK 4D
 
 - No eMMC: the firmware is in SPI NOR and Windows goes on the NVMe drive.
-- Needs edk2-rk3576 `main` (its `ci` build): 0.4.1 and older are built
-  without ACPI for this board and cannot start Windows.
+- Needs edk2-rk3576 0.5.0 or later: older releases have no ACPI for this
+  board and cannot start Windows.
 - The deploy script on `main` installs to the eMMC only. The NVMe target is
   on branch `rock4d-nvme`, not merged yet.
 - No Wi-Fi or Bluetooth under Windows (AIC8800D80, no driver on `main`).

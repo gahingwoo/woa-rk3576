@@ -10,12 +10,11 @@ them.
 | Headphone jack and jack microphone (ES8388) | TaishanPi 3M | `PcdAnalogAudioPreset` (TRUE on this board) | rk3xi2sbus, csaudiork3x 1.0.0.135 or later, es8323, pl330dma | board-tested |
 | HDMI output, 48 kHz stereo | TaishanPi 3M | `PcdHdmiAudioPreset` (TRUE) | the same, and wddm-mali-g52 driving HDMI | board-tested |
 | HDMI output | CM5-IO | `PcdHdmiAudioPreset` (TRUE) | the same | CI only |
-| ES8388: CN3 header (OUT2 on test pads), LIN2/RIN2 differential microphone pads | CM5-IO | edk2-rk3576 branch `cm5io-parity` | the same, es8323 with optional interrupt | branch |
-| ES8388: headphone jack, LIN1 microphone | ROCK 4D | edk2-rk3576 `main` | the same | board-tested (jack detect not tried) |
-| HDMI output | ROCK 4D | edk2-rk3576 `main` | the same, and wddm-mali-g52 driving HDMI | board-tested |
+| ES8388: CN3 header (OUT2 on test pads), LIN2/RIN2 differential microphone pads | CM5-IO | edk2-rk3576 0.5.0 | the same, es8323 with optional interrupt | CI only |
+| ES8388: headphone jack, LIN1 microphone | ROCK 4D | edk2-rk3576 0.5.0 | the same | board-tested (jack detect not tried) |
+| HDMI output | ROCK 4D | edk2-rk3576 0.5.0 | the same, and wddm-mali-g52 driving HDMI | board-tested |
 
-These need edk2-rk3576 firmware newer than 0.4.1 (the `ci` build until the
-next release). A USB audio device works with Windows' inbox USB Audio Class
+These need edk2-rk3576 firmware 0.5.0 or later. A USB audio device works with Windows' inbox USB Audio Class
 driver.
 
 The CM5-IO and the ROCK 4D have no jack-detect line, and their ES8388 is
@@ -194,7 +193,7 @@ other `Jack*` values. `JackDetect` = 0 turns this off too. CI only.
 
 ## Installing
 
-1. Firmware: edk2-rk3576 newer than 0.4.1 (see above).
+1. Firmware: edk2-rk3576 0.5.0 or later.
 2. The signed packages are on the WinPE media in `woa-audio\`, next to the
    run's test certificate. They are not injected by the deploy script.
    Install them as in [drivers](../drivers.md): trust the certificate, then

@@ -590,7 +590,7 @@ blocks of 256 bytes, F2 watermark 0x40 with the watermark enable and
 message-busy control 0xC0, CMD_NODEC instead of CMD14), the INF matches
 `SD\VID_02D0&PID_AAE8` and `PID_AAE7`, and `tools/bwltest` has a simulated
 BCM43752 (chipcommon with a separate PMU core). The firmware side is
-edk2-rk3576 `cm5io-parity`: the "SDIO Wi-Fi" option and the `RKCPFE2D` SSDT,
+edk2-rk3576 0.5.0: the "SDIO Wi-Fi" option and the `RKCPFE2D` SSDT,
 with the controller and GPIOs the TaishanPi 3M uses (the ArmSoM-CM5-1V1
 schematic, page 17: SDMMC1 M0, WL_REG_ON GPIO1_C6, host wake GPIO0_B0, LPO
 from the LK8563S). ArmSoM's vendor device tree still says `rtl8852bs`:

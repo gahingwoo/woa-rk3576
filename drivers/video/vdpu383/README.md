@@ -12,8 +12,7 @@ builder in [lib](lib) is plain C (no KMDF, WDM or C library calls, no
 allocation, no floating point) so it can move there unchanged.
 
 The device `ACPI\RKCP0383` exists only when *Video Decoder (VDPU383)* is
-enabled in the firmware setup (on by default in edk2-rk3576 newer than
-0.4.1, off in 0.4.1; see
+enabled in the firmware setup (on by default since edk2-rk3576 0.5.0; see
 [features](../../../docs/features.md#video-decoder)).
 
 | Codec | Status |
