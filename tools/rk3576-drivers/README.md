@@ -37,7 +37,16 @@ starts now) and marks the present devices with no driver or an older one
 for reinstall at the next boot. It never marks the SD/eMMC hosts (dwcsdhc,
 dwcmshc), which Windows may run from, nor the Ethernet adapter unless it has
 no driver; their new drivers are staged only and come in with an offline
-install. To see what would be marked, without changing anything:
+install.
+
+Two minutes after that restart a SYSTEM task (`rk3576-drivers-verify`)
+checks that every marked device took its new driver. One that did not is
+marked once more and needs one more restart: the task restarts Windows by
+itself only when nobody is signed in, and otherwise says so (a message, a
+notice at sign-in, the Application event log). Then it removes itself. Its
+log is `%ProgramData%\RK3576\drivers\verify-bound.log`.
+
+To see what would be marked, without changing anything:
 
     powershell -ExecutionPolicy Bypass -File install-online.ps1 -Board rock4d -Plan
 
@@ -53,4 +62,5 @@ The board is `tspi3m`, `cm5io` or `rock4d`.
 from the same commit (`build-woa.ps1`), takes maliwddm and rknpu from the
 latest successful builds of wddm-mali-g52 and woa-rk3576-npu, and runs
 `assemble.py`. `test_assemble.py` tests it; the workflow also plans an
-online install of each board on a Windows runner.
+online install of each board on a Windows runner, and `test_online.ps1`
+runs the follow-up check against made-up devices.
