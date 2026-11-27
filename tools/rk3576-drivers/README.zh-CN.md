@@ -2,9 +2,9 @@
 
 [English](README.md) | 简体中文
 
-RK3576 板子的全部 Windows 驱动打成一个 zip：`rk3576-drivers-arm64.zip`，一个版本号，一个安装脚本。
-Maskrom Studio 按所选的板子安装它。CI 构建放在
-[`ci` 预发布版](https://github.com/gahingwoo/woa-rk3576/releases/tag/ci)，没有在板子上测过。
+RK3576 板子的全部 Windows 驱动打成一个 zip：`rk3576-drivers-arm64-<版本>.zip`，一个版本号，一个安装脚本。
+Maskrom Studio 按所选的板子安装它。从 [0.5.0 正式版](https://github.com/gahingwoo/woa-rk3576/releases/tag/0.5.0)下载
+（[`ci` 预发布版](https://github.com/gahingwoo/woa-rk3576/releases/tag/ci)里是 `main` 未经测试的构建）。
 
 ## 里面有什么
 

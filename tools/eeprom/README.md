@@ -25,7 +25,7 @@ There is no write command.
 
 ## Test plan (ROCK 4D)
 
-1. Firmware with the EEPROM declared (edk2-rk3576 `main`); install rkeeprom.
+1. Firmware with the EEPROM declared (edk2-rk3576 0.5.0 or later); install rkeeprom.
 2. `eeprom info`: 2048 bytes in 8 blocks; either the decoded Radxa record
    (vendor "Radxa", the serial number, a MAC that matches the one printed on
    the board or seen by Linux) or "no known format" with a dump.

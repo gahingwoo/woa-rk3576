@@ -2,7 +2,7 @@
 
 [English](features.md) | 简体中文
 
-各项功能在 Windows 11 23H2 下需要什么。各板的状态见 [README](../README.zh-CN.md#状态)。"ci 固件"指 0.4.1 之后的 edk2-rk3576：下一个正式版之前用它的 [`ci` 构建](https://edk2.gahingwoo.com/flash.zh-CN.html#滚动的-ci-构建)。
+各项功能在 Windows 11 23H2 下需要什么。各板的状态见 [README](../README.zh-CN.md#状态)。固件：[edk2-rk3576 0.5.0](https://github.com/gahingwoo/edk2-rk3576/releases/tag/0.5.0) 或更新。
 
 ## 存储、USB、以太网
 
@@ -13,8 +13,8 @@
 | NVMe（CM5-IO、ROCK 4D） | 系统自带 `stornvme` | ROCK 4D 从它启动 Windows |
 | USB-A | 系统自带 `usbxhci` | |
 | USB-C，CM5-IO | 系统自带 `usbxhci` | USB 2.0 |
-| USB-C，泰山派 3M | 系统自带 `usbxhci` | ci 固件。只有上电前插好的设备可用（USB 3，硬盘 329 MB/s）；开机后再插的设备要等下次启动才有电。要接充电器或电脑，先重启 |
-| 以太网 | `dwc_eqos` | DHCP；泰山派 3M 上是 1 Gbps。ROCK 4D：ci 固件（它设置 RTL8211F 的 RGMII 延时） |
+| USB-C，泰山派 3M | 系统自带 `usbxhci` | 只有上电前插好的设备可用（USB 3，硬盘 329 MB/s）；开机后再插的设备要等下次启动才有电。要接充电器或电脑，先重启 |
+| 以太网 | `dwc_eqos` | DHCP；泰山派 3M 上是 1 Gbps |
 
 ## 显示
 
@@ -22,11 +22,11 @@
 
 装了 [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)（泰山派 3M、ROCK 4D）后，桌面由 Mali-G52 绘制，DSI 屏可以转成横屏，有亮度滑块，HDMI 支持热插拔和 HDMI 音频（DSI 屏只有泰山派 3M 有）。具体设置见那个仓库。
 
-## 触摸（泰山派 3M，ci 固件）
+## 触摸（泰山派 3M）
 
 [gt9271](../drivers/input/gt9271) 驱动 DSI 屏的 GT9271，十点触摸。只有接着屏幕时，固件才声明触摸控制器（`\_SB.I2C0.TCH0`，`RKCP9271`）。
 
-## 音频（泰山派 3M、ROCK 4D，ci 固件）
+## 音频（泰山派 3M、ROCK 4D）
 
 - 耳机孔和耳机麦克风：rk3xi2sbus、es8323 和 csaudiork3x 1.0.0.135 或更新版本。保留已装好的 pl330dma。
 - HDMI 音频：同一套驱动，并由 wddm-mali-g52 驱动 HDMI（它的 `HdmiHpd` 设为 3）。
@@ -35,7 +35,7 @@
 
 细节见[音频](dev/audio.zh-CN.md)。
 
-## 蓝牙（泰山派 3M，ci 固件）
+## 蓝牙（泰山派 3M）
 
 [bcm4345bt](../drivers/bluetooth/bcm4345bt)：能配对、传文件。不能通话，耳机麦克风也不能用（SCO 走的 PCM 链路没有驱动）。
 
@@ -44,7 +44,7 @@
 
 ## 视频解码器
 
-[vdpu383](../drivers/video/vdpu383) 和它的测试工具 `vdpu383test` 在泰山派 3M 上解码 H.264，一致性码流的输出与 FFmpeg 逐位一致；在 ROCK 4D 上也能用。需要在固件设置里打开 *Video Decoder (VDPU383)*（ci 固件里默认打开，0.4.1 里默认关闭）。播放器还用不上它：见[视频解码](dev/video-decode.zh-CN.md)。
+[vdpu383](../drivers/video/vdpu383) 和它的测试工具 `vdpu383test` 在泰山派 3M 上解码 H.264，一致性码流的输出与 FFmpeg 逐位一致；在 ROCK 4D 上也能用。需要在固件设置里打开 *Video Decoder (VDPU383)*（从 0.5.0 起默认打开）。播放器还用不上它：见[视频解码](dev/video-decode.zh-CN.md)。
 
 ## 泰山派 3M 上的按键（仅 CI）
 
@@ -55,13 +55,13 @@
 | RECOVERY | 电源按钮：短按执行"控制面板 > 电源选项 > 选择电源按钮的功能"里设定的动作 |
 | RESET | 复位开发板 |
 
-需要 edk2-rk3576 的 `main`（设置项 "ADC keys for the OS"，这块板上默认打开）和 rk3xsaradc 驱动。开机或唤醒后要先看到按键松开，按键才生效，而且要按住两次采样（约 200 ms），所以开机时按住 RECOVERY 不会有动作。
+需要 edk2-rk3576 0.5.0（设置项 "ADC keys for the OS"，这块板上默认打开）和 rk3xsaradc 驱动。开机或唤醒后要先看到按键松开，按键才生效，而且要按住两次采样（约 200 ms），所以开机时按住 RECOVERY 不会有动作。
 
 检查：`reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0ADC\0\Device Parameters"` 应显示 `DiagKeysArmed 1`，按一下之后 `DiagHidReports` 变大。如果这个 ADC 设备碍事，关掉这个设置项，固件就不再碰 ADC。
 
 ## 其他板子的 ADC 按键和耳机插孔（仅 CI）
 
-[rk3xsaradc](../drivers/adc/rk3xsaradc) 绑定 `ACPI\RKCP0ADC`（ROCK 4D：ci 固件；CM5-IO：固件分支）。它们的 Maskrom 键成为厂商页 0xFF00 上的 HID 按键，Windows 本身不处理。ROCK 4D 的耳机插孔没有检测开关，在 ADC 通道 3 上读取，经 es8323 控制"耳机"端点。`tools/adctest` 可读任意通道。
+[rk3xsaradc](../drivers/adc/rk3xsaradc) 绑定 `ACPI\RKCP0ADC`（ROCK 4D：0.5.0 固件；CM5-IO：固件分支）。它们的 Maskrom 键成为厂商页 0xFF00 上的 HID 按键，Windows 本身不处理。ROCK 4D 的耳机插孔没有检测开关，在 ADC 通道 3 上读取，经 es8323 控制"耳机"端点。`tools/adctest` 可读任意通道。
 
 ## NPU
 

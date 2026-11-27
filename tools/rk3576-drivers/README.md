@@ -3,10 +3,11 @@
 English | [简体中文](README.zh-CN.md)
 
 Every Windows driver for the RK3576 boards in one zip,
-`rk3576-drivers-arm64.zip`, with one version and one install script.
-Maskrom Studio installs it for the chosen board. The CI build is on the
-[`ci` pre-release](https://github.com/gahingwoo/woa-rk3576/releases/tag/ci)
-and is untested on boards.
+`rk3576-drivers-arm64-<version>.zip`, with one version and one install
+script. Maskrom Studio installs it for the chosen board. Get it from
+[release 0.5.0](https://github.com/gahingwoo/woa-rk3576/releases/tag/0.5.0)
+(the [`ci` pre-release](https://github.com/gahingwoo/woa-rk3576/releases/tag/ci)
+has the untested build of `main`).
 
 ## What is in it
 
