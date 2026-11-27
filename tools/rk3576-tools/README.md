@@ -12,7 +12,7 @@ bundle that installs into `%ProgramFiles%\RK3576`:
 | `npu\charsiu_run.exe` | runs a language model (gguf) on the NPU | woa-rk3576-npu (charsiu, built for Windows) |
 | `npu\rknpu-perfcounters.ps1` | registers the NPU counters by hand (the installer does it on its own) | woa-rk3576-npu |
 | `setup\` | the installer's scripts, kept for the first boot, the counter task and uninstalling | woa-rk3576 |
-| `setup\rk3576-browser-gpu.ps1` | Edge, Chrome and WebView2 on the GPU at WDDM 2.x ([BROWSER-GPU.md](BROWSER-GPU.md)); installed to `browser-gpu\` | woa-rk3576 |
+| `setup\rk3576-browser-gpu.ps1` | takes out the browser switch an earlier bundle added ([BROWSER-GPU.md](BROWSER-GPU.md)) | woa-rk3576 |
 | `VERSION.txt` | the bundle version and the commits it was built from | CI |
 
 CI builds it on every push of woa-rk3576 as the artifact `rk3576-tools-arm64`:
@@ -37,11 +37,10 @@ administrator rights). It:
   and adds the task `\RK3576\Performance counters` (SYSTEM, 30 s after every
   start) that registers them again when a driver update has moved them. A
   driver that is not installed is skipped and picked up at a later start.
-- makes Edge, Chrome and WebView2 render on the GPU while it runs WDDM 2.x:
-  `setup\rk3576-browser-gpu.ps1 -Action Install` adds
-  `--disable-direct-composition` to their shortcuts, open commands and
-  WebView2's arguments, and the task `\RK3576\Browser GPU` keeps it there
-  after browser updates ([BROWSER-GPU.md](BROWSER-GPU.md)).
+- takes `--disable-direct-composition` back out of Edge, Chrome and
+  WebView2 where an earlier bundle put it, with its task
+  `\RK3576\Browser GPU` (`setup\rk3576-browser-gpu.ps1 -Action Install`).
+  The fixed maliwddm needs no browser switch ([BROWSER-GPU.md](BROWSER-GPU.md)).
 
 `install.cmd /quiet /nostart` installs without the pause and without
 starting rk-monitor now. Log: `%ProgramData%\RK3576\setup.log`.
@@ -53,8 +52,8 @@ Settings, Apps, RK3576 tools; or the Start menu's Uninstall RK3576 tools; or
 It removes everything the install added: the folder, the shortcuts, the
 logon task (and the Run entry of an offline install), `HKLM\SOFTWARE\RK3576`,
 the Apps entry, the counter task and the task folder, the
-counter registrations it made, the browser GPU switch (taken out of every
-shortcut and command first, policies given back), `%ProgramData%\RK3576`, and every user's
+counter registrations it made, the browser switch of an earlier bundle (taken out of every
+shortcut and command, policies given back), `%ProgramData%\RK3576`, and every user's
 rk-monitor settings (`HKCU\Software\RK3576` and a per-user Run entry,
 through the profiles' `NTUSER.DAT` for users who are not signed in). The
 drivers are not touched.
