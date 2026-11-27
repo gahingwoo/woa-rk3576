@@ -9,7 +9,8 @@
 # manifest is not the one registered last time (or whose registration is
 # gone), it unregisters the old one by provider GUID and registers the new.
 # A driver that is not installed, or a package without a manifest, is
-# skipped. Nothing else is changed.
+# skipped. Besides, an NPU that has no UserAccess value yet gets one
+# (rk3576-setup.ps1 -Action NpuAccess, at the end).
 #
 #   rk3576-counters.ps1           register what changed
 #   rk3576-counters.ps1 -Force    register again regardless
@@ -106,5 +107,15 @@ foreach ($pv in $providers) {
     if ($e -ne 0) { $rc = 1; continue }
     Set-ItemProperty -Path $state -Name $svc -Value $man
     Set-ItemProperty -Path $state -Name "${svc}Guid" -Value $guid
+}
+
+# At start, as SYSTEM: an NPU turned on in the firmware after the install
+# gets UserAccess too (rk3576-setup.ps1 -Action NpuAccess, which leaves a
+# value that is there alone).
+$setup = Join-Path $PSScriptRoot 'rk3576-setup.ps1'
+$npuNew = @(Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP3576' -ErrorAction SilentlyContinue | Where-Object {
+    $null -eq (Get-ItemProperty -Path (Join-Path $_.PSPath 'Device Parameters') -Name UserAccess -ErrorAction SilentlyContinue) })
+if (-not $Remove -and $npuNew.Count -and [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem -and (Test-Path $setup)) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Action NpuAccess 2>&1 | ForEach-Object { Say "  $_" }
 }
 exit $rc
