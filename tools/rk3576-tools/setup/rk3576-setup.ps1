@@ -6,6 +6,9 @@
 #                                   Start menu, the two tasks, the counters
 #                                   (run as SYSTEM from SetupComplete.cmd)
 #   -Action Uninstall               remove all of it again
+#   -Action NpuAccess               let ordinary users open the NPU (below);
+#                                   runs itself as SYSTEM when it has to
+#   -Action NpuAccessRemove         take that back, if this script set it
 #
 # What an install leaves on the system, and nothing else:
 #   %ProgramFiles%\RK3576\                          the files
@@ -15,7 +18,10 @@
 #   HKLM\SOFTWARE\RK3576\Monitor  Widget = 1        the desktop widget on by default
 #                                  AutostartTask = 1 the logon task exists (rk-monitor's menu)
 #   HKLM\...\Uninstall\RK3576Tools                  the entry in Settings, Apps
-#   Start menu\Programs\RK3576\                     three shortcuts (all users)
+#   Start menu\Programs\RK3576\                     four shortcuts (all users)
+#   machine Path  %ProgramFiles%\RK3576\npu\bin    the `charsiu` command (bin\charsiu.cmd)
+#   Enum\ACPI\RKCP3576\*\Device Parameters        UserAccess = 1, only where it was not set,
+#     and HKLM\SOFTWARE\RK3576 NpuUserAccess = 1    recording that this script set it
 #   Task Scheduler \RK3576\Performance counters     SYSTEM, at start: rk3576-counters.ps1
 #   the GPU and NPU counter registrations (lodctr), and %ProgramData%\RK3576 (logs)
 #   nothing from rk3576-browser-gpu.ps1: its Install and Uninstall only take
@@ -32,7 +38,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('Install', 'FirstBoot', 'Uninstall')][string]$Action,
+    [ValidateSet('Install', 'FirstBoot', 'Uninstall', 'NpuAccess', 'NpuAccessRemove')][string]$Action,
     [string]$Source,
     [switch]$NoStart
 )
@@ -48,14 +54,164 @@ $TaskPath = '\RK3576\'
 $TaskName = 'Performance counters'
 $LogonTask = 'RK3576 Monitor'
 $LogDir   = Join-Path $env:ProgramData 'RK3576'
-
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+$EnvKey   = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+$NpuBin   = '%ProgramFiles%\RK3576\npu\bin'
+$NpuEnum  = 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP3576'
 $Log = Join-Path $LogDir 'setup.log'
 function Say([string]$m) { "$(Get-Date -Format s) $m" | Tee-Object -FilePath $Log -Append }
 
 function Test-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     return (New-Object Security.Principal.WindowsPrincipal $id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Test-System { return [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem }
+
+# ---- the charsiu command: npu\bin on the machine Path ------------------------
+#
+# npu\bin holds only charsiu.cmd, which runs npu\charsiu.ps1 (charsiu's
+# front door from woa-rk3576-npu) with the execution policy bypassed for
+# that process, so `charsiu` works in cmd and in PowerShell, elevated or not.
+# The front door sets the NPU variables (CHARSIU_NPU and the rest) from
+# [npu] in the user's config, with the board's defaults when there is none.
+# The Path is read and written as REG_EXPAND_SZ, so the entry stays
+# %ProgramFiles%\... and other entries' variables are not expanded.
+
+# One Path entry the same folder as another: variables expanded, no
+# trailing backslash, quotes off, any case.
+function Get-PathKey([string]$e) {
+    $x = [Environment]::ExpandEnvironmentVariables($e.Trim().Trim('"')).TrimEnd('\')
+    return $x.ToLowerInvariant()
+}
+
+function Add-PathEntry([string]$PathValue, [string]$Entry) {
+    $k = Get-PathKey $Entry
+    $parts = @(($PathValue -split ';') | Where-Object { $_ -ne '' })
+    if (@($parts | Where-Object { (Get-PathKey $_) -eq $k }).Count) { return $PathValue }
+    return (@($parts) + $Entry) -join ';'
+}
+
+function Remove-PathEntry([string]$PathValue, [string]$Entry) {
+    $k = Get-PathKey $Entry
+    return (@(($PathValue -split ';') | Where-Object { $_ -ne '' -and (Get-PathKey $_) -ne $k })) -join ';'
+}
+
+function Get-MachinePath {
+    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($EnvKey)
+    try { return [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
+    finally { $key.Close() }
+}
+
+function Set-MachinePath([string]$v) {
+    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($EnvKey, $true)
+    try { $key.SetValue('Path', $v, [Microsoft.Win32.RegistryValueKind]::ExpandString) } finally { $key.Close() }
+    # Explorer reads the new Path, so the next console started from it has it
+    try {
+        if (-not ('Rk3576.Env' -as [type])) {
+            Add-Type -Namespace Rk3576 -Name Env -MemberDefinition @'
+[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+public static extern System.IntPtr SendMessageTimeout(System.IntPtr h, uint m, System.UIntPtr w, string l, uint f, uint t, out System.UIntPtr r);
+'@
+        }
+        $r = [UIntPtr]::Zero
+        [void][Rk3576.Env]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r)
+    } catch { Say "  WM_SETTINGCHANGE: $($_.Exception.Message)" }
+}
+
+function Set-NpuPath {
+    $old = Get-MachinePath
+    $new = Add-PathEntry $old $NpuBin
+    if ($new -ceq $old) { Say "Path: $NpuBin already there"; return }
+    Set-MachinePath $new
+    Say "Path: $NpuBin added (charsiu in any new console)"
+}
+
+function Remove-NpuPath {
+    $old = Get-MachinePath
+    $new = Remove-PathEntry $old $NpuBin
+    if ($new -ceq $old) { return }
+    Set-MachinePath $new
+    Say "Path: $NpuBin removed"
+}
+
+# ---- who may open the NPU ----------------------------------------------------
+#
+# rknpu.sys lets only SYSTEM and administrators open \\.\RKNPU unless its
+# Device Parameters\UserAccess is 1 (and the IOMMU is on), which it reads
+# when the device starts, so it takes effect at the next restart. charsiu's
+# own installer sets it by default as well (woa-rk3576-npu docs/charsiu.md,
+# "Who may use the NPU", with what it means on a machine with several
+# users). This sets it only where no value exists: a UserAccess = 0 that
+# someone chose (charsiu-install.ps1 --admin-only) stays. The Enum keys are
+# SYSTEM's to write, so an administrator runs this through a one-time task.
+
+function Get-NpuParamKeys([string]$Enum = $NpuEnum) {
+    if (-not (Test-Path $Enum)) { return @() }
+    return @(Get-ChildItem -Path $Enum -ErrorAction SilentlyContinue | ForEach-Object { Join-Path $_.PSPath 'Device Parameters' })
+}
+
+# 'set', 'kept 0' or 'kept 1' per instance; no instance: nothing
+function Set-NpuUserAccessIn([string]$Enum) {
+    $out = @()
+    foreach ($dp in Get-NpuParamKeys $Enum) {
+        if (-not (Test-Path $dp)) { New-Item -Path $dp -Force | Out-Null }
+        $v = (Get-ItemProperty -Path $dp -Name UserAccess -ErrorAction SilentlyContinue).UserAccess
+        if ($null -ne $v) { $out += "kept $v"; continue }
+        New-ItemProperty -Path $dp -Name UserAccess -PropertyType DWord -Value 1 -Force | Out-Null
+        $out += 'set'
+    }
+    return $out
+}
+
+function Remove-NpuUserAccessIn([string]$Enum) {
+    $n = 0
+    foreach ($dp in Get-NpuParamKeys $Enum) {
+        if ((Get-ItemProperty -Path $dp -Name UserAccess -ErrorAction SilentlyContinue).UserAccess -eq 1) {
+            Remove-ItemProperty -Path $dp -Name UserAccess -ErrorAction SilentlyContinue
+            $n++
+        }
+    }
+    return $n
+}
+
+# This script, as SYSTEM, once: a task that is gone again when it returns.
+function Invoke-SelfAsSystem([string]$What) {
+    $name = "NPU access $PID"
+    $a = New-ScheduledTaskAction -Execute 'powershell.exe' `
+           -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -Action $What"
+    $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+    try {
+        Register-ScheduledTask -TaskPath $TaskPath -TaskName $name -Action $a -Principal $p -Settings $s -Force | Out-Null
+        Start-ScheduledTask -TaskPath $TaskPath -TaskName $name
+        # 0x41303: has not run yet, 0x41301: running
+        for ($i = 0; $i -lt 120; $i++) {
+            Start-Sleep -Milliseconds 500
+            $t = Get-ScheduledTaskInfo -TaskPath $TaskPath -TaskName $name -ErrorAction SilentlyContinue
+            if (-not $t) { break }
+            if ($t.LastTaskResult -ne 0x41303 -and $t.LastTaskResult -ne 0x41301) { break }
+        }
+    } catch { Say "  $What as SYSTEM: $($_.Exception.Message)" }
+    finally { Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue }
+}
+
+function Set-NpuAccess {
+    if (-not (Test-System)) { Invoke-SelfAsSystem 'NpuAccess'; return }
+    $r = @(Set-NpuUserAccessIn $NpuEnum)
+    if (-not $r.Count) { Say "NPU: no ACPI\RKCP3576 device (the firmware's NPU option is off); the counter task sets UserAccess once it is there"; return }
+    if ($r -contains 'set') {
+        New-Item -Path $Base -Force | Out-Null
+        New-ItemProperty -Path $Base -Name NpuUserAccess -PropertyType DWord -Value 1 -Force | Out-Null
+        Say 'NPU: UserAccess = 1, ordinary users may use it from the next restart'
+    } else { Say "NPU: UserAccess left as it was ($($r -join ', '))" }
+}
+
+function Remove-NpuAccess {
+    if ((Get-ItemProperty -Path $Base -Name NpuUserAccess -ErrorAction SilentlyContinue).NpuUserAccess -ne 1) { return }
+    if (-not (Test-System)) { Invoke-SelfAsSystem 'NpuAccessRemove'; return }
+    $n = Remove-NpuUserAccessIn $NpuEnum
+    Remove-ItemProperty -Path $Base -Name NpuUserAccess -ErrorAction SilentlyContinue
+    Say "NPU: UserAccess taken out again ($n)"
 }
 
 function Stop-Monitor {
@@ -128,7 +284,8 @@ function New-Shortcut([string]$lnk, [string]$target, [string]$arguments, [string
 function Set-Shortcuts {
     New-Item -ItemType Directory -Force -Path $Menu | Out-Null
     New-Shortcut (Join-Path $Menu 'RK3576 Monitor.lnk') (Join-Path $Dir 'rk-monitor.exe') '' 'CPU, GPU and NPU use and the temperatures, in the tray and on the desktop'
-    New-Shortcut (Join-Path $Menu 'RK3576 tools folder.lnk') (Join-Path $env:SystemRoot 'explorer.exe') "`"$Dir`"" 'rknputest, charsiu_run and the scripts'
+    New-Shortcut (Join-Path $Menu 'RK3576 tools folder.lnk') (Join-Path $env:SystemRoot 'explorer.exe') "`"$Dir`"" 'rknputest, charsiu and the scripts'
+    New-Shortcut (Join-Path $Menu 'Charsiu chat.lnk') $env:ComSpec "/k `"$(Join-Path $Dir 'npu\bin\charsiu.cmd')`"" 'A conversation with a language model on the NPU (charsiu)'
     New-Shortcut (Join-Path $Menu 'Uninstall RK3576 tools.lnk') (Join-Path $Dir 'setup\uninstall.cmd') '' 'Remove the RK3576 tools'
     Say "Start menu: $Menu"
 }
@@ -168,6 +325,8 @@ function Invoke-BrowserGpu([string]$what) {
 
 function Complete-Setup {
     Set-MachineRegistry
+    Set-NpuPath
+    Set-NpuAccess
     Set-Shortcuts
     Set-LogonTask
     Set-CounterTask
@@ -211,6 +370,11 @@ function Start-AsUser {
     try { Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe') -ArgumentList "`"$exe`"" } catch { Say "start: $($_.Exception.Message)" }
 }
 
+# dot-sourced (tests\charsiu-cli.tests.ps1): the functions only
+if ($MyInvocation.InvocationName -eq '.') { return }
+
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+if (-not $Action) { Write-Output 'rk3576-setup.ps1 -Action Install|FirstBoot|Uninstall|NpuAccess|NpuAccessRemove'; exit 2 }
 if (-not (Test-Admin)) { Say 'needs to run as administrator (or SYSTEM)'; exit 1 }
 Say "--- $Action"
 
@@ -233,8 +397,12 @@ switch ($Action) {
         Complete-Setup
         Say 'first boot done'
     }
+    'NpuAccess' { Set-NpuAccess }
+    'NpuAccessRemove' { Remove-NpuAccess }
     'Uninstall' {
         Stop-Monitor
+        Remove-NpuAccess
+        Remove-NpuPath
         Invoke-Counters @('-Remove')
         Invoke-BrowserGpu 'Uninstall'
         foreach ($n in $TaskName, $LogonTask) {

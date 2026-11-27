@@ -71,7 +71,7 @@
 
 23H2 的任务管理器不显示 NPU 和温度。rk-monitor 可以：托盘图标显示最高温度，点开有弹窗，还有一个桌面挂件，显示 CPU 各簇、GPU（占用、温度、频率）、NPU 各核心和各温区。没装 maliwddm 时，GPU 一栏显示 "Mali driver not installed"。
 
-安装 RK3576 工具包（CI 产物 `rk3576-tools-arm64`）：解压后运行 `install.cmd`。它把 rk-monitor、`rknputest` 和 `charsiu_run` 放进 `%ProgramFiles%\RK3576`，让 rk-monitor 在每次登录时启动并打开挂件，并在每次驱动更新后重新注册 GPU 和 NPU 的性能计数器。`uninstall.cmd` 会全部删除。详情：[tools/rk3576-tools](../tools/rk3576-tools/README.zh-CN.md)、[tools/rk-monitor](../tools/rk-monitor/README.zh-CN.md)。
+安装 RK3576 工具包（CI 产物 `rk3576-tools-arm64`）：解压后运行 `install.cmd`。它把 rk-monitor、`rknputest` 和 `charsiu` 命令（在系统 Path 上）放进 `%ProgramFiles%\RK3576`，让 rk-monitor 在每次登录时启动并打开挂件，并在每次驱动更新后重新注册 GPU 和 NPU 的性能计数器。`uninstall.cmd` 会全部删除。详情：[tools/rk3576-tools](../tools/rk3576-tools/README.zh-CN.md)、[tools/rk-monitor](../tools/rk-monitor/README.zh-CN.md)。
 
 ## 不支持
 

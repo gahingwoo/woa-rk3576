@@ -104,8 +104,8 @@ CPU per cluster, GPU (use, temperature, clock), NPU per core and the thermal
 zones. Without maliwddm the GPU rows say "Mali driver not installed".
 
 Install the RK3576 tools (CI artifact `rk3576-tools-arm64`): unpack it and
-run `install.cmd`. It puts rk-monitor, `rknputest` and `charsiu_run` into
-`%ProgramFiles%\RK3576`, starts rk-monitor at every logon with the widget
+run `install.cmd`. It puts rk-monitor, `rknputest` and the `charsiu`
+command (on the machine Path) into `%ProgramFiles%\RK3576`, starts rk-monitor at every logon with the widget
 on, and registers the GPU and NPU performance counters again after every
 driver update. `uninstall.cmd` removes all of it. Details:
 [tools/rk3576-tools](../tools/rk3576-tools/README.md),
