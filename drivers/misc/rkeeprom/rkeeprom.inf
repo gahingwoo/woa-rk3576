@@ -62,7 +62,7 @@ ServiceBinary = %13%\rkeeprom.sys
 KmdfService = rkeeprom, RKEEP_wdfsect
 
 [RKEEP_wdfsect]
-KmdfLibraryVersion = 1.33
+KmdfLibraryVersion = 1.31
 
 [Strings]
 ProviderName       = "woa-rk3576"
