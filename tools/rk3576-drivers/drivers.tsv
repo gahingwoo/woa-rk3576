@@ -28,6 +28,7 @@
 # dir        default        optional  from   [os]   what
 dwcsdhc      all            -         woa    eMMC (dwcsdhc)
 dwcmshc      all            -         woa    SD card and SDIO (dwcmshc)
+rk3xnvme     cm5io,rock4d   -         woa    19041-21999  NVMe for Windows 10 (rk3xnvme; Windows 11 keeps stornvme)
 rk3xgpio     all            -         woa    GPIO
 rk3xi2c      all            -         woa    I2C
 pl330dma     all            -         woa    DMA (PL330)

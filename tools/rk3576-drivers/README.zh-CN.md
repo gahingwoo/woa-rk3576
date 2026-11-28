@@ -15,6 +15,10 @@ Maskrom Studio 按所选的板子安装它。从 [0.5.0 正式版](https://githu
   （`rk3576-null`：RK806、引脚控制器、RTC、UART2、PCIe DBI）、GPU（maliwddm）和 NPU（rknpu）。
 - 泰山派 3M：另有 GT9271 触摸屏和蓝牙。
 - CM5-IO 和 ROCK 4D：另有 RK806 电源键。ROCK 4D：HAT EEPROM。
+- 仅 Windows 10 上的 CM5-IO 和 ROCK 4D：NVMe（`rk3xnvme`；自带的 stornvme 在那里会蓝屏）。
+  装到 Windows 10 时还会从 `PCI\CC_010802` 的 DriverDatabase 条目中删去 `stornvme.inf`
+  （离线用 `win10-nvme.cmd W:\`，在线由 SYSTEM 任务完成），见[它的 README](../../drivers/storage/rk3xnvme/README.md)。
+  自己调用 DISM 而不用 `install.cmd` 的工具，要在 DISM 之后运行 `win10-nvme.cmd W:\`。
 - 可选（`/optional`）：CM5-IO 的蓝牙（未测试）。
 
 Windows 10（19041 到 19045）和 Windows 11 各装适合自己版本号的驱动：Windows 10 上以太网用

@@ -147,6 +147,7 @@ jobs:
             --script tools/rk3576-drivers/install-online.ps1 \
             --script tools/rk3576-drivers/mark-reinstall.ps1 \
             --script tools/rk3576-drivers/verify-bound.ps1 \
+            --script tools/rk3576-drivers/win10-nvme.cmd \
             --readme tools/rk3576-drivers/README.md \
             --readme tools/rk3576-drivers/README.zh-CN.md \
             --woa in/woa --gpu "$gpuin" --npu in/npu/rknpu-windows-arm64.zip \
@@ -250,6 +251,15 @@ jobs:
             if (-not $line -or $line -notlike '*ACPI\RKCP6543*') { $o | Out-Host; throw "build $($case[0]): no $($case[1]) plan for ACPI\RKCP6543" }
             if ($o | Where-Object { $_ -like "$($case[2]): would stage *" }) { throw "build $($case[0]): $($case[2]) planned too" }
             if ($o | Where-Object { $_ -like 'Skipped *' }) { $o | Out-Host; throw "build $($case[0]): something skipped" }
+          }
+          # NVMe: rk3xnvme and the stornvme.inf removal on Windows 10 only
+          # (builds 19041 to 21999), stornvme left alone from 22000.
+          foreach ($case in @(@(19045, $true), @(22631, $false))) {
+            $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board rock4d -Plan -Build $case[0]
+            if ($LASTEXITCODE -ne 0) { $o | Out-Host; throw "rock4d plan for $($case[0]): exit $LASTEXITCODE" }
+            $stage = [bool]($o | Where-Object { $_ -like 'rk3xnvme: would stage *PCI\CC_010802*' })
+            $unmap = [bool]($o | Where-Object { $_ -like 'Would remove stornvme.inf from the DriverDatabase entry for PCI\CC_010802*' })
+            if ($stage -ne $case[1] -or $unmap -ne $case[1]) { $o | Out-Host; throw "build $($case[0]): rk3xnvme staged $stage, stornvme.inf removal $unmap, want $($case[1])" }
           }
           $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board nosuch -Plan
           if ($LASTEXITCODE -ne 2) { throw "an unknown board should exit 2, got $LASTEXITCODE" }

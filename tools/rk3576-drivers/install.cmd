@@ -75,8 +75,15 @@ for %%L in (%LISTS%) do (
     )
   )
 )
+rem rk3xnvme in the selection (Windows 10): win10-nvme.cmd keeps stornvme off
+rem the NVMe controller, where it faults (bugcheck 0x7E).
+set NV=
+for %%L in (%LISTS%) do findstr /x /i "rk3xnvme" %%L >nul 2>&1 && set NV=1
 if exist "%SEL%" del "%SEL%" >nul 2>&1
 if not "%E%"=="0" exit /b 1
+if defined NV (
+  call "%HERE%win10-nvme.cmd" %T%\ || exit /b 1
+)
 echo RK3576 drivers %VER% added to %T%\.
 exit /b 0
 

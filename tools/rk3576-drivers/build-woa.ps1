@@ -28,12 +28,19 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 Set-Location $repo
 
 $dirs = @()
+# Rows whose os column is a build range starting at 19041 (Windows 10 2004)
+# up to below 22000 (rk3xnvme: 19041-21999): their INFs start at that
+# build, so they are catalogued for 10_VB (19041) instead of 10_RS3.
+$win10Only = @()
 foreach ($line in Get-Content -LiteralPath $Table) {
     $s = $line.Trim()
     if (-not $s -or $s.StartsWith('#')) { continue }
     $f = $s -split '\s+', 5
     if ($f.Count -ne 5) { throw "drivers.tsv: want 5 columns: $s" }
-    if ($f[3] -eq 'woa') { $dirs += $f[0] }
+    if ($f[3] -eq 'woa') {
+        $dirs += $f[0]
+        if ($f[4] -match '^(\d+)-(\d*)(:\S+)?\s' -and [int]$Matches[1] -ge 19041 -and [int]$Matches[1] -lt 22000) { $win10Only += $f[0] }
+    }
 }
 if (-not $dirs) { throw 'drivers.tsv names no woa driver' }
 
@@ -123,7 +130,7 @@ foreach ($d in $dirs) {
     # 10_RS3_ARM64 is build 16299, the floor of these INFs (as winpe.yml).
     # The null INF is catalogued for every ARM64 release up to 23H2 (10_NI),
     # as ci.yml's null-devices job does.
-    $os = if ($infOnly -contains $d) { '10_RS3_ARM64,10_RS4_ARM64,10_RS5_ARM64,10_19H1_ARM64,10_VB_ARM64,10_CO_ARM64,10_NI_ARM64' } else { '10_RS3_ARM64' }
+    $os = if ($infOnly -contains $d) { '10_RS3_ARM64,10_RS4_ARM64,10_RS5_ARM64,10_19H1_ARM64,10_VB_ARM64,10_CO_ARM64,10_NI_ARM64' } elseif ($win10Only -contains $d) { '10_VB_ARM64' } else { '10_RS3_ARM64' }
     & $i2c /driver:"$p" /os:$os
     if ($LASTEXITCODE) { throw "inf2cat failed for ${d}: $LASTEXITCODE" }
     $files = @(Get-ChildItem $p -File -Include *.cat, *.sys -Recurse | Select-Object -ExpandProperty FullName)

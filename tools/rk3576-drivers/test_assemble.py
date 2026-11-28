@@ -78,6 +78,7 @@ def run(top, woa, gpu, npu, table=TABLE):
            '--script', os.path.join(HERE, 'install-online.ps1'),
            '--script', os.path.join(HERE, 'mark-reinstall.ps1'),
            '--script', os.path.join(HERE, 'verify-bound.ps1'),
+           '--script', os.path.join(HERE, 'win10-nvme.cmd'),
            '--readme', os.path.join(HERE, 'README.md'),
            '--woa', woa, '--gpu', gpu, '--npu', npu,
            '--version', 'ci-test', '--source', 'package=test', '--out', out]
@@ -100,7 +101,7 @@ class Assemble(unittest.TestCase):
                     self.assertEqual(want, got, b + osk)
                     for d in EVERY_BOARD:
                         self.assertIn(eth if d == 'dwc_eqos' else d, got, f'{b}{osk} has no {d}')
-            for f in ('install.cmd', 'install-online.ps1', 'mark-reinstall.ps1', 'verify-bound.ps1', 'VERSION.txt', 'SHA256SUMS.txt'):
+            for f in ('install.cmd', 'install-online.ps1', 'mark-reinstall.ps1', 'verify-bound.ps1', 'win10-nvme.cmd', 'VERSION.txt', 'SHA256SUMS.txt'):
                 self.assertTrue(os.path.isfile(os.path.join(root, f)), f)
             self.assertTrue(os.path.isfile(os.path.join(root, 'drivers', 'rk3576-null', 'rk3576-null.inf')))
             self.assertFalse(os.path.exists(os.path.join(root, 'drivers', 'rk3576-null', 'rk3576-null.pdb')))
@@ -110,8 +111,9 @@ class Assemble(unittest.TestCase):
             self.assertIn('rk3576-drivers/drivers/csaudiork3x/csaudiork3x.sys', names)
 
     def test_win10_lists(self):
-        # The real table: Windows 10 takes dwc_eqos10 for dwc_eqos and
-        # nothing else differs; nothing is skipped on either.
+        # The real table: Windows 10 takes dwc_eqos10 for dwc_eqos and adds
+        # rk3xnvme (CM5-IO, ROCK 4D); nothing else differs and nothing is
+        # skipped on either.
         with tempfile.TemporaryDirectory() as top:
             r, out = run(top, *make_inputs(top))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -120,8 +122,11 @@ class Assemble(unittest.TestCase):
                 for kind in ('', '-optional'):
                     w11 = lines(os.path.join(bd, f'{b}{kind}.txt'))
                     w10 = lines(os.path.join(bd, f'{b}-win10{kind}.txt'))
+                    self.assertNotIn('rk3xnvme', w11, b + kind)
+                    nvme = kind == '' and b in ('cm5io', 'rock4d')
+                    self.assertEqual('rk3xnvme' in w10, nvme, b + kind)
                     self.assertEqual([d for d in w11 if d != 'dwc_eqos'],
-                                     [d for d in w10 if d != 'dwc_eqos10'], b + kind)
+                                     [d for d in w10 if d not in ('dwc_eqos10', 'rk3xnvme')], b + kind)
                     if not kind:
                         self.assertIn('dwc_eqos', w11)
                         self.assertNotIn('dwc_eqos10', w11)
@@ -131,6 +136,8 @@ class Assemble(unittest.TestCase):
                 self.assertIn(['dwc_eqos', '22000', '99999'], by)
                 self.assertIn(['dwc_eqos10', '0', '21999'], by)
                 self.assertIn(['dwcsdhc', '0', '99999'], by)
+                if b in ('cm5io', 'rock4d'):
+                    self.assertIn(['rk3xnvme', '19041', '21999'], by)
             self.assertEqual(lines(os.path.join(bd, 'win10-skipped.txt')), [])
             self.assertEqual(lines(os.path.join(bd, 'skipped.txt')), [])
 
