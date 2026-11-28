@@ -26,6 +26,17 @@
 param([switch]$Force, [switch]$Remove)
 
 $ErrorActionPreference = 'Continue'
+# Windows 10 on Arm runs this in the x86 powershell.exe, where WOW64 turns
+# System32 into SysWOW64: the driver store is then not there and lodctr is
+# the x86 one. Look at the files through Sysnative and run the native
+# lodctr and unlodctr, which take the real System32 paths.
+$Sys = Join-Path $env:SystemRoot 'System32'
+$SysSeen = $Sys
+if ([IntPtr]::Size -eq 4 -and $env:PROCESSOR_ARCHITEW6432) { $SysSeen = Join-Path $env:SystemRoot 'Sysnative' }
+function Seen([string]$p) {
+    if ($p -and $p.StartsWith($Sys + '\', [StringComparison]::OrdinalIgnoreCase)) { return $SysSeen + $p.Substring($Sys.Length) }
+    return $p
+}
 $providers = @(
     @{ Service = 'rknpu';    Manifest = 'rknpu.man' },
     @{ Service = 'maliwddm'; Manifest = 'maliwddm.man' }
@@ -59,7 +70,7 @@ function ManifestGuid([string]$man) {
 
 function Unregister([string]$guid) {
     if (-not $guid) { return }
-    $o = & unlodctr.exe "/g:$guid" 2>&1
+    $o = & (Join-Path $SysSeen 'unlodctr.exe') "/g:$guid" 2>&1
     Say "  unlodctr /g:$guid -> $LASTEXITCODE $o"
 }
 
@@ -81,17 +92,17 @@ foreach ($pv in $providers) {
 
     $dir = DriverDir $svc
     $man = if ($dir) { Join-Path $dir $pv.Manifest } else { $null }
-    if (-not $man -or -not (Test-Path $man)) {
+    if (-not $man -or -not (Test-Path (Seen $man))) {
         if ($dir) { Say "${svc}: no $($pv.Manifest) in $dir (a package without counters)" }
         else { Say "${svc}: driver not installed" }
         # the package that was registered is gone: so is its registration
-        if ($prevGuid -and $prevMan -and -not (Test-Path $prevMan)) {
+        if ($prevGuid -and $prevMan -and -not (Test-Path (Seen $prevMan))) {
             Unregister $prevGuid
             Remove-ItemProperty -Path $state -Name $svc, "${svc}Guid" -ErrorAction SilentlyContinue
         }
         continue
     }
-    $guid = ManifestGuid $man
+    $guid = ManifestGuid (Seen $man)
     if (-not $guid) { $rc = 1; continue }
     $registered = Test-Path (Join-Path $v2 $guid)
     if (-not $Force -and $prevMan -eq $man -and $registered) {
@@ -101,7 +112,7 @@ foreach ($pv in $providers) {
     Say "${svc}: registering $man ($guid)"
     if ($prevGuid -and $prevGuid -ne $guid) { Unregister $prevGuid }
     Unregister $guid
-    $o = & lodctr.exe "/m:$man" "$dir" 2>&1
+    $o = & (Join-Path $SysSeen 'lodctr.exe') "/m:$man" "$dir" 2>&1
     $e = $LASTEXITCODE
     Say "  lodctr /m:$man $dir -> $e $o"
     if ($e -ne 0) { $rc = 1; continue }

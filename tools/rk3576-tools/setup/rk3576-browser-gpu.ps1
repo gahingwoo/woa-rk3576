@@ -135,7 +135,8 @@ function Open-RegKey([string]$Path, [bool]$Writable = $false, [bool]$Create = $f
     $i = $p.IndexOf('\')
     if ($i -lt 0) { $hive = $p; $sub = '' } else { $hive = $p.Substring(0, $i); $sub = $p.Substring($i + 1) }
     switch ($hive.ToUpperInvariant()) {
-        'HKEY_LOCAL_MACHINE' { $root = [Microsoft.Win32.Registry]::LocalMachine }
+        # the 64-bit view also from the x86 powershell.exe of Windows 10 on Arm
+        'HKEY_LOCAL_MACHINE' { $root = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64') }
         'HKEY_CURRENT_USER' { $root = [Microsoft.Win32.Registry]::CurrentUser }
         'HKEY_USERS' { $root = [Microsoft.Win32.Registry]::Users }
         'HKEY_CLASSES_ROOT' { $root = [Microsoft.Win32.Registry]::ClassesRoot }
@@ -478,7 +479,8 @@ function Get-InstallLeftovers([string]$InstallDir) {
     $left = @()
     if (Get-ScheduledTask -TaskPath $BgTaskPath -TaskName $BgTaskName -ErrorAction SilentlyContinue) { $left += "task $BgTaskPath$BgTaskName" }
     if (Test-Path -LiteralPath $InstallDir) { $left += "folder $InstallDir" }
-    if (Test-Path -LiteralPath $BgStateKey) { $left += "settings $($BgStateKey -replace '^Registry::', '')" }
+    $sk = Open-RegKey $BgStateKey
+    if ($sk) { $sk.Close(); $left += "settings $($BgStateKey -replace '^Registry::', '')" }
     return $left
 }
 
@@ -535,7 +537,8 @@ function Invoke-Main {
         Say "$Action needs an administrator (or SYSTEM)."
         return 1
     }
-    $installDir = Join-Path $env:ProgramFiles 'RK3576\browser-gpu'
+    $pf = $env:ProgramFiles; if ([IntPtr]::Size -eq 4 -and $env:PROCESSOR_ARCHITEW6432 -and $env:ProgramW6432) { $pf = $env:ProgramW6432 }
+    $installDir = Join-Path $pf 'RK3576\browser-gpu'
 
     if ($Action -eq 'Status') {
         $script:BgLog = $null
