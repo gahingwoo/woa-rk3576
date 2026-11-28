@@ -29,8 +29,7 @@ BwlLoadFile(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG MaxBytes,
     *Data = NULL;
     *Length = 0;
 
-    if (NT_SUCCESS(WdfDeviceOpenRegistryKey(Ctx->Device, PLUGPLAY_REGKEY_DEVICE, KEY_READ,
-                                            WDF_NO_OBJECT_ATTRIBUTES, &key))) {
+    if (NT_SUCCESS(BwlOpenDeviceKey(Ctx, KEY_READ, &key))) {
         RtlInitUnicodeString(&valueName, L"FirmwareDir");
         if (!NT_SUCCESS(WdfRegistryQueryUnicodeString(key, &valueName, NULL, &dir))) {
             dir.Length = 0;

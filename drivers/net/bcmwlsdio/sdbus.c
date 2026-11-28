@@ -31,7 +31,8 @@ BwlSdOpen(_In_ PBWL_DEVICE_CONTEXT Ctx)
     NTSTATUS status;
 
     RtlZeroMemory(&Ctx->Sd, sizeof(Ctx->Sd));
-    status = SdBusOpenInterface(WdfDeviceWdmGetPhysicalDevice(Ctx->Device), &Ctx->Sd,
+    /* the WDI miniport keeps the device objects NDIS handed it */
+    status = SdBusOpenInterface(Ctx->Pdo != NULL ? Ctx->Pdo : WdfDeviceWdmGetPhysicalDevice(Ctx->Device), &Ctx->Sd,
                                 sizeof(SDBUS_INTERFACE_STANDARD), SDBUS_INTERFACE_VERSION);
     if (!NT_SUCCESS(status)) {
         BWL_LOG("SdBusOpenInterface failed 0x%08X", status);
@@ -41,7 +42,7 @@ BwlSdOpen(_In_ PBWL_DEVICE_CONTEXT Ctx)
 
     RtlZeroMemory(&p, sizeof(p));
     p.Size = sizeof(p);
-    p.TargetObject = WdfDeviceWdmGetAttachedDevice(Ctx->Device);
+    p.TargetObject = Ctx->NextDevice != NULL ? Ctx->NextDevice : WdfDeviceWdmGetAttachedDevice(Ctx->Device);
     /*
      * W3 polls. No card interrupt callback yet, and the driver sequences
      * the function enables itself (F2 must stay off until the firmware

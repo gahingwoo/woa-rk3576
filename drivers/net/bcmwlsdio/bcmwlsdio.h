@@ -7,7 +7,10 @@
  * interface, talk CMD52/CMD53 to the card, identify the chip, download the
  * firmware, NVRAM and CLM blob, start the firmware and read its version.
  * Stage 3 (W4): a WiFiCx 1.0 Wi-Fi adapter for Windows' own Wi-Fi
- * (wificx.cpp, netadapter.c), when installed with bcmwlwifi.inf. Everything
+ * (wificx.cpp, netadapter.c), when installed with bcmwlwifi.inf. The same
+ * sources also build bcmwlwdi.sys (BWL_WDI): an NDIS WDI miniport for
+ * Windows 10 (wdi.cpp, wdital.c), with the same WDI message handling
+ * (wdicore.cpp) and the same bring-up (bringup.c). Everything
  * it learns goes to the device's registry key (Device Parameters), flushed,
  * so a board session can read it afterwards.
  *
@@ -18,17 +21,26 @@
 #pragma once
 
 #include <ntddk.h>
+#ifdef BWL_WDI
+#include <ndis.h>
+#endif
 #include <wdf.h>
+#ifdef BWL_WDI
+#include <wdfminiport.h>
+#endif
 #include <ntstrsafe.h>
 #include <ntddsd.h>
+#ifndef BWL_WDI
 #include <netadaptercx.h>
 #include <net/virtualaddress.h>
+#endif
 
 EXTERN_C_START
 
 #include "bwl.h"
 
-struct _BWL_WIFI;                   /* wificx.cpp */
+struct _BWL_WIFI;                   /* wdicore.h */
+struct _BWL_TAL;                    /* wdital.c (BWL_WDI) */
 
 #define BWL_POOL_TAG    'lWcB'
 
@@ -59,6 +71,10 @@ struct _BWL_WIFI;                   /* wificx.cpp */
 
 typedef struct _BWL_DEVICE_CONTEXT {
     WDFDEVICE Device;
+    /* WDI miniport only (else NULL / empty): the device objects NDIS gave,
+     * and the absolute path of Device Parameters (BwlOpenDeviceKey) */
+    PDEVICE_OBJECT Pdo, NextDevice;
+    UNICODE_STRING DevKeyPath;
     WDFWORKITEM BringUp;
     PUCHAR Bounce;              /* BWL_BOUNCE_MIN bytes, non-paged, from BwlBufAlloc */
 
@@ -98,10 +114,14 @@ typedef struct _BWL_DEVICE_CONTEXT {
     KEVENT WakeEvent;
     ULONG PollMs, IdlePollMs;
 
-    /* the network adapter (netadapter.c) */
+    /* the network adapter (netadapter.c), or the WDI data path (wdital.c) */
+#ifndef BWL_WDI
     NETADAPTER Adapter;
-    KSPIN_LOCK DataLock;            /* the queues and both FIFOs */
     NETPACKETQUEUE TxQueue, RxQueue;
+#else
+    struct _BWL_TAL *Tal;
+#endif
+    KSPIN_LOCK DataLock;            /* the queues and both FIFOs */
     BOOLEAN TxNotify, RxNotify;
     BOOLEAN RxHold;                 /* received frames wait until the association is indicated */
     bwl_frameq *TxQ, *RxQ;
@@ -116,11 +136,13 @@ typedef struct _BWL_DEVICE_CONTEXT {
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(BWL_DEVICE_CONTEXT, BwlGetContext)
 
+#ifndef BWL_WDI
 typedef struct _BWL_ADAPTER_CONTEXT {
     PBWL_DEVICE_CONTEXT Device;
 } BWL_ADAPTER_CONTEXT, *PBWL_ADAPTER_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(BWL_ADAPTER_CONTEXT, BwlAdapterGetContext)
+#endif
 
 /* sdbus.c */
 extern const bwl_bus_ops BwlSdOps;
@@ -141,7 +163,17 @@ ULONG BwlBufCheck(_In_ PVOID Buf);
 BOOLEAN BwlBufVerify(_In_opt_ PBWL_DEVICE_CONTEXT Ctx, _In_ PVOID Buf, _In_ PCSTR Where);
 VOID BwlBufFree(_In_opt_ PBWL_DEVICE_CONTEXT Ctx, _In_opt_ PVOID Buf, _In_ PCSTR Where);
 
-/* driver.c: breadcrumbs, PASSIVE_LEVEL */
+/* bringup.c: records, breadcrumbs, the bring-up and the worker; PASSIVE_LEVEL */
+NTSTATUS BwlOpenDeviceKey(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ ACCESS_MASK Access, _Out_ WDFKEY *Key);
+/* Stage 0-2 as Stage says; TRUE when the firmware runs and answered. */
+BOOLEAN BwlBringUp(_In_ PBWL_DEVICE_CONTEXT Ctx);
+/* The bring-up, then the station's firmware set-up (stage 3). */
+BOOLEAN BwlNetworkUp(_In_ PBWL_DEVICE_CONTEXT Ctx);
+/* The worker thread runs BwlWifiRun (wdicore.cpp) until BwlStopWorker. */
+NTSTATUS BwlStartWorker(_In_ PBWL_DEVICE_CONTEXT Ctx);
+VOID BwlStopWorker(_In_ PBWL_DEVICE_CONTEXT Ctx);
+/* The worker stopped, then the chip's CPU halted and F1/F2 off (unless surprise-removed). */
+VOID BwlStopChip(_In_ PBWL_DEVICE_CONTEXT Ctx);
 VOID BwlCrumb(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCSTR Step);
 VOID BwlPutULong(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Value);
 VOID BwlPutString(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ PCSTR Value);
@@ -152,9 +184,11 @@ ULONG BwlGetAscii(_In_ PBWL_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _Out_writes_(C
 VOID BwlPutCounters(_In_ PBWL_DEVICE_CONTEXT Ctx);
 VOID BwlDelayMs(_In_ ULONG Ms);
 
-/* netadapter.c */
+/* netadapter.c (WiFiCx) or wdital.c (WDI): the data path */
+#ifndef BWL_WDI
 NTSTATUS BwlNetCreateAdapter(_In_ PBWL_DEVICE_CONTEXT Ctx, _Inout_ NETADAPTER_INIT *Init);
 NTSTATUS BwlNetStart(_In_ PBWL_DEVICE_CONTEXT Ctx);
+#endif
 VOID BwlNetFree(_In_ PBWL_DEVICE_CONTEXT Ctx);
 VOID BwlNetRxRelease(_In_ PBWL_DEVICE_CONTEXT Ctx);
 /* The worker: send what the TX FIFO holds while the firmware takes it. TRUE if anything went out. */
@@ -165,9 +199,12 @@ VOID BwlNetFlush(_In_ PBWL_DEVICE_CONTEXT Ctx);
 extern const bwl_net_ops BwlNetOps;
 
 /* wificx.cpp: the WiFiCx front end (stage 3) */
+#ifndef BWL_WDI
 NTSTATUS BwlWifiPreDeviceCreate(_Inout_ PWDFDEVICE_INIT DeviceInit);
 NTSTATUS BwlWifiPostDeviceCreate(_In_ PBWL_DEVICE_CONTEXT Ctx);
 NTSTATUS BwlWifiReportCapabilities(_In_ PBWL_DEVICE_CONTEXT Ctx);
+#endif
+/* wdicore.cpp: WDI messages, both front ends */
 VOID BwlWifiRun(_In_ PBWL_DEVICE_CONTEXT Ctx);
 VOID BwlWifiScanBss(_In_ void *Ctx, _In_ const bwl_bss *Bss, _In_reads_(Len) const u8 *Body, _In_ u32 Len);
 VOID BwlWifiReleaseHardware(_In_ PBWL_DEVICE_CONTEXT Ctx);

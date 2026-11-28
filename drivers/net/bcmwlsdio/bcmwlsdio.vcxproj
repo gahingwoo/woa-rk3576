@@ -98,6 +98,7 @@
 
   <ItemGroup>
     <ClCompile Include="driver.c" />
+    <ClCompile Include="bringup.c" />
     <ClCompile Include="sdbus.c" />
     <ClCompile Include="files.c" />
     <ClCompile Include="pool.c" />
@@ -110,8 +111,12 @@
     <ClCompile Include="bwl_wlan.c" />
     <ClCompile Include="bwl_data.c" />
     <ClCompile Include="netadapter.c" />
-    <!-- C++: the WiFiCx front end. No sized deallocation: with it the
-         array placement new in arrayofelements.hpp is ill-formed (C2956). -->
+    <!-- C++: the WDI messages (shared with bcmwlwdi.vcxproj) and the WiFiCx
+         front end. No sized deallocation: with it the array placement new
+         in arrayofelements.hpp is ill-formed (C2956). -->
+    <ClCompile Include="wdicore.cpp">
+      <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="wificx.cpp">
       <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
@@ -121,6 +126,7 @@
     <ClInclude Include="bcmwlsdio.h" />
     <ClInclude Include="bwl.h" />
     <ClInclude Include="bwl_regs.h" />
+    <ClInclude Include="wdicore.h" />
   </ItemGroup>
 
   <ItemGroup>
