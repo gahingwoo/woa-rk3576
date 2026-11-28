@@ -175,7 +175,17 @@ DeviceReset(_Inout_ MacRegisters* regs, _In_reads_(6) UINT8 const* mac0)
 
     Write32(&regs->Dma_Mode, 1); // Software reset.
 
+#if DWC_EQOS_NETCX20
+    // The loop below counted down from 0 (retry -= 1), so it gave up only
+    // after 2^32 - 1000 polls of 20 us, about a day: a reset that does not
+    // finish (the SWR needs every MAC clock domain running, the PHY's RX
+    // clock included) hung PrepareHardware and with it the PnP thread
+    // instead of failing the start. Windows 10 build: count up, and say how
+    // long the reset took on the debugger.
+    for (unsigned retry = 0; retry != 1000; retry += 1)
+#else
     for (unsigned retry = 0; retry != 1000; retry -= 1)
+#endif
     {
         KeStallExecutionProcessor(20);
         auto const dmaMode = Read32(&regs->Dma_Mode);
@@ -184,13 +194,104 @@ DeviceReset(_Inout_ MacRegisters* regs, _In_reads_(6) UINT8 const* mac0)
             SetOneMacAddress(regs, 0, mac0, true);
             TraceEntryExit(DeviceReset, LEVEL_INFO,
                 TraceLoggingUInt32(retry));
+#if DWC_EQOS_NETCX20
+            DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+                "dwc_eqos: software reset done after %u polls\n", retry + 1);
+#endif
             return STATUS_SUCCESS;
         }
     }
 
     TraceWrite("DeviceReset-timeout", LEVEL_ERROR);
+#if DWC_EQOS_NETCX20
+    DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+        "dwc_eqos: software reset did not finish in 20 ms (DMA_Mode 0x%08x, MAC_Debug 0x%08x)\n",
+        Read32(&regs->Dma_Mode), Read32(&regs->Mac_Debug));
+#endif
     return STATUS_TIMEOUT;
 }
+
+#if DWC_EQOS_NETCX20
+
+// Read-only MDIO access for the debugger dump below; the driver never
+// configures the PHY (the firmware does). CR 4 = CSR clock / 102, under
+// 2.5 MHz MDC for any CSR clock up to 250 MHz. Returns -1 on a timeout.
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static int
+DeviceMdioRead20(_Inout_ MacRegisters* regs, unsigned phy, unsigned reg)
+{
+    for (unsigned i = 0; Read32(&regs->Mac_Mdio_Address) & 1u; i += 1)
+    {
+        if (i == 1000)
+        {
+            return -1;
+        }
+        KeStallExecutionProcessor(10);
+    }
+
+    Write32(&regs->Mac_Mdio_Address,
+        ULONG((phy & 0x1Fu) << 21 | (reg & 0x1Fu) << 16 | 4u << 8 | 3u << 2 | 1u));
+
+    for (unsigned i = 0; i != 1000; i += 1)
+    {
+        KeStallExecutionProcessor(10);
+        if (0 == (Read32(&regs->Mac_Mdio_Address) & 1u))
+        {
+            return static_cast<int>(Read32(&regs->Mac_Mdio_Data) & 0xFFFFu);
+        }
+    }
+
+    return -1;
+}
+
+// What the MAC and the PHY look like at a PnP or power transition, on the
+// debugger: an in-session disable/enable lost the network, and the trace
+// has to say whether the link, the reset, the MAC address or the data path
+// is what differs from a cold start. PHY address 1 (YT8531 on CM5-IO);
+// 0x11 is the YT8531 specific status (bit 10 real-time link).
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static void
+DeviceDump20(_In_ DeviceContext const* context, _In_z_ char const* where)
+{
+    auto const regs = context->regs;
+    if (regs == nullptr)
+    {
+        return;
+    }
+
+    auto const mac0hi = Read32(&regs->Mac_Address[0].High);
+    auto const mac0lo = Read32(&regs->Mac_Address[0].Low);
+    DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+        "dwc_eqos: %s: PHYIF 0x%08x MACCFG 0x%08x PKTFLT 0x%08x DMAMODE 0x%08x MACDBG 0x%08x "
+        "CH0 ctl 0x%08x tx 0x%08x rx 0x%08x st 0x%08x dbg 0x%08x MAC0 %08x:%08x\n",
+        where,
+        Read32(&regs->Mac_PhyIf_Control_Status).Value32,
+        Read32(&regs->Mac_Configuration).Value32,
+        Read32(&regs->Mac_Packet_Filter).Value32,
+        Read32(&regs->Dma_Mode),
+        Read32(&regs->Mac_Debug),
+        Read32(&regs->Dma_Ch[0].Control).Value32,
+        Read32(&regs->Dma_Ch[0].Tx_Control).Value32,
+        Read32(&regs->Dma_Ch[0].Rx_Control).Value32,
+        Read32(&regs->Dma_Ch[0].Status).Value32,
+        Read32(&regs->Dma_Debug_Status0),
+        mac0hi.Value32, mac0lo.Value32);
+
+    DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+        "dwc_eqos: %s: PHY1 BMCR 0x%04x BMSR 0x%04x STAT 0x%04x; isr %u/%u ignored, dpc link %u rx %u tx %u abn %u fbe %u, "
+        "rx frags %u, tx frags %u, filter 0x%x\n",
+        where,
+        DeviceMdioRead20(regs, 1, 0),
+        DeviceMdioRead20(regs, 1, 1),
+        DeviceMdioRead20(regs, 1, 0x11),
+        context->isrHandled, context->isrIgnored,
+        context->dpcLinkState, context->dpcRx, context->dpcTx,
+        context->dpcAbnormalStatus, context->dpcFatalBusError,
+        context->rxDoneFragments, context->txDoneFragments,
+        context->packetFilter20);
+}
+
+#endif // DWC_EQOS_NETCX20
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 static void
@@ -264,6 +365,13 @@ UpdateLinkState(_In_ DeviceContext const* context)
         NetAdapterAutoNegotiationFlagRcvLinkSpeedautoNegotiated |
         NetAdapterAutoNegotiationFlagDuplexAutoNegotiated);
     NetAdapterSetLinkState(context->adapter, &linkState);
+
+#if DWC_EQOS_NETCX20
+    DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+        "dwc_eqos: link %s, %u Mbit/s %s duplex (PHYIF 0x%08x, MACCFG 0x%08x -> 0x%08x, TX clock _DSM 0x%08x)\n",
+        controlStatus.LinkUp ? "up" : "down", speed / 1'000'000u, controlStatus.FullDuplex ? "full" : "half",
+        controlStatus.Value32, oldConfig.Value32, newConfig.Value32, status);
+#endif
 
     TraceEntryExit(UpdateLinkState, LEVEL_INFO,
         TraceLoggingHexInt32(controlStatus.Value32, "PhyIfControlStatus"),
@@ -1103,6 +1211,10 @@ DeviceD0Entry(
     context->interruptsWanted = InterruptsState;
     DeviceInterruptSet_Locked(context->regs, InterruptsState); // Interrupts are disabled so interrupt lock is offline.
 
+#if DWC_EQOS_NETCX20
+    DeviceDump20(context, "D0 entry");
+#endif
+
     TraceEntryExitWithStatus(DeviceD0Entry, LEVEL_INFO, status,
         TraceLoggingUInt32(previousState),
         TraceLoggingHexInt32(txQueueSize),
@@ -1124,6 +1236,9 @@ DeviceD0Exit(
     NTSTATUS status = STATUS_SUCCESS;
     auto const context = DeviceGetContext(device);
 
+#if DWC_EQOS_NETCX20
+    DeviceDump20(context, "D0 exit");
+#endif
     DeviceInterruptSet_Locked(context->regs, InterruptsNone); // Interrupts are disabled so interrupt lock is offline.
     context->interruptsWanted = InterruptsNone;
 
@@ -1348,6 +1463,11 @@ DevicePrepareHardware(
             {
                 TraceWrite("DevicePrepareHardware-Mac0-bad", LEVEL_WARNING,
                     TraceLoggingBinary(context->currentMacAddress, sizeof(context->currentMacAddress), "Mac0"));
+#if DWC_EQOS_NETCX20
+                DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+                    "dwc_eqos: MAC address 0 register empty (%08x:%08x): using a random address\n",
+                    mac0hi.Value32, mac0lo.Value32);
+#endif
                 context->currentMacAddress[0] = 0xF2;
                 context->currentMacAddress[1] = 0x00;
                 BCryptGenRandom(
@@ -1809,6 +1929,9 @@ DevicePrepareHardware(
     {
         auto const regs = context->regs;
 
+#if DWC_EQOS_NETCX20
+        DeviceDump20(context, "prepare, before reset");
+#endif
         status = DeviceReset(regs, context->currentMacAddress);
         if (!NT_SUCCESS(status))
         {
@@ -1863,6 +1986,10 @@ DevicePrepareHardware(
         goto Done;
     }
 
+#if DWC_EQOS_NETCX20
+    DeviceDump20(context, "prepare, adapter started");
+#endif
+
 Done:
 
     TraceEntryExitWithStatus(DevicePrepareHardware, LEVEL_INFO, status);
@@ -1883,6 +2010,9 @@ DeviceReleaseHardware(
     auto const context = DeviceGetContext(device);
     if (context->regs != nullptr)
     {
+#if DWC_EQOS_NETCX20
+        DeviceDump20(context, "release");
+#endif
         DeviceReset(context->regs, context->permanentMacAddress);
         MmUnmapIoSpace(context->regs, sizeof(*context->regs));
         context->regs = nullptr;
