@@ -211,7 +211,11 @@ TxQueueAdvance(_In_ NETPACKETQUEUE queue)
             UINT32 const fragmentCount = pkt->FragmentCount;
             NT_ASSERT(fragmentCount != 0);
 
-            auto const ieee8021Q = *NetExtensionGetPacketIeee8021Q(&context->packetIeee8021Q, pktIndex);
+            // An extension the adapter did not get (NetAdapterCx 2.0 has no
+            // 802.1Q or GSO offload) is not there to read.
+            auto const ieee8021Q = context->packetIeee8021Q.Enabled
+                ? *NetExtensionGetPacketIeee8021Q(&context->packetIeee8021Q, pktIndex)
+                : NET_PACKET_IEEE8021Q{};
             UINT16 const ieee8021QPriority = (ieee8021Q.TxTagging & NetPacketTxIeee8021qActionFlagPriorityRequired)
                 ? ieee8021Q.PriorityCodePoint : 0u;
             UINT16 const ieee8021QVlan = (ieee8021Q.TxTagging & NetPacketTxIeee8021qActionFlagVlanRequired)
@@ -220,9 +224,11 @@ TxQueueAdvance(_In_ NETPACKETQUEUE queue)
             auto const vlanTagControl = vlanTag != 0 ? TxVlanTagControlInsert : TxVlanTagControlNone;
             auto const contextTagNeeded = vlanTag != 0 && vlanTag != context->lastVlanTag;
 
-            auto const gso = NetExtensionGetPacketGso(&context->packetGso, pktIndex);
-            NT_ASSERT(gso->TCP.Mss <= 0x3FFF); // 14 bits
-            auto const gsoMss = static_cast<UINT16>(gso->TCP.Mss);
+            auto const gso = context->packetGso.Enabled
+                ? *NetExtensionGetPacketGso(&context->packetGso, pktIndex)
+                : NET_PACKET_GSO{};
+            NT_ASSERT(gso.TCP.Mss <= 0x3FFF); // 14 bits
+            auto const gsoMss = static_cast<UINT16>(gso.TCP.Mss);
 
             if (gsoMss != 0) // segmentation offload enabled
             {
@@ -357,7 +363,9 @@ TxQueueAdvance(_In_ NETPACKETQUEUE queue)
             else // segmentation offload disabled
             {
                 // If offload is disabled by software then the extension will be zeroed.
-                auto const checksum = *NetExtensionGetPacketChecksum(&context->packetChecksum, pktIndex);
+                auto const checksum = context->packetChecksum.Enabled
+                    ? *NetExtensionGetPacketChecksum(&context->packetChecksum, pktIndex)
+                    : NET_PACKET_CHECKSUM{};
                 auto const checksumInsertion =
                     checksum.Layer4 ? TxChecksumInsertionEnabledIncludingPseudo
                     : checksum.Layer3 ? TxChecksumInsertionEnabledHeaderOnly
@@ -641,7 +649,9 @@ TxQueueCreate(
 
         context->descVirtual = static_cast<TxDescriptor*>(
             WdfCommonBufferGetAlignedVirtualAddress(context->descBuffer));
-        memset(context->descVirtual, 0, sizeof(TxDescriptor) * context->descCount);
+        // A common buffer: uncached, Device memory under Windows 10, where the
+        // DC ZVA of memset faults. Aligned 8-byte stores (rk_devmem.h).
+        RkDevZero(context->descVirtual, sizeof(TxDescriptor) * context->descCount);
         context->descPhysical =
             WdfCommonBufferGetAlignedLogicalAddress(context->descBuffer);
         TraceWrite("TxQueueCreate-desc", LEVEL_VERBOSE,

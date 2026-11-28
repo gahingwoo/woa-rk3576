@@ -86,8 +86,10 @@ $fake = @(
 )
 Write-Json $fake (Join-Path $tmp 'fake.json')
 $expPath = Join-Path $tmp 'expected.json'
+# -Build: the Windows 11 drivers whatever the runner is (windows-2022 is
+# build 20348, which would take the Windows 10 ones).
 $o = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $pkg 'install-online.ps1') -Board $board -Plan `
-    -FakeDevices (Join-Path $tmp 'fake.json') -ExpectedOut $expPath
+    -FakeDevices (Join-Path $tmp 'fake.json') -ExpectedOut $expPath -Build 22631
 $rc = $LASTEXITCODE
 $o | ForEach-Object { Write-Host "  | $_" }
 Check ($rc -eq 0) "plan exits 0 (got $rc)"

@@ -15,6 +15,7 @@
 #include "vdpu383_ioctl.h"
 #include "vdpu383_import.h"
 #include "vdpu383_check.h"
+#include "../../include/rk_devmem.h"   /* uncached DMA memory: aligned accesses */
 
 #define V383_LOG(fmt, ...) \
     DbgPrintEx(DPFLTR_IHVVIDEO_ID, DPFLTR_ERROR_LEVEL, "vdpu383: " fmt "\n", __VA_ARGS__)

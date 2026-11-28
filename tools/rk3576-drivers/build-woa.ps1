@@ -47,6 +47,25 @@ function Copy-Package([string]$from, [string]$to) {
         Copy-Item -Destination $to -Force
 }
 
+# The symbols of each driver go to DIR\pdb\<dir>, outside the package, so a
+# disassembly of the shipped .sys can be read with function names (the
+# alignment audit of the code the compiler actually emitted).
+$pdbOut = Join-Path $Out 'pdb'
+if (Test-Path $pdbOut) { Remove-Item -Recurse -Force $pdbOut }
+function Copy-Pdb([string]$d, [string[]]$from) {
+    # <sys>.pdb for each .sys of the package (dwc_eqos10 ships dwc_eqos.sys)
+    $to = Join-Path $pdbOut $d
+    New-Item -ItemType Directory -Force -Path $to | Out-Null
+    $names = @(Get-ChildItem (Join-Path $stage $d) -Filter *.sys | ForEach-Object { $_.BaseName + '.pdb' })
+    foreach ($f in $from) {
+        if (-not (Test-Path $f)) { continue }
+        foreach ($n in $names) {
+            Get-ChildItem $f -Recurse -File -Filter $n |
+                Sort-Object LastWriteTime | Copy-Item -Destination $to -Force
+        }
+    }
+}
+
 Write-Host '== build\RockchipDrivers.sln'
 msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64 `
         /p:SignMode=Off /p:WoaDriverBuild=$Build /m /nologo /v:minimal
@@ -59,6 +78,7 @@ foreach ($d in $dirs) {
     if (Test-Path (Join-Path $sol "$d.sys")) {
         Write-Host "== $d (solution)"
         Copy-Package $sol $dst
+        Copy-Pdb $d @('build', 'drivers')
         continue
     }
     $proj = @(Get-ChildItem drivers -Recurse -File -Filter "$d.vcxproj")
@@ -69,6 +89,7 @@ foreach ($d in $dirs) {
                 /p:WindowsTargetPlatformVersion=$Wdk /p:SignMode=Off /m /nologo /v:minimal
         if ($LASTEXITCODE -ne 0) { throw "msbuild failed for $d" }
         Copy-Package (Join-Path $proj[0].DirectoryName 'ARM64\Release') $dst
+        Copy-Pdb $d @($proj[0].DirectoryName)
         continue
     }
     $inf = @(Get-ChildItem drivers -Recurse -File -Filter "$d.inf")

@@ -13,8 +13,8 @@
 #    may write the Enum keys, through a one-shot scheduled task running
 #    mark-reinstall.ps1. At the next boot PnP installs them from the store.
 #    Never marked: the SD/eMMC hosts (dwcsdhc, dwcmshc), which the running
-#    Windows may be booted from, and the Ethernet adapter (dwc_eqos) unless
-#    it has no driver at all. Their packages are staged only.
+#    Windows may be booted from, and the Ethernet adapter (dwc_eqos, on
+#    Windows 10 dwc_eqos10) unless it has no driver at all. Their packages are staged only.
 # 4. Sets up the follow-up check: %ProgramData%\RK3576\drivers gets
 #    expected.json (each marked device and the package DriverVer it should
 #    be on after the restart), verify-bound.ps1 and mark-reinstall.ps1, and
@@ -42,7 +42,10 @@ param(
     [switch]$Optional,
     [switch]$Plan,
     [string]$FakeDevices,
-    [string]$ExpectedOut
+    [string]$ExpectedOut,
+    # The Windows build to pick the drivers for; 0 (the default) is this
+    # Windows'. For -Plan runs of another build.
+    [int]$Build = 0
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -59,6 +62,7 @@ $NeverMark = @{
 }
 $MarkOnlyIfNoDriver = @{
     'dwc_eqos' = 'network adapter with a driver: staged only, so a remote session keeps its connection'
+    'dwc_eqos10' = 'network adapter with a driver: staged only, so a remote session keeps its connection'
 }
 
 # The parts of an INF this needs: DriverVer and the IDs of its models sections.
@@ -151,36 +155,53 @@ function Test-Newer($pkg, $cur) {
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $here "boards\$Board.txt"))) { Write-Host "There is no board $Board in this package (boards\$Board.txt)."; exit 2 }
-# Windows 10 (build below 22000) takes boards\<board>-win10.txt: drivers made
-# for Windows 11 only are left out, and named, until their Windows 10 builds
-# are in the package.
-$build = 0
-try { $build = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop).CurrentBuildNumber } catch { $build = 0 }
-$osk = ''
-if ($build -gt 0 -and $build -lt 22000 -and (Test-Path -LiteralPath (Join-Path $here "boards\$Board-win10.txt"))) { $osk = '-win10' }
-$lists = @(Join-Path $here "boards\$Board$osk.txt")
-if ($Optional) { $lists += Join-Path $here "boards\$Board$osk-optional.txt" }
-$win10Skipped = @()
-if ($osk) {
-    $sk = Join-Path $here 'boards\win10-skipped.txt'
-    if (Test-Path -LiteralPath $sk) {
-        foreach ($l in Get-Content -LiteralPath $sk) {
-            $c = $l -split "`t", 3
-            if ($c.Count -eq 3 -and ($c[1] -split ',') -contains $Board) { $win10Skipped += "Skipped $($c[0]) ($($c[2])): it has no Windows 10 driver yet." }
+# The target's build picks the drivers: boards\<board>-builds.txt (and
+# -builds-optional.txt) give each driver the builds it is for (drivers.tsv's
+# os column), boards\skipped.txt the builds a driver has nothing for yet.
+# A package from before those files has the -win10 lists instead.
+$build = $Build
+if ($build -le 0) {
+    try { $build = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop).CurrentBuildNumber } catch { $build = 0 }
+}
+if ($build -le 0) { $build = 22000 }
+$osk = if ($build -lt 22000) { '-win10' } else { '' }
+$dirs = @()
+$skippedMsgs = @()
+$byBuild = Join-Path $here "boards\$Board-builds.txt"
+if (Test-Path -LiteralPath $byBuild) {
+    $lists = @($byBuild)
+    if ($Optional) { $lists += Join-Path $here "boards\$Board-builds-optional.txt" }
+    foreach ($f in $lists) {
+        if (-not (Test-Path -LiteralPath $f)) { continue }
+        foreach ($l in Get-Content -LiteralPath $f) {
+            $c = $l.Trim() -split "`t"
+            if ($c.Count -ge 3 -and -not $c[0].StartsWith('#') -and $build -ge [int]$c[1] -and $build -le [int]$c[2]) { $dirs += $c[0] }
         }
     }
-}
-$dirs = @()
-foreach ($f in $lists) {
-    if (Test-Path -LiteralPath $f) {
-        $dirs += @(Get-Content -LiteralPath $f | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+    $sk = Join-Path $here 'boards\skipped.txt'
+    if (Test-Path -LiteralPath $sk) {
+        foreach ($l in Get-Content -LiteralPath $sk) {
+            $c = $l -split "`t", 5
+            if ($c.Count -eq 5 -and $build -ge [int]$c[1] -and $build -le [int]$c[2] -and ($c[3] -split ',') -contains $Board) {
+                $skippedMsgs += "Skipped $($c[0]) ($($c[4])): it has no driver for build $build yet."
+            }
+        }
+    }
+} else {
+    if (-not (Test-Path -LiteralPath (Join-Path $here "boards\$Board$osk.txt"))) { $osk = '' }
+    $lists = @(Join-Path $here "boards\$Board$osk.txt")
+    if ($Optional) { $lists += Join-Path $here "boards\$Board$osk-optional.txt" }
+    foreach ($f in $lists) {
+        if (Test-Path -LiteralPath $f) {
+            $dirs += @(Get-Content -LiteralPath $f | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+        }
     }
 }
 $verFile = Join-Path $here 'VERSION.txt'
 $pkgVer = if (Test-Path -LiteralPath $verFile) { (Get-Content -LiteralPath $verFile -TotalCount 1).Trim() } else { 'unknown' }
 Say "RK3576 driver package $pkgVer, board $Board$(if ($Plan) { ', plan only (nothing is changed)' })."
 Say "Windows build $build$(if ($osk) { ': the Windows 10 drivers' } else { ': the Windows 11 drivers' })."
-foreach ($m in $win10Skipped) { Say $m }
+foreach ($m in $skippedMsgs) { Say $m }
 
 $failed = 0
 if (-not $Plan) {

@@ -315,7 +315,9 @@ V383TablePage(
     va = MmAllocateContiguousNodeMemory(PAGE_SIZE, low, high, skip, PAGE_READWRITE | PAGE_NOCACHE,
                                         MM_ANY_NODE_OK);
     if (va) {
-        RtlZeroMemory(va, PAGE_SIZE);
+        /* PAGE_NOCACHE: Device memory under Windows 10, where the DC ZVA
+         * of RtlZeroMemory faults (rk_devmem.h) */
+        RkDevZero(va, PAGE_SIZE);
         *Pa = MmGetPhysicalAddress(va);
     } else {
         Pa->QuadPart = 0;

@@ -61,7 +61,13 @@ NTSTATUS AllocResources(PPL330DMA_CONTEXT pDevice) {
 
 	PHYSICAL_ADDRESS HighestAddr;
 	HighestAddr.QuadPart = MAXUINT32;
-	pDevice->MCodeCPU = MmAllocateContiguousMemorySpecifyCache(chans * pDevice->MCBufSz, ZeroAddr, HighestAddr, ZeroAddr, MmNonCached);
+	// Write-combined (Normal non-cacheable), not MmNonCached: the emitters
+	// (insn.c, opcodes.h) write 1, 2 and 6 byte instructions back to back,
+	// and the compiler merges their bytes into halfword stores at odd
+	// addresses. Windows 10 maps MmNonCached RAM as Device memory, where
+	// those fault (STATUS_DATATYPE_MISALIGNMENT); Windows 11 did not. The
+	// PL330 is not coherent either way; _start orders the stores before GO.
+	pDevice->MCodeCPU = MmAllocateContiguousMemorySpecifyCache(chans * pDevice->MCBufSz, ZeroAddr, HighestAddr, ZeroAddr, MmWriteCombined);
 	if (!pDevice->MCodeCPU) {
 		return STATUS_NO_MEMORY;
 	}
