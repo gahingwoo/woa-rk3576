@@ -13,6 +13,7 @@
 #include <net/logicaladdress.h>
 #include <net/virtualaddress.h>
 #include <net/checksum.h>
+#include <rk_devmem.h>
 #include <initguid.h>
 #include <TraceLoggingProvider.h>
 #include <winmeta.h>

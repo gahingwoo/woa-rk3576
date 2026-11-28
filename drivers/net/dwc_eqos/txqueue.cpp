@@ -641,7 +641,9 @@ TxQueueCreate(
 
         context->descVirtual = static_cast<TxDescriptor*>(
             WdfCommonBufferGetAlignedVirtualAddress(context->descBuffer));
-        memset(context->descVirtual, 0, sizeof(TxDescriptor) * context->descCount);
+        // A common buffer: uncached, Device memory under Windows 10, where the
+        // DC ZVA of memset faults. Aligned 8-byte stores (rk_devmem.h).
+        RkDevZero(context->descVirtual, sizeof(TxDescriptor) * context->descCount);
         context->descPhysical =
             WdfCommonBufferGetAlignedLogicalAddress(context->descBuffer);
         TraceWrite("TxQueueCreate-desc", LEVEL_VERBOSE,
