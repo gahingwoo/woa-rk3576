@@ -1,0 +1,92 @@
+;
+; rk3xnvme.inf - NVMe for Windows 10 (build 19041 to 19045) on the RK3576
+; boards (Radxa ROCK 4D, ArmSoM CM5-IO).
+;
+; Windows 10 maps the DMA buffers of this SoC's non-coherent PCIe controller
+; as Device memory, and the inbox stornvme.sys faults there on an unaligned
+; read (bugcheck 0x7E). rk3xnvme touches that memory only with aligned
+; accesses. See README.md.
+;
+; Windows 10 only: the NTARM64.10.0...22000 models section is empty, so on
+; Windows 11, where stornvme works, this INF matches nothing.
+;
+; Boot start: Windows can be installed on and boot from the NVMe drive.
+; It matches PCI\CC_010802 like stornvme.inf does. An inbox driver outranks a
+; test-signed one whatever the ID, so install.cmd also removes stornvme.inf
+; from the DriverDatabase entry for PCI\CC_010802 (README.md).
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = SCSIAdapter
+ClassGuid   = {4D36E97B-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = rk3xnvme.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+rk3xnvme.sys = 1
+
+[Manufacturer]
+%ProviderName% = RKNVME,NTARM64.10.0...19041,NTARM64.10.0...22000
+
+[RKNVME.NTARM64.10.0...19041]
+%RKNVME.DeviceDesc% = RKNVME_Inst,PCI\CC_010802
+
+; Windows 11 and later: stornvme.sys.
+[RKNVME.NTARM64.10.0...22000]
+
+[RKNVME_Inst.NT]
+CopyFiles = RKNVME_CopyFiles
+
+[RKNVME_CopyFiles]
+rk3xnvme.sys
+
+[RKNVME_Inst.NT.HW]
+AddReg = RKNVME_HW_AddReg
+
+[RKNVME_HW_AddReg]
+HKR, Interrupt Management,, 0x00000010
+HKR, Interrupt Management\MessageSignaledInterruptProperties,, 0x00000010
+HKR, Interrupt Management\MessageSignaledInterruptProperties, MSISupported, 0x00010001, 1
+HKR, Interrupt Management\MessageSignaledInterruptProperties, MessageNumberLimit, 0x00010001, 1
+
+[RKNVME_Inst.NT.Services]
+AddService = rk3xnvme,0x00000002,RKNVME_Service,RKNVME_EventLog
+
+[RKNVME_Service]
+DisplayName    = %RKNVME.SvcDesc%
+ServiceType    = 1 ; SERVICE_KERNEL_DRIVER
+StartType      = 0 ; SERVICE_BOOT_START
+ErrorControl   = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\rk3xnvme.sys
+LoadOrderGroup = SCSI Miniport
+AddReg         = RKNVME_Service_AddReg
+
+[RKNVME_Service_AddReg]
+HKR, Parameters\PnpInterface, 5, 0x00010001, 1
+HKR, Parameters, BusType, 0x00010001, 0x00000011
+HKR, Parameters, IoTimeoutValue, 0x00010001, 30
+
+[RKNVME_EventLog]
+AddReg = RKNVME_EventLog_AddReg
+
+[RKNVME_EventLog_AddReg]
+HKR,, EventMessageFile, 0x00020000, "%%SystemRoot%%\System32\IoLogMsg.dll"
+HKR,, TypesSupported, 0x00010001, 7
+
+[Strings]
+ProviderName       = "woa-rk3576"
+DiskName           = "RK3576 NVMe Installation Disk"
+RKNVME.DeviceDesc  = "NVMe controller (RK3576, Windows 10)"
+RKNVME.SvcDesc     = "RK3576 NVMe Miniport (Windows 10)"

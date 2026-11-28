@@ -9,7 +9,8 @@
 # counts); each one that is not a static library must also ship an INF or INX.
 # A driver binds a hardware ID: ACPI\<HID> for devices the firmware publishes,
 # a bus-enumerated ID such as CSAUDIO\... for a child of another driver, or
-# SD\VID_xxxx&PID_xxxx for an SDIO card that sdbus enumerates.
+# SD\VID_xxxx&PID_xxxx for an SDIO card that sdbus enumerates, or a PCI
+# class code (PCI\CC_xxxxxx) for a controller on the PCIe bus.
 #
 set -uo pipefail
 
@@ -61,7 +62,7 @@ while IFS= read -r inf; do
         echo "::error file=$inf::INF does not target NTARM64"
         fail=1
     fi
-    if ! grep -qE '(ACPI|CSAUDIO|SD)\\[A-Za-z0-9&_]+' <<<"$text"; then
+    if ! grep -qE '(ACPI|CSAUDIO|SD|PCI)\\[A-Za-z0-9&_]+' <<<"$text"; then
         echo "::error file=$inf::INF has no ACPI\\<HID> or bus hardware id"
         fail=1
     fi
