@@ -110,6 +110,30 @@ class Assemble(unittest.TestCase):
             self.assertIn('rk3576-drivers/install-online.ps1', names)
             self.assertIn('rk3576-drivers/drivers/csaudiork3x/csaudiork3x.sys', names)
 
+    def test_kmdf_for_windows_10(self):
+        # A woa driver that Windows 10 gets must not ask for more than KMDF
+        # 1.31; one for Windows 11 only may. The NPU's is only warned about.
+        with tempfile.TemporaryDirectory() as top:
+            woa, gpu, npu = make_inputs(top)
+            touch(os.path.join(woa, 'woa-drivers', 'rkled', 'rkled.inf'),
+                  b'[rkled_wdfsect]\r\nKmdfLibraryVersion = 1.33\r\n')
+            r, _ = run(top, woa, gpu, npu)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn('rkled: rkled.inf asks for KMDF 1.33', r.stdout)
+        with tempfile.TemporaryDirectory() as top:
+            woa, gpu, npu = make_inputs(top)
+            touch(os.path.join(woa, 'woa-drivers', 'dwc_eqos', 'dwc_eqos.inf'),
+                  b'KmdfLibraryVersion = 1.33\r\n')
+            touch(os.path.join(woa, 'woa-drivers', 'rkled', 'rkled.inf'),
+                  b'KmdfLibraryVersion = 1.31\r\n')
+            with zipfile.ZipFile(npu, 'w') as z:
+                z.writestr('rknpu/rknpu.inf', b'KmdfLibraryVersion = 1.33\r\n')
+                for n in ('rknpu/rknpu.cat', 'rknpu/rknpu.sys', 'signer.cer'):
+                    z.writestr(n, b'x')
+            r, _ = run(top, woa, gpu, npu)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn('::warning::rknpu: rknpu.inf asks for KMDF 1.33', r.stdout)
+
     def test_win10_lists(self):
         # The real table: Windows 10 takes dwc_eqos10 for dwc_eqos and adds
         # rk3xnvme (CM5-IO, ROCK 4D); nothing else differs and nothing is

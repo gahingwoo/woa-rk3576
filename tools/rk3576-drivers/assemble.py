@@ -42,6 +42,10 @@ BUILD_MAX = 99999
 OS_NAMED = {'all': (0, BUILD_MAX), 'win10': (0, 21999), 'win11': (22000, BUILD_MAX)}
 WIN10_BUILD = 19045   # the Windows 10 the -win10 lists are for
 WIN11_BUILD = 22000   # the first Windows 11: the plain lists
+# The newest KMDF each Windows build has: a driver for a build below 22000
+# that asks for more cannot bind to the framework there (Windows 10 22H2
+# has Wdf01000.sys 1.31.19041).
+KMDF_WIN10 = (1, 31)
 
 
 def os_range(tok):
@@ -143,6 +147,21 @@ def inf_source_files(inf):
     return out
 
 
+def inf_kmdf(inf):
+    """The highest KmdfLibraryVersion an INF asks for, as (major, minor), or None."""
+    raw = open(inf, 'rb').read()
+    enc = 'utf-16' if raw[:2] in (b'\xff\xfe', b'\xfe\xff') else 'latin-1'
+    best = None
+    for line in raw.decode(enc).splitlines():
+        line = line.split(';', 1)[0].strip()
+        k, eq, v = line.partition('=')
+        if eq and k.strip().lower() == 'kmdflibraryversion':
+            mj, _, mn = v.strip().partition('.')
+            if mj.isdigit() and mn.isdigit():
+                best = max(best or (0, 0), (int(mj), int(mn)))
+    return best
+
+
 def complete_driver(src_dir, dst):
     """Copy what the folder's INFs list but the extension filter left out
     (malivk.json, the Vulkan ICD manifest, was the first); return the names
@@ -240,6 +259,19 @@ def main():
             if not any(f.endswith(ext) for f in files):
                 problems.append(f'{d}: no {ext} in {src}')
         r['infs'] = sorted(f for f in os.listdir(dst) if f.lower().endswith('.inf')) if n else []
+        # A build for Windows 10 must bind to its KMDF: an error for this
+        # repository's drivers, a warning for the GPU and NPU ones, which
+        # come from other repositories' main.
+        if r['builds'][0] < WIN11_BUILD:
+            for inf in r['infs']:
+                k = inf_kmdf(os.path.join(dst, inf))
+                if k and k > KMDF_WIN10:
+                    msg = (f'{d}: {inf} asks for KMDF {k[0]}.{k[1]}, but the row covers builds from '
+                           f"{r['builds'][0]} and Windows 10 has {KMDF_WIN10[0]}.{KMDF_WIN10[1]}")
+                    if r['from'] == 'woa':
+                        problems.append(msg)
+                    else:
+                        print(f'::warning::{msg}')
     if problems:
         for p in problems:
             print(f'::error::{p}')

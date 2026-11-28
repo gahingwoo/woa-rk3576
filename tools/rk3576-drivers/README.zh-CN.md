@@ -53,9 +53,23 @@ Windows 10（19041 到 19045）和 Windows 11 各装适合自己版本号的驱�
 
 板子写 `tspi3m`、`cm5io` 或 `rock4d`。
 
+## Windows 10 上板检查（ROCK 4D）
+
+还没在 ROCK 4D 上跑过。把包 `install.cmd W:\ rock4d` 装进 19045 镜像后（或 `/online` 再重启）：
+
+1. `pnputil /enum-devices /problem` 里没有 RK3576 设备（代码 10、31、39）。
+2. `Get-PnpDevice -PresentOnly | ? Status -ne OK` 除了故意不装驱动的设备外为空。
+3. NVMe：磁盘用的是 `rk3xnvme` 而不是 stornvme；来回拷几 GB 不蓝屏。
+4. 以太网（`dwc_eqos10`）：拿到 DHCP 地址，能 ping 通网关。
+5. 电源键（`rk806pwrkey`）按电源选项生效；LED（`rkled`）闪；`tools\eeprom` 能读 HAT EEPROM（`rkeeprom`）。
+6. HDMI 音频和 codec 有声；SARADC 按键和耳机检测可用；`vdpu383test` 能解码；40-pin UART 和 SPI 示例能跑。
+7. 前面板 USB 和蓝牙（系统自带驱动）：键盘可用，手机能配对。
+
+第一次启动时设 `AutoReboot=0` 并准备好救援 Windows，蓝屏信息才能看清。
+
 ## 构建
 
 `.github/workflows/drivers.yml` 用同一个提交构建并签名本仓库的驱动（`build-woa.ps1`），
-从 wddm-mali-g52 和 woa-rk3576-npu 最近一次成功的构建取 maliwddm 和 rknpu，再运行 `assemble.py`。
+从 wddm-mali-g52 和 woa-rk3576-npu 最近一次成功的构建取 maliwddm 和 rknpu，再运行 `assemble.py`；Windows 10 会装到的驱动若要求高于 KMDF 1.31，它会报错（GPU 和 NPU 只警告）。
 `test_assemble.py` 测试它；工作流还会在 Windows runner 上为每块板子规划一次在线安装，
 并用 `test_online.ps1` 拿虚构的设备跑一遍重启后的检查。

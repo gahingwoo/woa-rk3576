@@ -68,11 +68,33 @@ Into a Windows that is not running (from WinPE, `W:` holds `W:\Windows`):
 
 The board is `tspi3m`, `cm5io` or `rock4d`.
 
+## Windows 10 board check (ROCK 4D)
+
+Not run on a ROCK 4D yet. After `install.cmd W:\ rock4d` into a 19045
+image (or `/online` plus a restart):
+
+1. `pnputil /enum-devices /problem` lists no RK3576 device (code 10, 31, 39).
+2. `Get-PnpDevice -PresentOnly | ? Status -ne OK` is empty apart from devices
+   with no driver on purpose.
+3. NVMe: the disk is on `rk3xnvme`, not stornvme; copy a few GB to it and
+   back without a bugcheck.
+4. Ethernet (`dwc_eqos10`): DHCP address, ping the gateway.
+5. Power button (`rk806pwrkey`) does what Power Options says; LEDs
+   (`rkled`) blink; `tools\eeprom` reads the HAT EEPROM (`rkeeprom`).
+6. HDMI audio and the codec play; SARADC keys and headphone detect work;
+   `vdpu383test` decodes; the 40-pin UART and SPI samples run.
+7. Front USB ports and Bluetooth (in-box drivers): a keyboard works, a phone
+   pairs.
+
+Keep `AutoReboot=0` and a rescue Windows for the first boot, so a bugcheck
+stays readable.
+
 ## Building it
 
 `.github/workflows/drivers.yml` builds and signs this repository's drivers
 from the same commit (`build-woa.ps1`), takes maliwddm and rknpu from the
 latest successful builds of wddm-mali-g52 and woa-rk3576-npu, and runs
-`assemble.py`. `test_assemble.py` tests it; the workflow also plans an
+`assemble.py`, which fails if a driver Windows 10 gets asks for more than
+KMDF 1.31 (a warning for the GPU and NPU). `test_assemble.py` tests it; the workflow also plans an
 online install of each board on a Windows runner, and `test_online.ps1`
 runs the follow-up check against made-up devices.
