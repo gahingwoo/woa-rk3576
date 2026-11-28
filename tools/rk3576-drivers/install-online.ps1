@@ -150,9 +150,26 @@ function Test-Newer($pkg, $cur) {
     return $pkg.Version -gt $cur.Version
 }
 
-$lists = @(Join-Path $here "boards\$Board.txt")
-if (-not (Test-Path -LiteralPath $lists[0])) { Write-Host "There is no board $Board in this package (boards\$Board.txt)."; exit 2 }
-if ($Optional) { $lists += Join-Path $here "boards\$Board-optional.txt" }
+if (-not (Test-Path -LiteralPath (Join-Path $here "boards\$Board.txt"))) { Write-Host "There is no board $Board in this package (boards\$Board.txt)."; exit 2 }
+# Windows 10 (build below 22000) takes boards\<board>-win10.txt: drivers made
+# for Windows 11 only are left out, and named, until their Windows 10 builds
+# are in the package.
+$build = 0
+try { $build = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop).CurrentBuildNumber } catch { $build = 0 }
+$osk = ''
+if ($build -gt 0 -and $build -lt 22000 -and (Test-Path -LiteralPath (Join-Path $here "boards\$Board-win10.txt"))) { $osk = '-win10' }
+$lists = @(Join-Path $here "boards\$Board$osk.txt")
+if ($Optional) { $lists += Join-Path $here "boards\$Board$osk-optional.txt" }
+$win10Skipped = @()
+if ($osk) {
+    $sk = Join-Path $here 'boards\win10-skipped.txt'
+    if (Test-Path -LiteralPath $sk) {
+        foreach ($l in Get-Content -LiteralPath $sk) {
+            $c = $l -split "`t", 3
+            if ($c.Count -eq 3 -and ($c[1] -split ',') -contains $Board) { $win10Skipped += "Skipped $($c[0]) ($($c[2])): it has no Windows 10 driver yet." }
+        }
+    }
+}
 $dirs = @()
 foreach ($f in $lists) {
     if (Test-Path -LiteralPath $f) {
@@ -162,6 +179,8 @@ foreach ($f in $lists) {
 $verFile = Join-Path $here 'VERSION.txt'
 $pkgVer = if (Test-Path -LiteralPath $verFile) { (Get-Content -LiteralPath $verFile -TotalCount 1).Trim() } else { 'unknown' }
 Say "RK3576 driver package $pkgVer, board $Board$(if ($Plan) { ', plan only (nothing is changed)' })."
+Say "Windows build $build$(if ($osk) { ': the Windows 10 drivers' } else { ': the Windows 11 drivers' })."
+foreach ($m in $win10Skipped) { Say $m }
 
 $failed = 0
 if (-not $Plan) {

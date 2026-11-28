@@ -10,6 +10,11 @@
 #   from      where it comes from: woa (built from this repository by
 #             build-woa.ps1 in the same drivers.yml run), gpu (wddm-mali-g52),
 #             npu (woa-rk3576-npu)
+#   os        optional: which Windows it is for. "win11" (build 22000 and
+#             later) or "win10" (build 19041 to 19045); left out, every
+#             Windows. A Windows 11 only driver is skipped on Windows 10 with
+#             a message until its Windows 10 build (a "win10" row of its own)
+#             is in the package.
 #   what      what it is, for the manifest and the lists
 #
 # A driver for hardware a board does not have binds nothing, because each INF
@@ -17,7 +22,7 @@
 # options) that have the device. The board columns keep the lists honest anyway:
 # a board gets only what can be on it.
 #
-# dir        default        optional  from   what
+# dir        default        optional  from   [os]   what
 dwcsdhc      all            -         woa    eMMC (dwcsdhc)
 dwcmshc      all            -         woa    SD card and SDIO (dwcmshc)
 rk3xgpio     all            -         woa    GPIO

@@ -71,9 +71,9 @@ def make_inputs(top, skip_sys=None, skip_gpu_file=None):
     return woa, gpu, npu
 
 
-def run(top, woa, gpu, npu):
+def run(top, woa, gpu, npu, table=TABLE):
     out = os.path.join(top, 'out')
-    cmd = [sys.executable, '-I', ASSEMBLE, '--table', TABLE,
+    cmd = [sys.executable, '-I', ASSEMBLE, '--table', table,
            '--install', os.path.join(HERE, 'install.cmd'),
            '--script', os.path.join(HERE, 'install-online.ps1'),
            '--script', os.path.join(HERE, 'mark-reinstall.ps1'),
@@ -106,6 +106,52 @@ class Assemble(unittest.TestCase):
                 names = z.namelist()
             self.assertIn('rk3576-drivers/install-online.ps1', names)
             self.assertIn('rk3576-drivers/drivers/csaudiork3x/csaudiork3x.sys', names)
+
+    def test_win10_lists(self):
+        # Every row of the real table is for every Windows: the Windows 10
+        # lists are the Windows 11 ones and nothing is skipped.
+        with tempfile.TemporaryDirectory() as top:
+            r, out = run(top, *make_inputs(top))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            bd = os.path.join(out, 'rk3576-drivers', 'boards')
+            for b in ('tspi3m', 'cm5io', 'rock4d'):
+                for kind in ('', '-optional'):
+                    self.assertEqual(lines(os.path.join(bd, f'{b}{kind}.txt')),
+                                     lines(os.path.join(bd, f'{b}-win10{kind}.txt')), b + kind)
+            self.assertEqual(lines(os.path.join(bd, 'win10-skipped.txt')), [])
+
+    def test_os_column(self):
+        # A Windows 11 only driver leaves the Windows 10 lists and is named in
+        # win10-skipped.txt; its Windows 10 build is only in the Windows 10 lists.
+        with tempfile.TemporaryDirectory() as top:
+            table = os.path.join(top, 'drivers.tsv')
+            with open(TABLE, encoding='utf-8') as f:
+                t = f.read()
+            t = t.replace('rk3xspi      all            -         woa    SPI',
+                          'rk3xspi      all            -         woa    win11 SPI')
+            t += 'rk3xspi10    cm5io          -         woa    win10 SPI, Windows 10 build\n'
+            with open(table, 'w', encoding='utf-8') as f:
+                f.write(t)
+            woa, gpu, npu = make_inputs(top)
+            p = os.path.join(woa, 'woa-drivers', 'rk3xspi10')
+            for ext in ('.inf', '.cat', '.sys'):
+                touch(os.path.join(p, 'rk3xspi10' + ext))
+            r, out = run(top, woa, gpu, npu, table)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            bd = os.path.join(out, 'rk3576-drivers', 'boards')
+            self.assertIn('rk3xspi', lines(os.path.join(bd, 'cm5io.txt')))
+            self.assertNotIn('rk3xspi10', lines(os.path.join(bd, 'cm5io.txt')))
+            self.assertNotIn('rk3xspi', lines(os.path.join(bd, 'cm5io-win10.txt')))
+            self.assertIn('rk3xspi10', lines(os.path.join(bd, 'cm5io-win10.txt')))
+            self.assertNotIn('rk3xspi10', lines(os.path.join(bd, 'tspi3m-win10.txt')))
+            sk = lines(os.path.join(bd, 'win10-skipped.txt'))
+            self.assertEqual(sk, ['rk3xspi\ttspi3m,cm5io,rock4d\tSPI'])
+            with open(os.path.join(out, 'rk3576-drivers', 'manifest.json')) as f:
+                m = {d['dir']: d for d in json.load(f)['drivers']}
+            self.assertEqual(m['rk3xspi']['os'], 'win11')
+            self.assertEqual(m['rk3xspi']['what'], 'SPI')
+            self.assertEqual(m['rk3xspi10']['os'], 'win10')
+            self.assertEqual(m['dwcsdhc']['os'], 'all')
 
     def test_missing_sys_fails(self):
         with tempfile.TemporaryDirectory() as top:

@@ -13,6 +13,10 @@ rem                                             to take them at the next boot;
 rem                                             a task checks after that boot
 rem                                             that they did (verify-bound.ps1)
 rem
+rem On Windows 10 (build below 22000) the lists are boards\<board>-win10.txt
+rem and <board>-win10-optional.txt: drivers made for Windows 11 only are left
+rem out, and named, until their Windows 10 builds are in the package.
+rem
 rem <board> is tspi3m, cm5io or rock4d. boards\<board>.txt lists the driver
 rem folders installed by default, boards\<board>-optional.txt the ones added
 rem with /optional (untested on that board). manifest.json says what each is.
@@ -34,8 +38,7 @@ if not exist "%HERE%boards\%B%.txt" (
   echo There is no board %B% in this package ^(boards\%B%.txt^).
   exit /b 2
 )
-set LISTS="%HERE%boards\%B%.txt"
-if /i "%~3"=="/optional" set LISTS=%LISTS% "%HERE%boards\%B%-optional.txt"
+set OPTARG=%~3
 set VER=unknown
 if exist "%HERE%VERSION.txt" set /p VER=<"%HERE%VERSION.txt"
 echo RK3576 driver package %VER%, board %B%.
@@ -47,6 +50,18 @@ if not exist "%T%\Windows\System32\config\SYSTEM" (
   echo No Windows at %T%\ ^(no %T%\Windows\System32\config\SYSTEM^).
   exit /b 2
 )
+rem Which Windows: Windows 10 (build below 22000) takes boards\<board>-win10.txt.
+set BUILD=
+reg load HKLM\RKDRVSW "%T%\Windows\System32\config\SOFTWARE" >nul 2>&1
+if not errorlevel 1 (
+  for /f "tokens=3" %%v in ('reg query "HKLM\RKDRVSW\Microsoft\Windows NT\CurrentVersion" /v CurrentBuildNumber 2^>nul ^| find "CurrentBuildNumber"') do set BUILD=%%v
+  reg unload HKLM\RKDRVSW >nul 2>&1
+)
+if "%BUILD%"=="" (
+  echo Could not read the Windows build of %T%\ ^(its SOFTWARE hive^); taking the Windows 11 lists.
+  set BUILD=22000
+)
+call :lists %BUILD%
 set E=0
 for %%L in (%LISTS%) do (
   for /f "usebackq eol=# delims=" %%d in (%%L) do (
@@ -59,6 +74,24 @@ for %%L in (%LISTS%) do (
 )
 if not "%E%"=="0" exit /b 1
 echo RK3576 drivers %VER% added to %T%\.
+exit /b 0
+
+:lists
+rem %1 = the build. Sets LISTS and, on Windows 10, names what has no Windows 10 driver yet.
+set OSK=
+if %1 LSS 22000 set OSK=-win10
+set LISTS="%HERE%boards\%B%%OSK%.txt"
+if /i "%OPTARG%"=="/optional" set LISTS=%LISTS% "%HERE%boards\%B%%OSK%-optional.txt"
+if "%OSK%"=="" (
+  echo Windows build %1: the Windows 11 drivers.
+  exit /b 0
+)
+echo Windows build %1: the Windows 10 drivers.
+if exist "%HERE%boards\win10-skipped.txt" (
+  for /f "usebackq eol=# tokens=1,2,* delims=	" %%a in ("%HERE%boards\win10-skipped.txt") do (
+    echo ,%%b, | find ",%B%," >nul && echo Skipped %%a ^(%%c^): it has no Windows 10 driver yet.
+  )
+)
 exit /b 0
 
 :online

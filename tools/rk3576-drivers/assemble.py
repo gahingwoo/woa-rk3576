@@ -30,6 +30,9 @@ FROM = ('woa', 'gpu', 'npu')
 # Files a driver folder may carry; symbols and documentation stay out.
 DRIVER_FILES = ('.inf', '.cat', '.sys', '.dll', '.man')
 NULL_DRIVERS = ('malivop', 'rk3576-null')
+# drivers.tsv's os column: every Windows, Windows 10 only (build < 22000), or
+# Windows 11 only (build 22000 and later).
+OS_KINDS = ('all', 'win10', 'win11')
 
 
 def boards(field, line):
@@ -55,12 +58,18 @@ def read_table(path):
             if len(parts) != 5:
                 sys.exit(f'drivers.tsv line {n}: want 5 columns, got {len(parts)}')
             d, dflt, opt, frm, what = parts
+            # The optional sixth column, before "what": which Windows the
+            # driver is for. Rows without it are for every Windows.
+            osv = 'all'
+            first, _, rest = what.partition(' ')
+            if first in OS_KINDS and rest.strip():
+                osv, what = first, rest.strip()
             if frm not in FROM:
                 sys.exit(f'drivers.tsv line {n}: unknown source {frm}')
             de, op = boards(dflt, n), boards(opt, n)
             if set(de) & set(op):
                 sys.exit(f'drivers.tsv line {n}: a board is both default and optional')
-            rows.append({'dir': d, 'what': what, 'from': frm, 'default': de, 'optional': op})
+            rows.append({'dir': d, 'what': what, 'from': frm, 'default': de, 'optional': op, 'os': osv})
     names = [r['dir'] for r in rows]
     if len(set(names)) != len(names):
         sys.exit('drivers.tsv names a folder twice')
@@ -191,13 +200,21 @@ def main():
             sys.exit(f'no signer certificate {src}')
         shutil.copy2(src, os.path.join(certs, name))
 
+    # boards\<board>.txt is the Windows 11 list, as before the os column;
+    # boards\<board>-win10.txt the Windows 10 one. win10-skipped.txt names the
+    # drivers that have no Windows 10 build yet, for install.cmd to say so.
     os.makedirs(os.path.join(root, 'boards'))
     for b in BOARDS:
-        for kind, key in (('', 'default'), ('-optional', 'optional')):
-            with open(os.path.join(root, 'boards', f'{b}{kind}.txt'), 'w', newline='\r\n') as f:
-                for r in rows:
-                    if b in r[key]:
-                        f.write(r['dir'] + '\n')
+        for osk, osname in (('', 'win11'), ('-win10', 'win10')):
+            for kind, key in (('', 'default'), ('-optional', 'optional')):
+                with open(os.path.join(root, 'boards', f'{b}{osk}{kind}.txt'), 'w', newline='\r\n') as f:
+                    for r in rows:
+                        if b in r[key] and r['os'] in ('all', osname):
+                            f.write(r['dir'] + '\n')
+    with open(os.path.join(root, 'boards', 'win10-skipped.txt'), 'w', newline='\r\n') as f:
+        for r in rows:
+            if r['os'] == 'win11':
+                f.write(f"{r['dir']}\t{','.join(r['default'] + r['optional'])}\t{r['what']}\n")
 
     sources = {}
     for s in a.source:
@@ -209,7 +226,7 @@ def main():
         'version': a.version,
         'boards': list(BOARDS),
         'sources': sources,
-        'drivers': [{k: r[k] for k in ('dir', 'what', 'from', 'default', 'optional', 'infs')} for r in rows],
+        'drivers': [{k: r[k] for k in ('dir', 'what', 'from', 'default', 'optional', 'os', 'infs')} for r in rows],
     }
     with open(os.path.join(root, 'manifest.json'), 'w', newline='\n') as f:
         json.dump(manifest, f, indent=2)

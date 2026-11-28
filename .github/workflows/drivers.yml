@@ -170,6 +170,10 @@ jobs:
               for core in ('dwcsdhc', 'dwcmshc', 'maliwddm', 'vdpu383', 'rk3xi2sbus',
                            'csaudiork3x', 'es8323', 'rk3576-null'):
                   assert core in want, (b, core)
+              # the Windows 10 list: every driver for all Windows plus the win10 ones
+              want10 = [d['dir'] for d in m['drivers'] if b in d['default'] and d.get('os', 'all') in ('all', 'win10')]
+              got10 = [l.strip() for l in open(f'boards/{b}-win10.txt') if l.strip()]
+              assert want10 == got10, (b, want10, got10)
           print('manifest and board lists agree')
           PY
 
