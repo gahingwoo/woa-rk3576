@@ -21,6 +21,12 @@ struct RxQueueContext
     NET_EXTENSION packetIeee8021Q;
     NET_EXTENSION packetChecksum;
     NET_EXTENSION fragmentLogical;
+#if DWC_EQOS_NETCX20
+    NET_EXTENSION fragmentVirtual;
+    NET_EXTENSION fragmentReturn;
+    RxPool20* pool;
+    RxBuffer20** fragBuffer;    // Buffer attached to each fragment, nonpaged pool.
+#endif
     UINT32 descCount;   // A power of 2 between QueueDescriptorMinCount and QueueDescriptorMaxCount.
     UINT16 rxBufferSize;
     UINT8 rxPbl;
@@ -30,6 +36,118 @@ struct RxQueueContext
     UINT32 descEnd;     // End of the RECEIVE region, start of the EMPTY region.
 };
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(RxQueueContext, RxQueueGetContext)
+
+#if DWC_EQOS_NETCX20
+
+// Driver-managed receive buffers for NetAdapterCx 2.0 (device.cpp says why).
+// One contiguous write-combined block cut into RxBufferSize() pieces; the
+// MAC writes them by physical address, so this needs the DMA logical address
+// to be the physical one, which RxQueueCreate checks on the descriptor ring.
+// A buffer is either free (freeList), attached to a fragment (fragBuffer),
+// or in the stack until EvtAdapterReturnRxBuffer. Packets the driver ignores
+// keep their buffer: NetAdapterCx returns nothing for them.
+
+static constexpr UINT32 RxPool20Tag = 'bRwD';
+
+_Use_decl_annotations_
+void
+RxPool20Free(RxPool20* pool)
+{
+    if (pool->memory)
+    {
+        MmFreeContiguousMemory(pool->memory);
+        pool->memory = nullptr;
+    }
+
+    if (pool->buffers)
+    {
+        ExFreePoolWithTag(pool->buffers, RxPool20Tag);
+        pool->buffers = nullptr;
+    }
+
+    pool->count = 0;
+    pool->memorySize = 0;
+    InitializeSListHead(&pool->freeList);
+}
+
+_Use_decl_annotations_
+void
+RxPool20Return(RxPool20* pool, void* returnContext)
+{
+    // nullptr for the discarded NBL of a packet the driver ignored.
+    if (returnContext != nullptr)
+    {
+        InterlockedPushEntrySList(&pool->freeList, &static_cast<RxBuffer20*>(returnContext)->entry);
+    }
+}
+
+static RxBuffer20*
+RxPool20Pop(_Inout_ RxPool20* pool)
+{
+    return CONTAINING_RECORD(InterlockedPopEntrySList(&pool->freeList), RxBuffer20, entry);
+}
+
+// Allocates the pool the first time; every time, puts every buffer on the
+// free list (the previous queue, if any, has had all of them back).
+_IRQL_requires_(PASSIVE_LEVEL)
+static NTSTATUS
+RxPool20Reset(_Inout_ RxPool20* pool, UINT32 count, UINT32 bufferSize, PHYSICAL_ADDRESS maxPhysicalAddress)
+{
+    if (pool->count < count)
+    {
+        RxPool20Free(pool);
+
+        pool->buffers = static_cast<RxBuffer20*>(ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(RxBuffer20) * count, RxPool20Tag));
+        if (pool->buffers == nullptr)
+        {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        PHYSICAL_ADDRESS lowest = {}, boundary = {};
+        pool->memorySize = static_cast<SIZE_T>(bufferSize) * count;
+        pool->memory = MmAllocateContiguousNodeMemory(
+            pool->memorySize, lowest, maxPhysicalAddress, boundary,
+            PAGE_READWRITE | PAGE_WRITECOMBINE, MM_ANY_NODE_OK);
+        if (pool->memory == nullptr)
+        {
+            RxPool20Free(pool);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        auto const physical = MmGetPhysicalAddress(pool->memory).QuadPart;
+        for (UINT32 i = 0; i != count; i += 1)
+        {
+            pool->buffers[i].virtualAddress = static_cast<UINT8*>(pool->memory) + static_cast<SIZE_T>(bufferSize) * i;
+            pool->buffers[i].physicalAddress = physical + static_cast<UINT64>(bufferSize) * i;
+        }
+
+        pool->count = count;
+    }
+
+    InitializeSListHead(&pool->freeList);
+    for (UINT32 i = 0; i != pool->count; i += 1)
+    {
+        InterlockedPushEntrySList(&pool->freeList, &pool->buffers[i].entry);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+// Gives the buffers of fragments [begin, end) back to the free list.
+static void
+RxQueueReclaim20(_Inout_ RxQueueContext* context, UINT32 begin, UINT32 end)
+{
+    for (auto i = begin; i != end; i = NetRingIncrementIndex(context->fragmentRing, i))
+    {
+        if (context->fragBuffer[i] != nullptr)
+        {
+            InterlockedPushEntrySList(&context->pool->freeList, &context->fragBuffer[i]->entry);
+            context->fragBuffer[i] = nullptr;
+        }
+    }
+}
+
+#endif // DWC_EQOS_NETCX20
 
 // Gets channelRegs->Current_App_RxDesc, converted to an index.
 static UINT32
@@ -166,11 +284,17 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
 
             pkt->Ignore = true;
             frag->ValidLength = 0;
+#if DWC_EQOS_NETCX20
+            RxQueueReclaim20(context, fragIndex, NetRingIncrementIndex(context->fragmentRing, fragIndex));
+#endif
         }
         else
         {
             NT_ASSERT(descWrite.PacketLength >= 4); // PacketLength includes CRC
             frag->ValidLength = descWrite.PacketLength - 4;
+#if DWC_EQOS_NETCX20
+            context->fragBuffer[fragIndex] = nullptr; // The stack has it until EvtAdapterReturnRxBuffer.
+#endif
 
             if (descWrite.Rdes0Valid && descWrite.OuterVlanTag != 0 && context->packetIeee8021Q.Enabled)
             {
@@ -239,8 +363,29 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
                 break;
             }
 
+#if DWC_EQOS_NETCX20
+            auto const buffer = RxPool20Pop(context->pool);
+            if (buffer == nullptr)
+            {
+                break; // All in the stack: more come back before the next advance.
+            }
+
+            {
+                auto const frag = NetRingGetFragmentAtIndex(context->fragmentRing, fragIndex);
+                frag->Capacity = context->rxBufferSize;
+                frag->Offset = 0;
+                frag->ValidLength = 0;
+                NetExtensionGetFragmentVirtualAddress(&context->fragmentVirtual, fragIndex)->VirtualAddress = buffer->virtualAddress;
+                NetExtensionGetFragmentReturnContext(&context->fragmentReturn, fragIndex)->Handle =
+                    reinterpret_cast<NET_FRAGMENT_RETURN_CONTEXT_HANDLE>(buffer);
+                context->fragBuffer[fragIndex] = buffer;
+            }
+
+            auto const fragLogicalAddress = buffer->physicalAddress;
+#else
             NT_ASSERT(context->rxBufferSize <= NetRingGetFragmentAtIndex(context->fragmentRing, fragIndex)->Capacity);
             auto const fragLogicalAddress = NetExtensionGetFragmentLogicalAddress(&context->fragmentLogical, fragIndex)->LogicalAddress;
+#endif
 
             RxDescriptorRead descRead = {};
             descRead.Buf1ApLow = fragLogicalAddress & 0xFFFFFFFF;
@@ -276,6 +421,9 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
             pktIndex = NetRingIncrementIndex(context->packetRing, pktIndex);
         }
 
+#if DWC_EQOS_NETCX20
+        RxQueueReclaim20(context, fragIndex, context->fragmentRing->NextIndex);
+#endif
         context->packetRing->BeginIndex = pktEnd;
         context->fragmentRing->BeginIndex = fragEnd;
     }
@@ -345,6 +493,14 @@ RxQueueCleanup(_In_ WDFOBJECT queue)
         WdfObjectDelete(context->descBuffer);
         context->descBuffer = nullptr;
     }
+
+#if DWC_EQOS_NETCX20
+    if (context->fragBuffer)
+    {
+        ExFreePoolWithTag(context->fragBuffer, 'fRwD');
+        context->fragBuffer = nullptr;
+    }
+#endif
 
     TraceEntryExit(RxQueueCleanup, LEVEL_VERBOSE);
 }
@@ -448,11 +604,73 @@ RxQueueCreate(
             NetExtensionTypePacket);
         NetRxQueueGetExtension(queue, &query, &context->packetChecksum);
 
+#if DWC_EQOS_NETCX20
+        // Driver-managed buffers: no logical address extension, the driver
+        // gives the virtual address and the return context.
+        NET_EXTENSION_QUERY_INIT(&query,
+            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
+            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
+            NetExtensionTypeFragment);
+        NetRxQueueGetExtension(queue, &query, &context->fragmentVirtual);
+
+        NET_EXTENSION_QUERY_INIT(&query,
+            NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_NAME,
+            NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_VERSION_1,
+            NetExtensionTypeFragment);
+        NetRxQueueGetExtension(queue, &query, &context->fragmentReturn);
+
+        if (!context->fragmentVirtual.Enabled || !context->fragmentReturn.Enabled)
+        {
+            TraceWrite("RxQueueCreate-no-driver-buffer-extensions", LEVEL_ERROR);
+            status = STATUS_NOT_SUPPORTED;
+            goto Done;
+        }
+
+        // The MAC gets the pool's physical addresses: only right while DMA
+        // logical addresses are physical (no SMMU translation for it).
+        if (MmGetPhysicalAddress(context->descVirtual).QuadPart != context->descPhysical.QuadPart)
+        {
+            TraceWrite("RxQueueCreate-logical-not-physical", LEVEL_ERROR,
+                TraceLoggingHexInt64(context->descPhysical.QuadPart, "logical"),
+                TraceLoggingHexInt64(MmGetPhysicalAddress(context->descVirtual).QuadPart, "physical"));
+            DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+                "dwc_eqos: DMA logical address is not physical, no receive\n");
+            status = STATUS_NOT_SUPPORTED;
+            goto Done;
+        }
+
+        {
+            auto const fragCount = context->fragmentRing->NumberOfElements;
+            context->fragBuffer = static_cast<RxBuffer20**>(ExAllocatePool2(
+                POOL_FLAG_NON_PAGED, sizeof(RxBuffer20*) * fragCount, 'fRwD'));
+            if (context->fragBuffer == nullptr)
+            {
+                status = STATUS_INSUFFICIENT_RESOURCES;
+                goto Done;
+            }
+
+            // Every fragment can hold one, and as many again can be in the stack.
+            context->pool = DeviceGetRxPool20(deviceContext);
+            status = RxPool20Reset(context->pool, fragCount * 2, context->rxBufferSize,
+                DeviceGetMaxPhysicalAddress(deviceContext));
+            if (!NT_SUCCESS(status))
+            {
+                TraceWrite("RxQueueCreate-pool-failed", LEVEL_ERROR,
+                    TraceLoggingNTStatus(status));
+                goto Done;
+            }
+
+            DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+                "dwc_eqos: %u driver receive buffers of %u bytes at %p\n",
+                context->pool->count, context->rxBufferSize, context->pool->memory);
+        }
+#else
         NET_EXTENSION_QUERY_INIT(&query,
             NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_NAME,
             NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1,
             NetExtensionTypeFragment);
         NetRxQueueGetExtension(queue, &query, &context->fragmentLogical);
+#endif
     }
 
     status = STATUS_SUCCESS;

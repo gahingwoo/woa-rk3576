@@ -82,6 +82,8 @@ struct DeviceContext
     NETPACKETQUEUE txQueue;             // Guarded by queueLock.
 #if DWC_EQOS_NETCX20
     UINT32 packetFilter20;              // NET_PACKET_FILTER_FLAGS from NetAdapterCx 2.0.
+    PHYSICAL_ADDRESS maxPhysicalAddress20;
+    RxPool20 rxPool20;                  // Driver-managed receive buffers (rxqueue.cpp).
 #endif
 
     // Diagnostics/statistics.
@@ -98,6 +100,20 @@ struct DeviceContext
     UINT32 txDoneFragments; // Updated only during TxQueueAdvance.
 };
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DeviceContext, DeviceGetContext)
+
+#if DWC_EQOS_NETCX20
+RxPool20*
+DeviceGetRxPool20(_In_ DeviceContext* context)
+{
+    return &context->rxPool20;
+}
+
+PHYSICAL_ADDRESS
+DeviceGetMaxPhysicalAddress(_In_ DeviceContext* context)
+{
+    return context->maxPhysicalAddress20;
+}
+#endif
 
 struct AdapterContext
 {
@@ -811,6 +827,16 @@ AdapterSetPacketFilter20(
     DeviceApplyReceiveFilter20(context);
     TraceEntryExit(AdapterSetPacketFilter20, LEVEL_INFO,
         TraceLoggingHexInt32(packetFilter));
+}
+
+static EVT_NET_ADAPTER_RETURN_RX_BUFFER AdapterReturnRxBuffer20;
+static void
+AdapterReturnRxBuffer20(
+    _In_ NETADAPTER adapter,
+    _In_ NET_FRAGMENT_RETURN_CONTEXT_HANDLE rxReturnContext)
+{
+    auto const context = DeviceGetContext(AdapterGetContext(adapter)->device);
+    RxPool20Return(&context->rxPool20, rxReturnContext);
 }
 
 static NET20_SET_MULTICAST_LIST AdapterSetMulticastList20;
@@ -1642,7 +1668,18 @@ DevicePrepareHardware(
         // TODO: Driver-managed buffering + multi-descriptor receive would
         // reduce memory overhead of Jumbo Packets.
         NET_ADAPTER_RX_CAPABILITIES rxCaps;
+#if DWC_EQOS_NETCX20
+        // NetAdapterCx gives system-managed receive buffers as uncached common
+        // buffers, which Windows 10 maps as Device memory: tcpip's misaligned
+        // reads of a frame there fault (bugcheck 0x1E, 0x80000002). The HAL
+        // makes every common buffer of a non-coherent device uncached, so
+        // CacheEnabled does not help. The driver brings its own buffers,
+        // write-combined (Normal non-cacheable on Windows 10 too).
+        context->maxPhysicalAddress20 = maxPhysicalAddress;
+        NET_ADAPTER_RX_CAPABILITIES_INIT_DRIVER_MANAGED(&rxCaps, AdapterReturnRxBuffer20, context->config.RxBufferSize(), QueuesSupported);
+#else
         NET_ADAPTER_RX_CAPABILITIES_INIT_SYSTEM_MANAGED_DMA(&rxCaps, &dmaCaps, context->config.RxBufferSize(), QueuesSupported);
+#endif
 
         NetAdapterSetDataPathCapabilities(context->adapter, &txCaps, &rxCaps);
 
@@ -1821,6 +1858,10 @@ DeviceReleaseHardware(
         MmUnmapIoSpace(context->regs, sizeof(*context->regs));
         context->regs = nullptr;
     }
+
+#if DWC_EQOS_NETCX20
+    RxPool20Free(&context->rxPool20);
+#endif
 
     TraceEntryExit(DeviceReleaseHardware, LEVEL_INFO);
     return STATUS_SUCCESS;

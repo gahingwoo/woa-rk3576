@@ -19,6 +19,7 @@
 #if DWC_EQOS_NETCX20
 #include <ntimage.h>
 #include <aux_klib.h>
+#include <net/returncontext.h>
 #endif
 #include <net/gso.h>
 #include <net/ieee8021q.h>

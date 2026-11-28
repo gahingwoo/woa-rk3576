@@ -61,6 +61,16 @@ DeviceSetNotificationTxQueue(
     _Inout_ DeviceContext* context,
     _In_opt_ NETPACKETQUEUE txQueue);
 
+#if DWC_EQOS_NETCX20
+// Called by rxqueue.cpp RxQueueCreate.
+struct RxPool20;
+RxPool20*
+DeviceGetRxPool20(_In_ DeviceContext* context);
+
+PHYSICAL_ADDRESS
+DeviceGetMaxPhysicalAddress(_In_ DeviceContext* context);
+#endif
+
 // Called by rxqueue.cpp RxQueueAdvance.
 _IRQL_requires_max_(DISPATCH_LEVEL)
 void
