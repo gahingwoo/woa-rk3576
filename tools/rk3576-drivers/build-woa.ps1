@@ -53,11 +53,14 @@ function Copy-Package([string]$from, [string]$to) {
 $pdbOut = Join-Path $Out 'pdb'
 if (Test-Path $pdbOut) { Remove-Item -Recurse -Force $pdbOut }
 function Copy-Pdb([string]$d, [string[]]$from) {
+    # <sys>.pdb for each .sys of the package (dwc_eqos10 ships dwc_eqos.sys)
     $to = Join-Path $pdbOut $d
     New-Item -ItemType Directory -Force -Path $to | Out-Null
+    $names = @(Get-ChildItem (Join-Path $stage $d) -Filter *.sys | ForEach-Object { $_.BaseName + '.pdb' })
     foreach ($f in $from) {
-        if (Test-Path $f) {
-            Get-ChildItem $f -Recurse -File -Filter "$d.pdb" |
+        if (-not (Test-Path $f)) { continue }
+        foreach ($n in $names) {
+            Get-ChildItem $f -Recurse -File -Filter $n |
                 Sort-Object LastWriteTime | Copy-Item -Destination $to -Force
         }
     }
