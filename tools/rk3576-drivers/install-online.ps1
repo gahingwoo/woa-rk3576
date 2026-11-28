@@ -13,8 +13,11 @@
 #    may write the Enum keys, through a one-shot scheduled task running
 #    mark-reinstall.ps1. At the next boot PnP installs them from the store.
 #    Never marked: the SD/eMMC hosts (dwcsdhc, dwcmshc), which the running
-#    Windows may be booted from, and the Ethernet adapter (dwc_eqos) unless
-#    it has no driver at all. Their packages are staged only.
+#    Windows may be booted from, and the Ethernet adapter (dwc_eqos, on
+#    Windows 10 dwc_eqos10) unless it has no driver at all. Their packages are staged only.
+#    On Windows 10 the same task also removes stornvme.inf from the
+#    DriverDatabase entry for PCI\CC_010802 when rk3xnvme is in the list,
+#    so the NVMe controller takes rk3xnvme (see rk3xnvme's README).
 # 4. Sets up the follow-up check: %ProgramData%\RK3576\drivers gets
 #    expected.json (each marked device and the package DriverVer it should
 #    be on after the restart), verify-bound.ps1 and mark-reinstall.ps1, and
@@ -42,7 +45,10 @@ param(
     [switch]$Optional,
     [switch]$Plan,
     [string]$FakeDevices,
-    [string]$ExpectedOut
+    [string]$ExpectedOut,
+    # The Windows build to pick the drivers for; 0 (the default) is this
+    # Windows'. For -Plan runs of another build.
+    [int]$Build = 0
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -57,8 +63,15 @@ $NeverMark = @{
     'dwcsdhc' = 'eMMC host: Windows may be running from it; staged only, it is taken by an offline install (install.cmd W:\ from WinPE)'
     'dwcmshc' = 'SD/SDIO host: Windows may be running from it; staged only, it is taken by an offline install (install.cmd W:\ from WinPE)'
 }
+# Windows 10 only: inbox INFs to take out of the DriverDatabase for an ID,
+# so the package's driver is the only one Plug and Play finds for it. An
+# inbox driver outranks a test-signed one whatever the ID (rk3xnvme README).
+$UnmapOnWin10 = @{
+    'rk3xnvme' = 'PCI\CC_010802 stornvme.inf'
+}
 $MarkOnlyIfNoDriver = @{
     'dwc_eqos' = 'network adapter with a driver: staged only, so a remote session keeps its connection'
+    'dwc_eqos10' = 'network adapter with a driver: staged only, so a remote session keeps its connection'
 }
 
 # The parts of an INF this needs: DriverVer and the IDs of its models sections.
@@ -150,18 +163,54 @@ function Test-Newer($pkg, $cur) {
     return $pkg.Version -gt $cur.Version
 }
 
-$lists = @(Join-Path $here "boards\$Board.txt")
-if (-not (Test-Path -LiteralPath $lists[0])) { Write-Host "There is no board $Board in this package (boards\$Board.txt)."; exit 2 }
-if ($Optional) { $lists += Join-Path $here "boards\$Board-optional.txt" }
+if (-not (Test-Path -LiteralPath (Join-Path $here "boards\$Board.txt"))) { Write-Host "There is no board $Board in this package (boards\$Board.txt)."; exit 2 }
+# The target's build picks the drivers: boards\<board>-builds.txt (and
+# -builds-optional.txt) give each driver the builds it is for (drivers.tsv's
+# os column), boards\skipped.txt the builds a driver has nothing for yet.
+# A package from before those files has the -win10 lists instead.
+$build = $Build
+if ($build -le 0) {
+    try { $build = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop).CurrentBuildNumber } catch { $build = 0 }
+}
+if ($build -le 0) { $build = 22000 }
+$osk = if ($build -lt 22000) { '-win10' } else { '' }
 $dirs = @()
-foreach ($f in $lists) {
-    if (Test-Path -LiteralPath $f) {
-        $dirs += @(Get-Content -LiteralPath $f | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+$skippedMsgs = @()
+$byBuild = Join-Path $here "boards\$Board-builds.txt"
+if (Test-Path -LiteralPath $byBuild) {
+    $lists = @($byBuild)
+    if ($Optional) { $lists += Join-Path $here "boards\$Board-builds-optional.txt" }
+    foreach ($f in $lists) {
+        if (-not (Test-Path -LiteralPath $f)) { continue }
+        foreach ($l in Get-Content -LiteralPath $f) {
+            $c = $l.Trim() -split "`t"
+            if ($c.Count -ge 3 -and -not $c[0].StartsWith('#') -and $build -ge [int]$c[1] -and $build -le [int]$c[2]) { $dirs += $c[0] }
+        }
+    }
+    $sk = Join-Path $here 'boards\skipped.txt'
+    if (Test-Path -LiteralPath $sk) {
+        foreach ($l in Get-Content -LiteralPath $sk) {
+            $c = $l -split "`t", 5
+            if ($c.Count -eq 5 -and $build -ge [int]$c[1] -and $build -le [int]$c[2] -and ($c[3] -split ',') -contains $Board) {
+                $skippedMsgs += "Skipped $($c[0]) ($($c[4])): it has no driver for build $build yet."
+            }
+        }
+    }
+} else {
+    if (-not (Test-Path -LiteralPath (Join-Path $here "boards\$Board$osk.txt"))) { $osk = '' }
+    $lists = @(Join-Path $here "boards\$Board$osk.txt")
+    if ($Optional) { $lists += Join-Path $here "boards\$Board$osk-optional.txt" }
+    foreach ($f in $lists) {
+        if (Test-Path -LiteralPath $f) {
+            $dirs += @(Get-Content -LiteralPath $f | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+        }
     }
 }
 $verFile = Join-Path $here 'VERSION.txt'
 $pkgVer = if (Test-Path -LiteralPath $verFile) { (Get-Content -LiteralPath $verFile -TotalCount 1).Trim() } else { 'unknown' }
 Say "RK3576 driver package $pkgVer, board $Board$(if ($Plan) { ', plan only (nothing is changed)' })."
+Say "Windows build $build$(if ($osk) { ': the Windows 10 drivers' } else { ': the Windows 11 drivers' })."
+foreach ($m in $skippedMsgs) { Say $m }
 
 $failed = 0
 if (-not $Plan) {
@@ -237,6 +286,15 @@ foreach ($d in $dirs) {
     }
 }
 
+$unmap = @()
+if ($build -lt 22000) {
+    foreach ($d in $dirs) { if ($UnmapOnWin10.ContainsKey($d)) { $unmap += $UnmapOnWin10[$d] } }
+}
+foreach ($u in $unmap) {
+    $f = $u -split ' '
+    Say "$(if ($Plan) { 'Would remove' } else { 'Removing' }) $($f[1]) from the DriverDatabase entry for $($f[0]) (Windows 10: the package's driver takes that ID)."
+}
+
 # expected.json for verify-bound.ps1.
 function Get-Expected {
     $devs = @($mark | ForEach-Object {
@@ -297,12 +355,13 @@ function Register-Followup {
     Register-ScheduledTask -TaskName $VerifyTask -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
 }
 
-if ($mark.Count) {
+if ($mark.Count -or $unmap.Count) {
     # The task runs mark-reinstall.ps1 from a folder with no spaces in it.
     if ($work -match '\s') { Say "The work folder has a space in its path: $work"; exit 1 }
     New-Item -ItemType Directory -Path $work | Out-Null
     Copy-Item -LiteralPath (Join-Path $here 'mark-reinstall.ps1') -Destination $work -Force
     $mark | Out-File -FilePath (Join-Path $work 'reinstall.txt') -Encoding ascii
+    if ($unmap.Count) { $unmap | Out-File -FilePath (Join-Path $work 'unmap.txt') -Encoding ascii }
     $mlog = Join-Path $work 'mark-reinstall.log'
     Remove-Item -LiteralPath $mlog -ErrorAction SilentlyContinue
     $task = 'rk3576-drivers-mark'
@@ -321,6 +380,12 @@ if ($mark.Count) {
                 $cf = 0
                 try { $cf = [int](Get-ItemProperty -LiteralPath $k -Name ConfigFlags).ConfigFlags } catch { }
                 if (-not ($cf -band 0x20)) { Say ("{0}: ConfigFlags 0x{1:x8}, the reinstall bit is not set." -f $id, $cf); $failed++ }
+            }
+            foreach ($u in $unmap) {
+                $f = $u -split ' '
+                if (Get-ItemProperty -LiteralPath "HKLM:\DRIVERS\DriverDatabase\DeviceIds\$($f[0])" -Name $f[1] -ErrorAction SilentlyContinue) {
+                    Say "$($f[0]): $($f[1]) is still in the DriverDatabase."; $failed++
+                }
             }
         }
     }

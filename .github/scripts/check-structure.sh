@@ -9,7 +9,8 @@
 # counts); each one that is not a static library must also ship an INF or INX.
 # A driver binds a hardware ID: ACPI\<HID> for devices the firmware publishes,
 # a bus-enumerated ID such as CSAUDIO\... for a child of another driver, or
-# SD\VID_xxxx&PID_xxxx for an SDIO card that sdbus enumerates.
+# SD\VID_xxxx&PID_xxxx for an SDIO card that sdbus enumerates, or a PCI
+# class code (PCI\CC_xxxxxx) for a controller on the PCIe bus.
 #
 set -uo pipefail
 
@@ -23,9 +24,14 @@ while IFS= read -r vcx; do
     # A driver that ships inside another driver's package (its INF installs
     # it, e.g. bcmwlsdio's lower filter) says so, and has no INF of its own.
     grep -q 'check-structure: packaged by ' "$vcx" && is_lib=1
+    # A second build of another driver's sources (dwc_eqos10 builds
+    # ../dwc_eqos for Windows 10) says where they are.
+    srcdir=$dir
+    other=$(grep -o 'check-structure: sources in [^ ]*' "$vcx" | head -1 | sed 's/.* in //' | tr -d '\r')
+    [ -n "$other" ] && srcdir="$dir/$other"
     has_src=0
     for pat in '*.c' '*.cpp' '*.asm' 'arm64/*.asm'; do
-        compgen -G "$dir/$pat" >/dev/null && has_src=1
+        compgen -G "$srcdir/$pat" >/dev/null && has_src=1
     done
     [ "$is_lib" -eq 1 ] && compgen -G "$dir/*.h" >/dev/null && has_src=1
     if [ "$has_src" -eq 0 ]; then
@@ -61,7 +67,7 @@ while IFS= read -r inf; do
         echo "::error file=$inf::INF does not target NTARM64"
         fail=1
     fi
-    if ! grep -qE '(ACPI|CSAUDIO|SD)\\[A-Za-z0-9&_]+' <<<"$text"; then
+    if ! grep -qE '(ACPI|CSAUDIO|SD|PCI)\\[A-Za-z0-9&_]+' <<<"$text"; then
         echo "::error file=$inf::INF has no ACPI\\<HID> or bus hardware id"
         fail=1
     fi

@@ -492,6 +492,48 @@ AdapterCreateRxQueue(
         &context->regs->Dma_Ch[0]);
 }
 
+#if DWC_EQOS_NETCX20
+
+// NetAdapterCx 2.0 has no receive filter control: the MAC passes its own
+// address, broadcast and every multicast (IPv6 neighbour discovery, mDNS),
+// set at every D0Entry.
+static void
+DeviceSetDefaultReceiveFilter(_Inout_ DeviceContext* context)
+{
+    MacPacketFilter_t filter = {};
+    filter.PassAllMulticast = true;
+    filter.DisableBroadcast = false;
+
+    SetOneMacAddress(context->regs, 0, context->currentMacAddress, true);
+    auto const macAddrCount = context->feature0.MacAddrCount;
+    for (unsigned i = 1; i < macAddrCount; i += 1)
+    {
+        static constexpr UINT8 zero[ETHERNET_LENGTH_OF_ADDRESS] = {};
+        SetOneMacAddress(context->regs, i, zero, false);
+    }
+
+    Write32(&context->regs->Mac_Packet_Filter, filter);
+}
+
+static EVT_NET_ADAPTER_OFFLOAD_SET_CHECKSUM AdapterOffloadSetChecksum;
+static void
+AdapterOffloadSetChecksum(
+    _In_ NETADAPTER adapter,
+    _In_ NETOFFLOAD offload)
+{
+    // PASSIVE_LEVEL, nonpaged (resume path)
+    UNREFERENCED_PARAMETER(adapter);
+    auto const IPv4 = NetOffloadIsChecksumIPv4Enabled(offload);
+    auto const Tcp = NetOffloadIsChecksumTcpEnabled(offload);
+    auto const Udp = NetOffloadIsChecksumUdpEnabled(offload);
+    TraceEntryExit(AdapterOffloadSetChecksum, LEVEL_INFO,
+        TraceLoggingBoolean(IPv4),
+        TraceLoggingBoolean(Tcp),
+        TraceLoggingBoolean(Udp));
+}
+
+#else // DWC_EQOS_NETCX20
+
 static EVT_NET_ADAPTER_SET_RECEIVE_FILTER AdapterSetReceiveFilter;
 static void
 AdapterSetReceiveFilter(
@@ -593,6 +635,8 @@ AdapterOffloadSetGso(
         TraceLoggingBoolean(UsoIPv6));
 }
 
+#endif // DWC_EQOS_NETCX20
+
 static EVT_WDF_DEVICE_D0_ENTRY DeviceD0Entry;
 static NTSTATUS
 DeviceD0Entry(
@@ -687,6 +731,10 @@ DeviceD0Entry(
     watchdogTimeout.WatchdogTimeout = static_cast<UINT8>((context->config.jumboFrame + 8 + 1023) / 1024 - 2);
     watchdogTimeout.ProgrammableWatchdogEnable = context->config.jumboFrame > 2000;
     Write32(&context->regs->Mac_Watchdog_Timeout, watchdogTimeout);
+
+#if DWC_EQOS_NETCX20
+    DeviceSetDefaultReceiveFilter(context);
+#endif
 
     // Clear any pending interrupts, then unmask them.
 
@@ -1287,6 +1335,17 @@ DevicePrepareHardware(
 
         NetAdapterSetDataPathCapabilities(context->adapter, &txCaps, &rxCaps);
 
+#if DWC_EQOS_NETCX20
+
+        // NetAdapterCx 2.0: one checksum offload switch, both directions; no
+        // receive filter, GSO or 802.1Q offload (DeviceSetDefaultReceiveFilter).
+        NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES checksumCaps;
+        NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES_INIT(&checksumCaps,
+            TRUE, TRUE, TRUE, AdapterOffloadSetChecksum);
+        NetAdapterOffloadSetChecksumCapabilities(context->adapter, &checksumCaps);
+
+#else // DWC_EQOS_NETCX20
+
         // Note: If we don't claim support for everything, tcpip does not reliably bind.
         NET_ADAPTER_RECEIVE_FILTER_CAPABILITIES rxFilterCaps;
         NET_ADAPTER_RECEIVE_FILTER_CAPABILITIES_INIT(&rxFilterCaps, AdapterSetReceiveFilter);
@@ -1340,6 +1399,8 @@ DevicePrepareHardware(
             AdapterOffloadSetGso);
         gsoCaps.Layer4HeaderOffsetLimit = TxLayer4HeaderOffsetLimit;
         NetAdapterOffloadSetGsoCapabilities(context->adapter, &gsoCaps);
+
+#endif // DWC_EQOS_NETCX20
     }
 
     // Initialize adapter.

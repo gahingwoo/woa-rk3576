@@ -333,7 +333,11 @@ _Out_   MEMORY_CACHING_TYPE    *CacheType_
     *AudioBufferMdl_ = pBufferMdl;
     *ActualSize_ = RequestedSize_;
     *OffsetFromFirstPage_ = 0;
-    *CacheType_ = MmNonCached;
+    // Write-combined (Normal non-cacheable), not MmNonCached: Windows 10
+    // maps MmNonCached RAM as Device memory, and audiodg's memcpy and memset
+    // into the buffer (unaligned LDP/STP, DC ZVA) fault there. The SAI DMA
+    // is not coherent either way, and no cache line is ever held.
+    *CacheType_ = MmWriteCombined;
 
     m_pMiniport->Diag(DIAG_EV_ALLOC_STATUS, STATUS_SUCCESS);
     return STATUS_SUCCESS;

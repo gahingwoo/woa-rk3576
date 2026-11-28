@@ -55,7 +55,7 @@ ServiceBinary = %13%\vdpu383.sys
 KmdfService = vdpu383, VDPU383_wdfsect
 
 [VDPU383_wdfsect]
-KmdfLibraryVersion = 1.33
+KmdfLibraryVersion = 1.31
 
 [Strings]
 ProviderName       = "woa-rk3576"

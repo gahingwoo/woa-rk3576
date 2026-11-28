@@ -19,7 +19,18 @@ has the untested build of `main`).
   pin controller, RTC, UART2, PCIe DBI), GPU (maliwddm) and NPU (rknpu).
 - TaishanPi 3M: also the GT9271 touch screen and Bluetooth.
 - CM5-IO and ROCK 4D: also the RK806 power button. ROCK 4D: the HAT EEPROM.
+- CM5-IO and ROCK 4D on Windows 10 only: NVMe (`rk3xnvme`; the inbox
+  stornvme faults there). Windows 10 installs also remove `stornvme.inf` from
+  the DriverDatabase entry for `PCI\CC_010802` (`win10-nvme.cmd W:\`
+  offline, the SYSTEM task online), see
+  [its README](../../drivers/storage/rk3xnvme/README.md). A tool that runs
+  DISM itself instead of `install.cmd` runs `win10-nvme.cmd W:\` after it.
 - Optional (`/optional`): Bluetooth on the CM5-IO (untested).
+
+Windows 10 (19041 to 19045) and Windows 11 get the drivers for their
+build: on Windows 10, Ethernet is `dwc_eqos10` (NetAdapterCx 2.0) instead of
+`dwc_eqos`. `install.cmd` names any driver that has no build for the
+target's Windows yet.
 
 A driver whose device the firmware does not publish binds nothing.
 The packages are test-signed; `certs\` holds the signers.

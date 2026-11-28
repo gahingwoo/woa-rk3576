@@ -23,7 +23,8 @@
 #    event log) and does not restart. Not done after the retry: logs it and
 #    removes the task.
 # Never re-marked whatever expected.json says: the SD/eMMC hosts (dwcsdhc,
-# dwcmshc), and the Ethernet adapter (dwc_eqos) once it has any driver.
+# dwcmshc), and the Ethernet adapter (dwc_eqos, dwc_eqos10) once it has any
+# driver.
 # It never installs a driver or restarts a device itself.
 #
 #   verify-bound.ps1                      the boot check
@@ -69,7 +70,7 @@ function Say([string]$t) { [void]$script:out.Add($t); Write-Host $t }
 function Save-Log { try { $script:out | Out-File -FilePath $script:logFile -Encoding utf8 -Append } catch { } }
 
 $NeverMark = @('dwcsdhc', 'dwcmshc')
-$MarkOnlyIfNoDriver = @('dwc_eqos')
+$MarkOnlyIfNoDriver = @('dwc_eqos', 'dwc_eqos10')
 
 # PnP's order between two packages for one device: the later date wins,
 # then the higher version. $a and $b: @{ Date = [DateTime]; Version = [version] }.

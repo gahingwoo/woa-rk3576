@@ -71,9 +71,19 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: woa-rk3576-drivers-signed
-          path: ${{ runner.temp }}/woa/
+          path: |
+            ${{ runner.temp }}/woa/
+            !${{ runner.temp }}/woa/pdb/
           retention-days: 7
           if-no-files-found: error
+      # Symbols of the same build, not part of the package: for reading a
+      # disassembly of the shipped drivers (llvm-symbolizer reads PDB).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: woa-rk3576-drivers-pdb
+          path: ${{ runner.temp }}/woa/pdb/
+          retention-days: 7
+          if-no-files-found: warn
 
   package:
     name: rk3576-drivers-arm64.zip
@@ -137,6 +147,7 @@ jobs:
             --script tools/rk3576-drivers/install-online.ps1 \
             --script tools/rk3576-drivers/mark-reinstall.ps1 \
             --script tools/rk3576-drivers/verify-bound.ps1 \
+            --script tools/rk3576-drivers/win10-nvme.cmd \
             --readme tools/rk3576-drivers/README.md \
             --readme tools/rk3576-drivers/README.zh-CN.md \
             --woa in/woa --gpu "$gpuin" --npu in/npu/rknpu-windows-arm64.zip \
@@ -160,16 +171,22 @@ jobs:
           import json, os
           m = json.load(open('manifest.json'))
           for b in m['boards']:
-              want = [d['dir'] for d in m['drivers'] if b in d['default']]
-              got = [l.strip() for l in open(f'boards/{b}.txt') if l.strip()]
-              assert want == got, (b, want, got)
-              for d in want:
-                  assert os.listdir(f'drivers/{d}'), d
-              # every board boots from its storage with these, and has
-              # audio and the no-driver devices
-              for core in ('dwcsdhc', 'dwcmshc', 'maliwddm', 'vdpu383', 'rk3xi2sbus',
-                           'csaudiork3x', 'es8323', 'rk3576-null'):
-                  assert core in want, (b, core)
+              # boards/<b>.txt is for build 22000, <b>-win10.txt for 19045
+              for osk, build in (('', 22000), ('-win10', 19045)):
+                  want = [d['dir'] for d in m['drivers'] if b in d['default']
+                          and d['builds'][0] <= build <= d['builds'][1]]
+                  got = [l.strip() for l in open(f'boards/{b}{osk}.txt') if l.strip()]
+                  assert want == got, (b, osk, want, got)
+                  for d in want:
+                      assert os.listdir(f'drivers/{d}'), d
+                  # every board boots from its storage with these, and has
+                  # audio, Ethernet and the no-driver devices, on both
+                  for core in ('dwcsdhc', 'dwcmshc', 'maliwddm', 'vdpu383', 'rk3xi2sbus',
+                               'csaudiork3x', 'es8323', 'rk3576-null'):
+                      assert core in want, (b, osk, core)
+                  assert ('dwc_eqos10' if osk else 'dwc_eqos') in want, (b, osk)
+              by = [l.split('\t')[0] for l in open(f'boards/{b}-builds.txt') if l.strip()]
+              assert by == [d['dir'] for d in m['drivers'] if b in d['default']], (b, by)
           print('manifest and board lists agree')
           PY
 
@@ -224,6 +241,25 @@ jobs:
               if ($line -notlike "*$($want[$k])*") { throw "${b}: $k does not name $($want[$k]): $line" }
               if ($line -like '*no DriverVer*') { throw "${b}: $k has no DriverVer: $line" }
             }
+          }
+          # The build picks the Ethernet driver: dwc_eqos10 (NetAdapterCx 2.0)
+          # on Windows 10, dwc_eqos on Windows 11, both for ACPI\RKCP6543.
+          foreach ($case in @(@(19045, 'dwc_eqos10', 'dwc_eqos'), @(22631, 'dwc_eqos', 'dwc_eqos10'))) {
+            $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board rock4d -Plan -Build $case[0]
+            if ($LASTEXITCODE -ne 0) { $o | Out-Host; throw "rock4d plan for $($case[0]): exit $LASTEXITCODE" }
+            $line = $o | Where-Object { $_ -like "$($case[1]): would stage *" } | Select-Object -First 1
+            if (-not $line -or $line -notlike '*ACPI\RKCP6543*') { $o | Out-Host; throw "build $($case[0]): no $($case[1]) plan for ACPI\RKCP6543" }
+            if ($o | Where-Object { $_ -like "$($case[2]): would stage *" }) { throw "build $($case[0]): $($case[2]) planned too" }
+            if ($o | Where-Object { $_ -like 'Skipped *' }) { $o | Out-Host; throw "build $($case[0]): something skipped" }
+          }
+          # NVMe: rk3xnvme and the stornvme.inf removal on Windows 10 only
+          # (builds 19041 to 21999), stornvme left alone from 22000.
+          foreach ($case in @(@(19045, $true), @(22631, $false))) {
+            $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board rock4d -Plan -Build $case[0]
+            if ($LASTEXITCODE -ne 0) { $o | Out-Host; throw "rock4d plan for $($case[0]): exit $LASTEXITCODE" }
+            $stage = [bool]($o | Where-Object { $_ -like 'rk3xnvme: would stage *PCI\CC_010802*' })
+            $unmap = [bool]($o | Where-Object { $_ -like 'Would remove stornvme.inf from the DriverDatabase entry for PCI\CC_010802*' })
+            if ($stage -ne $case[1] -or $unmap -ne $case[1]) { $o | Out-Host; throw "build $($case[0]): rk3xnvme staged $stage, stornvme.inf removal $unmap, want $($case[1])" }
           }
           $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board nosuch -Plan
           if ($LASTEXITCODE -ne 2) { throw "an unknown board should exit 2, got $LASTEXITCODE" }
