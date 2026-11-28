@@ -21,6 +21,10 @@ struct RxQueueContext
     NET_EXTENSION packetIeee8021Q;
     NET_EXTENSION packetChecksum;
     NET_EXTENSION fragmentLogical;
+#if DWC_EQOS_NETCX20
+    NET_EXTENSION fragmentVirtual;
+    UINT32 cacheLineSize;
+#endif
     UINT32 descCount;   // A power of 2 between QueueDescriptorMinCount and QueueDescriptorMaxCount.
     UINT16 rxBufferSize;
     UINT8 rxPbl;
@@ -30,6 +34,50 @@ struct RxQueueContext
     UINT32 descEnd;     // End of the RECEIVE region, start of the EMPTY region.
 };
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(RxQueueContext, RxQueueGetContext)
+
+#if DWC_EQOS_NETCX20
+
+// Windows 10 maps the uncached common buffers NetAdapterCx gives as receive
+// buffers as Device memory, where tcpip's misaligned loads of the frame
+// fault (bugcheck 0x1E STATUS_DATATYPE_MISALIGNMENT in tcpip, measured on
+// 19045 once tcpip bound). The Windows 10 build asks for cached receive
+// buffers instead (device.cpp, CacheEnabled) and keeps them coherent with
+// the non-coherent MAC itself, as Linux's dma_map/unmap do: clean and
+// invalidate a buffer before the MAC owns it, invalidate what it wrote
+// before the stack reads it. NetAdapterCx does neither for receive buffers
+// on ARM64. The buffers are cache line aligned and a whole number of lines
+// (device.cpp), so no line is shared with another buffer.
+
+static UINT32
+RxCacheLineSize()
+{
+    // CTR_EL0.DminLine: log2 of the smallest data cache line, in words.
+    auto const ctr = _ReadStatusReg(ARM64_SYSREG(3, 3, 0, 0, 1));
+    return 4u << ((ctr >> 16) & 0xF);
+}
+
+// DC CIVAC over [va, va + length). The caller issues the DSB.
+static void
+RxCacheCleanInvalidate(_In_ RxQueueContext const* context, _In_ void const* va, _In_ SIZE_T length)
+{
+    auto const line = context->cacheLineSize;
+    auto p = reinterpret_cast<UINT_PTR>(va) & ~static_cast<UINT_PTR>(line - 1);
+    auto const end = reinterpret_cast<UINT_PTR>(va) + length;
+    for (; p < end; p += line)
+    {
+        __sys(ARM64_SYSINSTR(1, 3, 7, 14, 1), static_cast<__int64>(p)); // DC CIVAC
+    }
+}
+
+static void*
+RxFragmentVirtualAddress(_In_ RxQueueContext const* context, UINT32 fragIndex)
+{
+    auto const frag = NetRingGetFragmentAtIndex(context->fragmentRing, fragIndex);
+    return static_cast<UINT8*>(NetExtensionGetFragmentVirtualAddress(&context->fragmentVirtual, fragIndex)->VirtualAddress)
+        + frag->Offset;
+}
+
+#endif // DWC_EQOS_NETCX20
 
 // Gets channelRegs->Current_App_RxDesc, converted to an index.
 static UINT32
@@ -171,6 +219,9 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
         {
             NT_ASSERT(descWrite.PacketLength >= 4); // PacketLength includes CRC
             frag->ValidLength = descWrite.PacketLength - 4;
+#if DWC_EQOS_NETCX20
+            RxCacheCleanInvalidate(context, RxFragmentVirtualAddress(context, fragIndex), frag->ValidLength);
+#endif
 
             if (descWrite.Rdes0Valid && descWrite.OuterVlanTag != 0 && context->packetIeee8021Q.Enabled)
             {
@@ -221,6 +272,13 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
         doneFrags += 1;
     }
 
+#if DWC_EQOS_NETCX20
+    if (doneFrags != 0)
+    {
+        __dsb(_ARM64_BARRIER_SY); // Invalidations done before the stack reads.
+    }
+#endif
+
     context->descBegin = descIndex;
     context->packetRing->BeginIndex = pktIndex;
     context->fragmentRing->BeginIndex = fragIndex;
@@ -241,6 +299,9 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
 
             NT_ASSERT(context->rxBufferSize <= NetRingGetFragmentAtIndex(context->fragmentRing, fragIndex)->Capacity);
             auto const fragLogicalAddress = NetExtensionGetFragmentLogicalAddress(&context->fragmentLogical, fragIndex)->LogicalAddress;
+#if DWC_EQOS_NETCX20
+            RxCacheCleanInvalidate(context, RxFragmentVirtualAddress(context, fragIndex), context->rxBufferSize);
+#endif
 
             RxDescriptorRead descRead = {};
             descRead.Buf1ApLow = fragLogicalAddress & 0xFFFFFFFF;
@@ -261,6 +322,13 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
         // In some error cases, the device may stall until we write to the tail pointer
         // again. Write to the tail pointer if there are pending descriptors, even if we
         // didn't fill any new ones.
+#if DWC_EQOS_NETCX20
+        if (queuedFrags != 0)
+        {
+            __dsb(_ARM64_BARRIER_SY); // Buffers clean before the MAC may write them.
+        }
+#endif
+
         if (descIndex != descNext)
         {
             SetDescEnd(context, descIndex);
@@ -453,6 +521,15 @@ RxQueueCreate(
             NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1,
             NetExtensionTypeFragment);
         NetRxQueueGetExtension(queue, &query, &context->fragmentLogical);
+
+#if DWC_EQOS_NETCX20
+        NET_EXTENSION_QUERY_INIT(&query,
+            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
+            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
+            NetExtensionTypeFragment);
+        NetRxQueueGetExtension(queue, &query, &context->fragmentVirtual);
+        context->cacheLineSize = RxCacheLineSize();
+#endif
     }
 
     status = STATUS_SUCCESS;
