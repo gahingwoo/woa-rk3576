@@ -71,9 +71,19 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: woa-rk3576-drivers-signed
-          path: ${{ runner.temp }}/woa/
+          path: |
+            ${{ runner.temp }}/woa/
+            !${{ runner.temp }}/woa/pdb/
           retention-days: 7
           if-no-files-found: error
+      # Symbols of the same build, not part of the package: for reading a
+      # disassembly of the shipped drivers (llvm-symbolizer reads PDB).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: woa-rk3576-drivers-pdb
+          path: ${{ runner.temp }}/woa/pdb/
+          retention-days: 7
+          if-no-files-found: warn
 
   package:
     name: rk3576-drivers-arm64.zip
