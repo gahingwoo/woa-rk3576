@@ -24,9 +24,14 @@ while IFS= read -r vcx; do
     # A driver that ships inside another driver's package (its INF installs
     # it, e.g. bcmwlsdio's lower filter) says so, and has no INF of its own.
     grep -q 'check-structure: packaged by ' "$vcx" && is_lib=1
+    # A second build of another driver's sources (dwc_eqos10 builds
+    # ../dwc_eqos for Windows 10) says where they are.
+    srcdir=$dir
+    other=$(grep -o 'check-structure: sources in [^ ]*' "$vcx" | head -1 | sed 's/.* in //' | tr -d '\r')
+    [ -n "$other" ] && srcdir="$dir/$other"
     has_src=0
     for pat in '*.c' '*.cpp' '*.asm' 'arm64/*.asm'; do
-        compgen -G "$dir/$pat" >/dev/null && has_src=1
+        compgen -G "$srcdir/$pat" >/dev/null && has_src=1
     done
     [ "$is_lib" -eq 1 ] && compgen -G "$dir/*.h" >/dev/null && has_src=1
     if [ "$has_src" -eq 0 ]; then

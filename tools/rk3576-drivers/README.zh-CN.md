@@ -21,6 +21,9 @@ Maskrom Studio 按所选的板子安装它。从 [0.5.0 正式版](https://githu
   自己调用 DISM 而不用 `install.cmd` 的工具，要在 DISM 之后运行 `win10-nvme.cmd W:\`。
 - 可选（`/optional`）：CM5-IO 的蓝牙（未测试）。
 
+Windows 10（19041 到 19045）和 Windows 11 各装适合自己版本号的驱动：Windows 10 上以太网用
+`dwc_eqos10`（NetAdapterCx 2.0），不用 `dwc_eqos`。目标 Windows 版本还没有构建的驱动，`install.cmd` 会逐个说明。
+
 固件没有发布对应设备的驱动不会绑定任何东西。驱动包是测试签名的，`certs\` 里是签名证书。
 
 ## 安装

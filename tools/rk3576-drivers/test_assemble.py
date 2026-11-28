@@ -94,11 +94,13 @@ class Assemble(unittest.TestCase):
             with open(os.path.join(root, 'manifest.json')) as f:
                 m = json.load(f)
             for b in m['boards']:
-                want = [d['dir'] for d in m['drivers'] if b in d['default'] and d['os'] in ('all', 'win11')]
-                got = lines(os.path.join(root, 'boards', b + '.txt'))
-                self.assertEqual(want, got, b)
-                for d in EVERY_BOARD:
-                    self.assertIn(d, got, f'{b} has no {d}')
+                for osk, build, eth in (('', 22000, 'dwc_eqos'), ('-win10', 19045, 'dwc_eqos10')):
+                    want = [d['dir'] for d in m['drivers'] if b in d['default']
+                            and d['builds'][0] <= build <= d['builds'][1]]
+                    got = lines(os.path.join(root, 'boards', b + osk + '.txt'))
+                    self.assertEqual(want, got, b + osk)
+                    for d in EVERY_BOARD:
+                        self.assertIn(eth if d == 'dwc_eqos' else d, got, f'{b}{osk} has no {d}')
             for f in ('install.cmd', 'install-online.ps1', 'mark-reinstall.ps1', 'verify-bound.ps1', 'win10-nvme.cmd', 'VERSION.txt', 'SHA256SUMS.txt'):
                 self.assertTrue(os.path.isfile(os.path.join(root, f)), f)
             self.assertTrue(os.path.isfile(os.path.join(root, 'drivers', 'rk3576-null', 'rk3576-null.inf')))
@@ -109,9 +111,9 @@ class Assemble(unittest.TestCase):
             self.assertIn('rk3576-drivers/drivers/csaudiork3x/csaudiork3x.sys', names)
 
     def test_win10_lists(self):
-        # In the real table only rk3xnvme is for one Windows (win10): the
-        # Windows 10 lists are the Windows 11 ones plus rk3xnvme where it
-        # goes, and nothing is skipped.
+        # The real table: Windows 10 takes dwc_eqos10 for dwc_eqos and adds
+        # rk3xnvme (CM5-IO, ROCK 4D); nothing else differs and nothing is
+        # skipped on either.
         with tempfile.TemporaryDirectory() as top:
             r, out = run(top, *make_inputs(top))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -123,25 +125,43 @@ class Assemble(unittest.TestCase):
                     self.assertNotIn('rk3xnvme', w11, b + kind)
                     nvme = kind == '' and b in ('cm5io', 'rock4d')
                     self.assertEqual('rk3xnvme' in w10, nvme, b + kind)
-                    self.assertEqual([d for d in w10 if d != 'rk3xnvme'], w11, b + kind)
+                    self.assertEqual([d for d in w11 if d != 'dwc_eqos'],
+                                     [d for d in w10 if d not in ('dwc_eqos10', 'rk3xnvme')], b + kind)
+                    if not kind:
+                        self.assertIn('dwc_eqos', w11)
+                        self.assertNotIn('dwc_eqos10', w11)
+                        self.assertIn('dwc_eqos10', w10)
+                        self.assertNotIn('dwc_eqos', w10)
+                by = [l.split('\t') for l in lines(os.path.join(bd, f'{b}-builds.txt'))]
+                self.assertIn(['dwc_eqos', '22000', '99999'], by)
+                self.assertIn(['dwc_eqos10', '0', '21999'], by)
+                self.assertIn(['dwcsdhc', '0', '99999'], by)
+                if b in ('cm5io', 'rock4d'):
+                    self.assertIn(['rk3xnvme', '19041', '21999'], by)
             self.assertEqual(lines(os.path.join(bd, 'win10-skipped.txt')), [])
+            self.assertEqual(lines(os.path.join(bd, 'skipped.txt')), [])
 
     def test_os_column(self):
         # A Windows 11 only driver leaves the Windows 10 lists and is named in
-        # win10-skipped.txt; its Windows 10 build is only in the Windows 10 lists.
+        # the skipped lists; its Windows 10 build is only in the Windows 10
+        # lists; a build range (26100-) and a stand-in (:<dir>) are honoured.
         with tempfile.TemporaryDirectory() as top:
             table = os.path.join(top, 'drivers.tsv')
             with open(TABLE, encoding='utf-8') as f:
                 t = f.read()
             t = t.replace('rk3xspi      all            -         woa    SPI',
                           'rk3xspi      all            -         woa    win11 SPI')
+            t = t.replace('rkled        all            -         woa    Board LEDs',
+                          'rkled        all            -         woa    26100- Board LEDs')
             t += 'rk3xspi10    cm5io          -         woa    win10 SPI, Windows 10 build\n'
+            t += 'rkled2      all            -         woa    22000-26099:rkled Board LEDs, 23H2 build\n'
             with open(table, 'w', encoding='utf-8') as f:
                 f.write(t)
             woa, gpu, npu = make_inputs(top)
-            p = os.path.join(woa, 'woa-drivers', 'rk3xspi10')
-            for ext in ('.inf', '.cat', '.sys'):
-                touch(os.path.join(p, 'rk3xspi10' + ext))
+            for d in ('rk3xspi10', 'rkled2'):
+                p = os.path.join(woa, 'woa-drivers', d)
+                for ext in ('.inf', '.cat', '.sys'):
+                    touch(os.path.join(p, d + ext))
             r, out = run(top, woa, gpu, npu, table)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             bd = os.path.join(out, 'rk3576-drivers', 'boards')
@@ -150,14 +170,37 @@ class Assemble(unittest.TestCase):
             self.assertNotIn('rk3xspi', lines(os.path.join(bd, 'cm5io-win10.txt')))
             self.assertIn('rk3xspi10', lines(os.path.join(bd, 'cm5io-win10.txt')))
             self.assertNotIn('rk3xspi10', lines(os.path.join(bd, 'tspi3m-win10.txt')))
+            # rk3xspi10 is not marked as its stand-in: rk3xspi is still named
             sk = lines(os.path.join(bd, 'win10-skipped.txt'))
-            self.assertEqual(sk, ['rk3xspi\ttspi3m,cm5io,rock4d\tSPI'])
+            self.assertIn('rk3xspi\ttspi3m,cm5io,rock4d\tSPI', sk)
+            sk = [l.split('\t') for l in lines(os.path.join(bd, 'skipped.txt'))]
+            self.assertIn(['rk3xspi', '0', '21999', 'tspi3m,cm5io,rock4d', 'SPI'], sk)
+            # rkled: 26100-, rkled2 covers 22000-26099, Windows 10 has neither
+            self.assertIn(['rkled', '0', '21999', 'tspi3m,cm5io,rock4d', 'Board LEDs'], sk)
+            self.assertFalse([x for x in sk if x[0] == 'rkled' and x[1] != '0'])
+            self.assertFalse([x for x in sk if x[0] in ('rkled2', 'rk3xspi10', 'dwc_eqos', 'dwc_eqos10')])
+            by = [l.split('\t') for l in lines(os.path.join(bd, 'rock4d-builds.txt'))]
+            self.assertIn(['rkled', '26100', '99999'], by)
+            self.assertIn(['rkled2', '22000', '26099'], by)
             with open(os.path.join(out, 'rk3576-drivers', 'manifest.json')) as f:
                 m = {d['dir']: d for d in json.load(f)['drivers']}
             self.assertEqual(m['rk3xspi']['os'], 'win11')
             self.assertEqual(m['rk3xspi']['what'], 'SPI')
             self.assertEqual(m['rk3xspi10']['os'], 'win10')
+            self.assertEqual(m['rkled2']['of'], 'rkled')
+            self.assertEqual(m['rkled']['builds'], [26100, 99999])
             self.assertEqual(m['dwcsdhc']['os'], 'all')
+
+    def test_unknown_stand_in_fails(self):
+        with tempfile.TemporaryDirectory() as top:
+            table = os.path.join(top, 'drivers.tsv')
+            with open(TABLE, encoding='utf-8') as f:
+                t = f.read() + 'rkled2       all            -         woa    win10:nosuch LEDs\n'
+            with open(table, 'w', encoding='utf-8') as f:
+                f.write(t)
+            woa, gpu, npu = make_inputs(top)
+            r, _ = run(top, woa, gpu, npu, table)
+            self.assertNotEqual(r.returncode, 0)
 
     def test_missing_sys_fails(self):
         with tempfile.TemporaryDirectory() as top:

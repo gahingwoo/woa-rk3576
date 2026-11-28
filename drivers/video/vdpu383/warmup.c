@@ -87,9 +87,11 @@ V383WarmupInit(
     Ctx->WarmPa = MmGetPhysicalAddress(Ctx->WarmVa);
     iova = (ULONG)Ctx->WarmPa.QuadPart;
 
-    RtlZeroMemory(Ctx->WarmVa, HACK_SIZE);
-    RtlCopyMemory((PUCHAR)Ctx->WarmVa + HACK_DATA_RLC_OFFSET, HackRlc, sizeof(HackRlc));
-    RtlCopyMemory((PUCHAR)Ctx->WarmVa + HACK_DATA_PPS_OFFSET, HackPps, sizeof(HackPps));
+    /* PAGE_NOCACHE: Device memory under Windows 10, so aligned accesses
+     * only, no RtlZeroMemory or RtlCopyMemory (rk_devmem.h) */
+    RkDevZero(Ctx->WarmVa, HACK_SIZE);
+    RkDevCopy((PUCHAR)Ctx->WarmVa + HACK_DATA_RLC_OFFSET, HackRlc, sizeof(HackRlc), FALSE);
+    RkDevCopy((PUCHAR)Ctx->WarmVa + HACK_DATA_PPS_OFFSET, HackPps, sizeof(HackPps), FALSE);
 
     /* core registers */
     reg = (volatile ULONG *)((PUCHAR)Ctx->WarmVa + HACK_REGS_OFFSET);

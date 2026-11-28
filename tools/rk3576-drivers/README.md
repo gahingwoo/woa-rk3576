@@ -27,6 +27,11 @@ has the untested build of `main`).
   DISM itself instead of `install.cmd` runs `win10-nvme.cmd W:\` after it.
 - Optional (`/optional`): Bluetooth on the CM5-IO (untested).
 
+Windows 10 (19041 to 19045) and Windows 11 get the drivers for their
+build: on Windows 10, Ethernet is `dwc_eqos10` (NetAdapterCx 2.0) instead of
+`dwc_eqos`. `install.cmd` names any driver that has no build for the
+target's Windows yet.
+
 A driver whose device the firmware does not publish binds nothing.
 The packages are test-signed; `certs\` holds the signers.
 

@@ -10,11 +10,14 @@
 #   from      where it comes from: woa (built from this repository by
 #             build-woa.ps1 in the same drivers.yml run), gpu (wddm-mali-g52),
 #             npu (woa-rk3576-npu)
-#   os        optional: which Windows it is for. "win11" (build 22000 and
-#             later) or "win10" (build 19041 to 19045); left out, every
-#             Windows. A Windows 11 only driver is skipped on Windows 10 with
-#             a message until its Windows 10 build (a "win10" row of its own)
-#             is in the package.
+#   os        optional: which Windows builds it is for. "win10" (below
+#             22000; Windows 10 is 19041 to 19045 here), "win11" (22000 and
+#             later), "N-" (build N and later, e.g. 26100- for a driver that
+#             needs 24H2) or "N-M". ":<dir>" after it says the row is the
+#             build of <dir> for those builds (dwc_eqos10 is dwc_eqos for
+#             Windows 10). Left out, every Windows. install.cmd and
+#             install-online.ps1 install the rows that cover the target's
+#             build and name each driver that has no build for it.
 #   what      what it is, for the manifest and the lists
 #
 # A driver for hardware a board does not have binds nothing, because each INF
@@ -25,11 +28,12 @@
 # dir        default        optional  from   [os]   what
 dwcsdhc      all            -         woa    eMMC (dwcsdhc)
 dwcmshc      all            -         woa    SD card and SDIO (dwcmshc)
-rk3xnvme     cm5io,rock4d   -         woa    win10  NVMe for Windows 10 (rk3xnvme; Windows 11 keeps stornvme)
+rk3xnvme     cm5io,rock4d   -         woa    19041-21999  NVMe for Windows 10 (rk3xnvme; Windows 11 keeps stornvme)
 rk3xgpio     all            -         woa    GPIO
 rk3xi2c      all            -         woa    I2C
 pl330dma     all            -         woa    DMA (PL330)
-dwc_eqos     all            -         woa    Ethernet (GMAC)
+dwc_eqos     all            -         woa    win11  Ethernet (GMAC)
+dwc_eqos10   all            -         woa    win10:dwc_eqos  Ethernet (GMAC), NetAdapterCx 2.0 build for Windows 10
 rk3xspi      all            -         woa    SPI
 vdpu383      all            -         woa    Video decoder (VDPU383)
 rk3xsaradc   all            -         woa    ADC keys and headphone detect (SARADC)

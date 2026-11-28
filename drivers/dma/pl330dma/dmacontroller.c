@@ -301,6 +301,10 @@ static BOOLEAN _trigger(PPL330DMA_THREAD Thread)
 	/* Set to generate interrupts for SEV */
 	write32(pDevice, INTEN, read32(pDevice, INTEN) | (1 << Thread->ev));
 
+	/* The microcode is write-combined memory (threads.c): make it reach
+	 * memory before the PL330 fetches it. */
+	__dsb(_ARM64_BARRIER_SY);
+
 	/* Only manager can execute GO */
 	_execute_DBGINSN(Thread, insn, TRUE);
 

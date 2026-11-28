@@ -28,8 +28,9 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 Set-Location $repo
 
 $dirs = @()
-# Rows for Windows 10 only (os column win10): their INFs start at build
-# 19041, so they are catalogued for 10_VB (19041) instead of 10_RS3.
+# Rows whose os column is a build range starting at 19041 (Windows 10 2004)
+# up to below 22000 (rk3xnvme: 19041-21999): their INFs start at that
+# build, so they are catalogued for 10_VB (19041) instead of 10_RS3.
 $win10Only = @()
 foreach ($line in Get-Content -LiteralPath $Table) {
     $s = $line.Trim()
@@ -38,7 +39,7 @@ foreach ($line in Get-Content -LiteralPath $Table) {
     if ($f.Count -ne 5) { throw "drivers.tsv: want 5 columns: $s" }
     if ($f[3] -eq 'woa') {
         $dirs += $f[0]
-        if ($f[4] -match '^win10\s') { $win10Only += $f[0] }
+        if ($f[4] -match '^(\d+)-(\d*)(:\S+)?\s' -and [int]$Matches[1] -ge 19041 -and [int]$Matches[1] -lt 22000) { $win10Only += $f[0] }
     }
 }
 if (-not $dirs) { throw 'drivers.tsv names no woa driver' }
@@ -53,6 +54,25 @@ function Copy-Package([string]$from, [string]$to) {
         Copy-Item -Destination $to -Force
 }
 
+# The symbols of each driver go to DIR\pdb\<dir>, outside the package, so a
+# disassembly of the shipped .sys can be read with function names (the
+# alignment audit of the code the compiler actually emitted).
+$pdbOut = Join-Path $Out 'pdb'
+if (Test-Path $pdbOut) { Remove-Item -Recurse -Force $pdbOut }
+function Copy-Pdb([string]$d, [string[]]$from) {
+    # <sys>.pdb for each .sys of the package (dwc_eqos10 ships dwc_eqos.sys)
+    $to = Join-Path $pdbOut $d
+    New-Item -ItemType Directory -Force -Path $to | Out-Null
+    $names = @(Get-ChildItem (Join-Path $stage $d) -Filter *.sys | ForEach-Object { $_.BaseName + '.pdb' })
+    foreach ($f in $from) {
+        if (-not (Test-Path $f)) { continue }
+        foreach ($n in $names) {
+            Get-ChildItem $f -Recurse -File -Filter $n |
+                Sort-Object LastWriteTime | Copy-Item -Destination $to -Force
+        }
+    }
+}
+
 Write-Host '== build\RockchipDrivers.sln'
 msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64 `
         /p:SignMode=Off /p:WoaDriverBuild=$Build /m /nologo /v:minimal
@@ -65,6 +85,7 @@ foreach ($d in $dirs) {
     if (Test-Path (Join-Path $sol "$d.sys")) {
         Write-Host "== $d (solution)"
         Copy-Package $sol $dst
+        Copy-Pdb $d @('build', 'drivers')
         continue
     }
     $proj = @(Get-ChildItem drivers -Recurse -File -Filter "$d.vcxproj")
@@ -75,6 +96,7 @@ foreach ($d in $dirs) {
                 /p:WindowsTargetPlatformVersion=$Wdk /p:SignMode=Off /m /nologo /v:minimal
         if ($LASTEXITCODE -ne 0) { throw "msbuild failed for $d" }
         Copy-Package (Join-Path $proj[0].DirectoryName 'ARM64\Release') $dst
+        Copy-Pdb $d @($proj[0].DirectoryName)
         continue
     }
     $inf = @(Get-ChildItem drivers -Recurse -File -Filter "$d.inf")
