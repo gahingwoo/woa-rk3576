@@ -13,8 +13,8 @@
 #    may write the Enum keys, through a one-shot scheduled task running
 #    mark-reinstall.ps1. At the next boot PnP installs them from the store.
 #    Never marked: the SD/eMMC hosts (dwcsdhc, dwcmshc), which the running
-#    Windows may be booted from, and the Ethernet adapter (dwc_eqos) unless
-#    it has no driver at all. Their packages are staged only.
+#    Windows may be booted from, and the Ethernet adapter (dwc_eqos, on
+#    Windows 10 dwc_eqos10) unless it has no driver at all. Their packages are staged only.
 # 4. Sets up the follow-up check: %ProgramData%\RK3576\drivers gets
 #    expected.json (each marked device and the package DriverVer it should
 #    be on after the restart), verify-bound.ps1 and mark-reinstall.ps1, and
@@ -62,6 +62,7 @@ $NeverMark = @{
 }
 $MarkOnlyIfNoDriver = @{
     'dwc_eqos' = 'network adapter with a driver: staged only, so a remote session keeps its connection'
+    'dwc_eqos10' = 'network adapter with a driver: staged only, so a remote session keeps its connection'
 }
 
 # The parts of an INF this needs: DriverVer and the IDs of its models sections.
