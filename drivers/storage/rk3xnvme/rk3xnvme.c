@@ -443,7 +443,7 @@ static VOID IdString(const ULONG64 *id, ULONG off, ULONG len, PUCHAR dst)
     ULONG i;
     for (i = 0; i < len; i++) {
         UCHAR c = s[i];
-        dst[i] = (c >= 0x20 && c < 0x7F) ? c : ' ';
+        dst[i] = (UCHAR)((c >= 0x20 && c < 0x7F) ? c : ' ');
     }
 }
 
@@ -555,7 +555,7 @@ static VOID ScsiReadCapacity(PRKNVME_DEVEXT dx, PSCSI_REQUEST_BLOCK srb, BOOLEAN
 static VOID ScsiModeSense(PRKNVME_DEVEXT dx, PSCSI_REQUEST_BLOCK srb, BOOLEAN ten)
 {
     const UCHAR *cdb = srb->Cdb;
-    UCHAR page = cdb[2] & 0x3Fu;
+    UCHAR page = (UCHAR)(cdb[2] & 0x3Fu);
     ULONG hdr = ten ? 8u : 4u;
     ULONG alloc = ten ? GetBe16(cdb + 7) : cdb[4];
     UCHAR b[64];
@@ -1151,6 +1151,8 @@ ULONG DriverEntry(PVOID driverObject, PVOID registryPath)
     init.HwInitialize = RkNvmeInitialize;
     init.HwStartIo = RkNvmeStartIo;
     init.HwInterrupt = RkNvmeInterrupt;
+    /* HwFindAdapter is a PVOID in this header's HW_INITIALIZATION_DATA. */
+#pragma warning(suppress: 4152)
     init.HwFindAdapter = RkNvmeFindAdapter;
     init.HwResetBus = RkNvmeResetBus;
     init.HwAdapterControl = RkNvmeAdapterControl;
