@@ -172,7 +172,7 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
             NT_ASSERT(descWrite.PacketLength >= 4); // PacketLength includes CRC
             frag->ValidLength = descWrite.PacketLength - 4;
 
-            if (descWrite.Rdes0Valid && descWrite.OuterVlanTag != 0)
+            if (descWrite.Rdes0Valid && descWrite.OuterVlanTag != 0 && context->packetIeee8021Q.Enabled)
             {
                 NET_PACKET_IEEE8021Q tag = {};
                 tag.PriorityCodePoint = descWrite.OuterVlanTag >> 13;
@@ -185,7 +185,7 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
             // If checksum offload is disabled by hardware then no IP headers will be
             // detected. If checksum offload is disabled by software then NetAdapterCx
             // will ignore our evaluation.
-            if (descWrite.IPv4HeaderPresent | descWrite.IPv6HeaderPresent)
+            if ((descWrite.IPv4HeaderPresent | descWrite.IPv6HeaderPresent) && context->packetChecksum.Enabled)
             {
                 auto const checksum = NetExtensionGetPacketChecksum(&context->packetChecksum, pktIndex);
                 checksum->Layer2 = NetPacketRxChecksumEvaluationValid;
