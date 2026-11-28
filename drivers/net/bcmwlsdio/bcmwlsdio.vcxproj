@@ -49,6 +49,21 @@
     <!-- Must be declared here: the WDK targets read it at Cpp.props time. -->
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
     <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
+    <!--
+      NetAdapterCx 2.1 and WiFiCx 1.0. The KMDF stub binds both before
+      DriverEntry, under either INF (the bring-up, Class System, never
+      calls them), and a version the system does not register fails the
+      load. The TaishanPi 3M's 23H2 (22631, netadaptercx.sys and wificx.sys
+      10.0.22621.2215) registers NetAdapterCx 2.1 and WiFiCx 1.1 only
+      (Control\Wdf\Kmdf\<cx>\Versions); 2.2 did not load there.
+      Keep these at or below what that board lists.
+    -->
+    <NetAdapterDriver>true</NetAdapterDriver>
+    <NETADAPTER_VERSION_MAJOR>2</NETADAPTER_VERSION_MAJOR>
+    <NETADAPTER_VERSION_MINOR>1</NETADAPTER_VERSION_MINOR>
+    <WifiDriver>true</WifiDriver>
+    <WIFI_VERSION_MAJOR>1</WIFI_VERSION_MAJOR>
+    <WIFI_VERSION_MINOR>0</WIFI_VERSION_MINOR>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -60,11 +75,20 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <!-- _KERNEL_MODE is predefined by the WDK toolset; redefining it is C4117. -->
       <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <!-- ntddsd.h and sddef.h are in Include\<ver>\km. -->
+      <!-- ntddsd.h and sddef.h are in Include\<ver>\km; the WDI TLV
+           generator/parser (wificx.cpp) in km\wlan\2.0. -->
+      <AdditionalIncludeDirectories>$(DDK_INC_PATH)wlan\2.0;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- the class extension versions the WDK targets bind (above), for PreEntry -->
+      <PreprocessorDefinitions>BWL_NETCX_MAJOR=$(NETADAPTER_VERSION_MAJOR);BWL_NETCX_MINOR=$(NETADAPTER_VERSION_MINOR);BWL_WIFICX_MAJOR=$(WIFI_VERSION_MAJOR);BWL_WIFICX_MINOR=$(WIFI_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <!-- sdbus.lib: SdBusOpenInterface and SdBusSubmitRequest. -->
-      <AdditionalDependencies>$(DDK_LIB_PATH)sdbus.lib;$(DDK_LIB_PATH)ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- sdbus.lib: SdBusOpenInterface and SdBusSubmitRequest.
+           WificxTLVGenParse.lib: Microsoft's WDI TLV generator/parser (C++);
+           libcntpr.lib: the __security_push/pop_cookie it references. -->
+      <!-- BwlPreEntry writes a breadcrumb without WDF, then calls the KMDF
+           stub's FxDriverEntry (which binds KMDF and the class extensions). -->
+      <EntryPointSymbol>BwlPreEntry</EntryPointSymbol>
+      <AdditionalDependencies>$(DDK_LIB_PATH)sdbus.lib;$(DDK_LIB_PATH)ntstrsafe.lib;$(DDK_LIB_PATH)wlan\2.0\WificxTLVGenParse.lib;$(DDK_LIB_PATH)libcntpr.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>
@@ -83,6 +107,14 @@
     <ClCompile Include="bwl_fw.c" />
     <ClCompile Include="bwl_proto.c" />
     <ClCompile Include="bwl_ctl.c" />
+    <ClCompile Include="bwl_wlan.c" />
+    <ClCompile Include="bwl_data.c" />
+    <ClCompile Include="netadapter.c" />
+    <!-- C++: the WiFiCx front end. No sized deallocation: with it the
+         array placement new in arrayofelements.hpp is ill-formed (C2956). -->
+    <ClCompile Include="wificx.cpp">
+      <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
   </ItemGroup>
 
   <ItemGroup>
@@ -93,6 +125,7 @@
 
   <ItemGroup>
     <Inf Include="bcmwlsdio.inf" />
+    <Inf Include="bcmwlwifi.inf" />
   </ItemGroup>
 
 
@@ -101,7 +134,7 @@
     Without this the package directory holds only the INF, and inf2cat's
     signability test fails with 22.9.1 "bcmwlsdio.sys ... is missing".
   -->
-  <!-- The WDM lower filter the INF installs below the FDO (bwlsdflt\bwlsdflt.c). -->
+  <!-- The WDM lower filter the INFs install below the FDO (bwlsdflt\bwlsdflt.c). -->
   <ItemGroup>
     <ProjectReference Include="bwlsdflt\bwlsdflt.vcxproj">
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>

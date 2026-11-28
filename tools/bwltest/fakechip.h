@@ -75,6 +75,7 @@ typedef struct fake_chip {
     int Running;
     int BootError;          /* why the image was refused, 0 if it was not */
     unsigned char ExpectSeq;
+    unsigned char AdvMaxSeq;    /* the window the last queued frame announced */
     unsigned char *Tx;      /* F2 frame being written */
     unsigned TxLen;
     unsigned char *Rx;      /* F2 bytes waiting to be read */
@@ -93,10 +94,58 @@ typedef struct fake_chip {
     unsigned DcmdSeen;
     unsigned EventsQueued;
 
+    /* the firmware's station (W4): settings the host made */
+    int Up;
+    int EventMaskSet;
+    unsigned char EventMask[18];
+    unsigned Mpc, Pm, Infra, Auth, Wsec, WpaAuth, SupWpa, RoamOff, Country;
+    unsigned char WpaIe[64];
+    unsigned WpaIeLen;
+    char Pmk[65];
+    unsigned PmkLen;
+    /* the air: FAKE_NAPS access points, one of which may be joined */
+    int Assoc;              /* index of the AP joined, -1 if none */
+    int Authorized;         /* pairwise key in, or the firmware's handshake done */
+    int Eapol3Sent;
+    unsigned char PairKey[16], GroupKey[16];
+    unsigned GroupIdx, KeysSet, KeyErrors;
+    /* counters */
+    int HoldEscan;          /* test: keep escan results back until C_SCAN aborts it */
+    int EscanPending;
+    unsigned EscanSync;
+    unsigned Escans, Joins, ScanAborts, DataFromHost, EapolFromHost, DataDropped, ArpReplies;
+    unsigned char LastEapol[128];
+    unsigned LastEapolLen;
+
     /* a firmware that misbehaves, for the buffer-bound tests */
     unsigned ReplyExtra;    /* bytes appended to every control reply, and claimed in its length */
     unsigned ConsoleBufSize;/* console ring size, 0 = 0x100 */
 } fake_chip;
+
+/* The simulated air. */
+#define FAKE_NAPS       3
+#define FAKE_AP_OPEN    0       /* "bwltest-open", channel 6, open */
+#define FAKE_AP_PSK     1       /* "bwltest-psk", channel 36 (80 MHz), WPA2-PSK CCMP */
+#define FAKE_AP_WEP     2       /* "bwltest-wep", channel 11, privacy without RSN */
+#define FAKE_PSK_PASS   "correct horse battery"
+
+typedef struct fake_ap {
+    const char *Ssid;
+    unsigned char Bssid[6];
+    unsigned Channel;       /* control channel */
+    unsigned Band;          /* 0 2.4 GHz, 1 5 GHz */
+    unsigned Chanspec;      /* as the firmware reports it (d11ac encoding) */
+    int Sec;                /* 0 open, 1 WPA2-PSK, 2 WEP */
+    int Rssi;
+} fake_ap;
+
+extern const fake_ap FakeAps[FAKE_NAPS];
+extern const unsigned char FakeGatewayMac[6];
+extern const unsigned char FakeGatewayIp[4];
+extern const unsigned char FakeStaIp[4];
+
+/* The AP sends a deauthentication. */
+void FakeApDeauth(fake_chip *F, unsigned Reason);
 
 extern const bwl_bus_ops FakeOps;
 

@@ -145,6 +145,7 @@ FakeInitModel(fake_chip *F, int Model)
     F->ExpectSeq = 0xFF;
     F->BlkSize[1] = 64;
     F->BlkSize[2] = 512;
+    F->Assoc = -1;
     for (unsigned i = 0; i < NCORES; i++) {
         F->ResetCtl[i] = RESET_CTL_RESET;
     }
@@ -181,6 +182,7 @@ static unsigned get_le32(const unsigned char *p) { return p[0] | p[1] << 8 | p[2
 static void put_le16(unsigned char *p, unsigned v) { p[0] = v; p[1] = v >> 8; }
 static unsigned get_le16(const unsigned char *p) { return p[0] | p[1] << 8; }
 static void put_be16(unsigned char *p, unsigned v) { p[0] = v >> 8; p[1] = v; }
+static unsigned get_be16(const unsigned char *p) { return (unsigned)p[0] << 8 | p[1]; }
 static void put_be32(unsigned char *p, unsigned v) { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
 
 /* Append one SDPCM frame to the to-host stream and raise FRAME_IND. */
@@ -204,32 +206,53 @@ queue_frame(fake_chip *F, unsigned chan, const unsigned char *payload, unsigned 
     p[7] = 12;
     p[8] = 0;
     p[9] = (unsigned char)(F->ExpectSeq + 4);  /* window of 4 frames */
+    F->AdvMaxSeq = p[9];
     memcpy(p + 12, payload, len);
     F->RxLen += padded;
     F->IntStatus |= INTSTATUS_HMB_FRAME_IND;
 }
 
+/* A firmware event, if the host's event mask (once it set one) lets it through. */
 static void
-queue_event(fake_chip *F, unsigned type, unsigned status)
+queue_event_full(fake_chip *F, unsigned type, unsigned status, unsigned reason, unsigned flags,
+                 const unsigned char *addr, const unsigned char *data, unsigned dlen)
 {
-    unsigned char e[4 + 14 + 10 + 48];
+    static unsigned char e[4 + 14 + 10 + 48 + 4096];
     unsigned char *eth = e + 4, *h = eth + 14, *m = h + 10;
 
-    memset(e, 0, sizeof(e));
+    if (F->EventMaskSet && (type / 8 >= sizeof(F->EventMask) || !(F->EventMask[type / 8] & (1u << (type % 8))))) {
+        return;
+    }
+    if (dlen > 4096) {
+        violation(F, "fake event too long", type, dlen);
+        return;
+    }
+    memset(e, 0, 4 + 14 + 10 + 48);
     e[0] = BCDC_FLAG_VER(BCDC_PROTO_VER);
     memset(eth, 0xFF, 6);
     put_be16(eth + 12, ETHERTYPE_BRCM);
     put_be16(h + 0, 0x8001);
-    put_be16(h + 2, 10 + 48 - 4);
+    put_be16(h + 2, 10 + 48 - 4 + dlen);
     h[4] = 1;
     h[5] = 0x00; h[6] = 0x10; h[7] = 0x18;
     put_be16(h + 8, BRCM_SUBTYPE_EVENT);
     put_be16(m + 0, 2);
+    put_be16(m + 2, flags);
     put_be32(m + 4, type);
     put_be32(m + 8, status);
+    put_be32(m + 12, reason);
+    put_be32(m + 20, dlen);
+    if (addr) memcpy(m + 24, addr, 6);
     memcpy(m + 30, "wlan0", 5);
-    queue_frame(F, SDPCM_CH_EVENT, e, sizeof(e));
+    if (dlen) memcpy(m + 48, data, dlen);
+    queue_frame(F, SDPCM_CH_EVENT, e, 4 + 14 + 10 + 48 + dlen);
     F->EventsQueued++;
+}
+
+static void
+queue_event(fake_chip *F, unsigned type, unsigned status)
+{
+    queue_event_full(F, type, status, 0, 0, NULL, NULL, 0);
 }
 
 /* The CPU was released: is RAM what a real chip would boot? */
@@ -474,15 +497,423 @@ fake_cmd52(void *Ctx, unsigned Fn, unsigned Addr, int Write, unsigned char *Val)
     }
 }
 
-/* A complete control frame arrived on F2: answer it. */
+/* ------------------------------------------------------------ the air */
+
+const fake_ap FakeAps[FAKE_NAPS] = {
+    { "bwltest-open", { 0x02, 0x11, 0x22, 0x33, 0x44, 0x01 }, 6, 0, 0x1006, 0, -48 },
+    /* 80 MHz around 42, control channel 36 (lower-lower): only the chanspec says so */
+    { "bwltest-psk", { 0x02, 0x11, 0x22, 0x33, 0x44, 0x02 }, 36, 1, 0xE02A, 1, -61 },
+    { "bwltest-wep", { 0x02, 0x11, 0x22, 0x33, 0x44, 0x03 }, 11, 0, 0x100B, 2, -70 },
+};
+const unsigned char FakeGatewayMac[6] = { 0x02, 0xAA, 0xBB, 0xCC, 0xDD, 0x01 };
+const unsigned char FakeGatewayIp[4] = { 192, 168, 7, 1 };
+const unsigned char FakeStaIp[4] = { 192, 168, 7, 50 };
+static const unsigned char sta_mac[6] = { 0x00, 0x90, 0x4c, 0xc5, 0x12, 0x38 };
+static const unsigned char rsn_psk[22] = {
+    48, 20, 1, 0, 0x00, 0x0F, 0xAC, 4, 1, 0, 0x00, 0x0F, 0xAC, 4, 1, 0, 0x00, 0x0F, 0xAC, 2, 0, 0
+};
+
+static unsigned
+ap_ies(const fake_ap *ap, unsigned char *p, int assoc_req, const fake_chip *F)
+{
+    static const unsigned char rates[] = { 0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24 };
+    unsigned n = 0, l = (unsigned)strlen(ap->Ssid);
+
+    p[n++] = 0; p[n++] = (unsigned char)l; memcpy(p + n, ap->Ssid, l); n += l;
+    p[n++] = 1; p[n++] = sizeof(rates); memcpy(p + n, rates, sizeof(rates)); n += sizeof(rates);
+    if (!assoc_req) {
+        p[n++] = 3; p[n++] = 1; p[n++] = (unsigned char)ap->Channel;
+    }
+    if (ap->Sec == 1) {
+        if (assoc_req) {
+            memcpy(p + n, F->WpaIe, F->WpaIeLen);
+            n += F->WpaIeLen;
+        } else {
+            memcpy(p + n, rsn_psk, sizeof(rsn_psk));
+            n += sizeof(rsn_psk);
+        }
+    }
+    return n;
+}
+
+static unsigned
+ap_cap(const fake_ap *ap)
+{
+    return 0x0001 | 0x0400 | (ap->Sec ? 0x0010 : 0);
+}
+
+/* escan: one partial result per AP, then the end */
+static void
+escan(fake_chip *F, unsigned sync)
+{
+    unsigned char d[12 + 128 + 256];
+    unsigned i;
+
+    F->Escans++;
+    for (i = 0; i < FAKE_NAPS; i++) {
+        const fake_ap *ap = &FakeAps[i];
+        unsigned char *bi = d + 12;
+        unsigned ielen, l = (unsigned)strlen(ap->Ssid);
+
+        memset(d, 0, sizeof(d));
+        put_le16(d + 8, sync);
+        put_le16(d + 10, 1);
+        ielen = ap_ies(ap, bi + 128, 0, F);
+        put_le32(bi + 0, 109);
+        put_le32(bi + 4, 128 + ielen);
+        memcpy(bi + 8, ap->Bssid, 6);
+        put_le16(bi + 14, 100);
+        put_le16(bi + 16, ap_cap(ap));
+        bi[18] = (unsigned char)l;
+        memcpy(bi + 19, ap->Ssid, l);
+        put_le32(bi + 52, 8);
+        put_le16(bi + 72, ap->Chanspec);
+        put_le16(bi + 78, (unsigned)(ap->Rssi & 0xFFFF));
+        bi[88] = ap->Chanspec == 0xE02A ? 0 : (unsigned char)ap->Channel;
+        bi[96] = i == FAKE_AP_OPEN ? 0x01 : 0;     /* the open AP's record is from a beacon */
+        put_le16(bi + 116, 128);
+        put_le32(bi + 120, ielen);
+        put_le32(d + 0, 12 + 128 + ielen);
+        queue_event_full(F, E_ESCAN_RESULT, E_STATUS_PARTIAL, 0, 0, NULL, d, 12 + 128 + ielen);
+    }
+    memset(d, 0, 12);
+    put_le32(d, 12);
+    put_le16(d + 8, sync);
+    queue_event_full(F, E_ESCAN_RESULT, E_STATUS_SUCCESS, 0, 0, NULL, d, 12);
+}
+
+/* A data frame from the AP side (ap is the BSSID, src the sender behind it). */
+static void
+queue_data(fake_chip *F, const unsigned char *src, unsigned type, const unsigned char *body, unsigned blen)
+{
+    unsigned char f[4 + 14 + 1600];
+
+    memset(f, 0, 4 + 14);
+    f[0] = BCDC_FLAG_VER(BCDC_PROTO_VER);
+    memcpy(f + 4, sta_mac, 6);
+    memcpy(f + 10, src, 6);
+    put_be16(f + 16, type);
+    memcpy(f + 18, body, blen);
+    queue_frame(F, SDPCM_CH_DATA, f, 4 + 14 + blen);
+}
+
+/* EAPOL-Key "messages" of the simulated handshake: the bytes are not real
+ * 802.1X, only distinguishable (byte 1 is the message number). */
+static void
+queue_eapol(fake_chip *F, unsigned msg)
+{
+    unsigned char b[99];
+
+    memset(b, 0, sizeof(b));
+    b[0] = 2;                   /* 802.1X version */
+    b[1] = (unsigned char)msg;  /* here: the message number */
+    b[3] = sizeof(b) - 4;
+    queue_data(F, FakeAps[F->Assoc].Bssid, ETHERTYPE_EAPOL, b, sizeof(b));
+}
+
+static void
+leave(fake_chip *F, unsigned type, unsigned reason)
+{
+    const unsigned char *b = FakeAps[F->Assoc].Bssid;
+
+    queue_event_full(F, type, 0, reason, 0, b, NULL, 0);
+    queue_event_full(F, E_LINK, 0, reason, 0, b, NULL, 0);
+    F->Assoc = -1;
+    F->Authorized = 0;
+    F->Eapol3Sent = 0;
+}
+
+void
+FakeApDeauth(fake_chip *F, unsigned Reason)
+{
+    if (F->Assoc >= 0) {
+        leave(F, E_DEAUTH_IND, Reason);
+    }
+}
+
+static void
+join(fake_chip *F, const unsigned char *d, unsigned dlen)
+{
+    unsigned sl = get_le32(d), n, cs, i;
+    const fake_ap *ap = NULL;
+    int ok;
+
+    F->Joins++;
+    if (dlen < 52 || sl == 0 || sl > 32) {
+        violation(F, "bad join parameters", dlen, sl);
+        return;
+    }
+    n = get_le32(d + 44);
+    cs = get_le16(d + 48);
+    for (i = 0; i < FAKE_NAPS; i++) {
+        if (memcmp(FakeAps[i].Bssid, d + 36, 6) == 0) {
+            ap = &FakeAps[i];
+            break;
+        }
+    }
+    if (ap == NULL || strlen(ap->Ssid) != sl || memcmp(ap->Ssid, d + 4, sl) != 0) {
+        queue_event_full(F, E_SET_SSID, E_STATUS_NO_NETWORKS, 0, 0, NULL, NULL, 0);
+        return;
+    }
+    /* the chanspec the host asks for: the 20 MHz control channel, d11ac encoding */
+    if (n != 1 || (cs & 0xFF) != ap->Channel || (cs & 0x3800) != 0x1000 ||
+        ((cs & 0xC000) == 0xC000) != (ap->Band == 1)) {
+        violation(F, "join chanspec", cs, ap->Channel);
+    }
+    if (!F->Up || F->Infra != 1 || F->Auth != 0) {
+        violation(F, "join before C_UP, infra 1 and open authentication", F->Up, F->Infra);
+    }
+    ok = ap->Sec == 0 ? (F->Wsec == 0 && F->WpaAuth == 0)
+       : ap->Sec == 1 ? ((F->Wsec & 4) && F->WpaAuth == WPA2_AUTH_PSK &&
+                         F->WpaIeLen == sizeof(rsn_psk) && memcmp(F->WpaIe, rsn_psk, sizeof(rsn_psk)) == 0)
+       : 0;
+    if (!ok) {
+        queue_event_full(F, E_SET_SSID, E_STATUS_FAIL, 0, 0, ap->Bssid, NULL, 0);
+        return;
+    }
+    F->Assoc = (int)(ap - FakeAps);
+    F->Authorized = ap->Sec == 0;
+    F->Eapol3Sent = 0;
+    queue_event_full(F, E_AUTH, 0, 0, 0, ap->Bssid, NULL, 0);
+    queue_event_full(F, E_ASSOC, 0, 0, 0, ap->Bssid, NULL, 0);
+    queue_event_full(F, E_LINK, 0, 0, EVENT_FLAG_LINK, ap->Bssid, NULL, 0);
+    queue_event_full(F, E_SET_SSID, E_STATUS_SUCCESS, 0, 0, ap->Bssid, NULL, 0);
+    if (ap->Sec == 1 && F->SupWpa) {
+        if (F->PmkLen == strlen(FAKE_PSK_PASS) && memcmp(F->Pmk, FAKE_PSK_PASS, F->PmkLen) == 0) {
+            F->Authorized = 1;
+            queue_event_full(F, E_PSK_SUP, E_STATUS_FWSUP_DONE, 0, 0, ap->Bssid, NULL, 0);
+        } else {
+            queue_event_full(F, E_PSK_SUP, 7, 0, 0, ap->Bssid, NULL, 0);    /* timeout: wrong key */
+            leave(F, E_DEAUTH_IND, 15);
+        }
+    } else if (ap->Sec == 1) {
+        queue_eapol(F, 1);          /* message 1, for the host's supplicant */
+    }
+}
+
+static void
+set_key(fake_chip *F, const unsigned char *k, unsigned len)
+{
+    static const unsigned char zero[6];
+    unsigned idx, klen, algo, flags;
+
+    if (len < WSEC_KEY_LEN) {
+        violation(F, "wsec_key too short", len, WSEC_KEY_LEN);
+        F->KeyErrors++;
+        return;
+    }
+    idx = get_le32(k);
+    klen = get_le32(k + 4);
+    algo = get_le32(k + WSEC_KEY_ALGO);
+    flags = get_le32(k + WSEC_KEY_FLAGS);
+    if (F->Assoc < 0 || algo != CRYPTO_ALGO_AES_CCM || klen != 16) {
+        F->KeyErrors++;
+        return;
+    }
+    if (memcmp(k + WSEC_KEY_EA, zero, 6) != 0) {
+        if (memcmp(k + WSEC_KEY_EA, FakeAps[F->Assoc].Bssid, 6) != 0 || idx != 0 || flags != 0) {
+            F->KeyErrors++;
+            return;
+        }
+        memcpy(F->PairKey, k + WSEC_KEY_DATA, 16);
+        F->Authorized = 1;
+    } else {
+        if (flags != WSEC_PRIMARY_KEY || idx == 0 || idx > 3) {
+            F->KeyErrors++;
+            return;
+        }
+        memcpy(F->GroupKey, k + WSEC_KEY_DATA, 16);
+        F->GroupIdx = idx;
+    }
+    F->KeysSet++;
+}
+
+/* A data frame from the host (BCDC header, then Ethernet). */
+static void
+host_data(fake_chip *F, const unsigned char *d, unsigned dlen)
+{
+    const unsigned char *eth;
+    unsigned elen, type;
+
+    if (dlen < 4 + 14 || d[0] != BCDC_FLAG_VER(BCDC_PROTO_VER) || d[3] != 0) {
+        violation(F, "bad BCDC data header", dlen, d[0]);
+        return;
+    }
+    eth = d + 4;
+    elen = dlen - 4;
+    type = get_be16(eth + 12);
+    F->DataFromHost++;
+    if (memcmp(eth + 6, sta_mac, 6) != 0) {
+        violation(F, "data frame not from the station's address", eth[6], eth[11]);
+    }
+    if (F->Assoc < 0) {
+        F->DataDropped++;
+        return;
+    }
+    if (type == ETHERTYPE_EAPOL) {
+        F->EapolFromHost++;
+        F->LastEapolLen = elen - 14 < sizeof(F->LastEapol) ? elen - 14 : sizeof(F->LastEapol);
+        memcpy(F->LastEapol, eth + 14, F->LastEapolLen);
+        if (memcmp(eth, FakeAps[F->Assoc].Bssid, 6) != 0) {
+            violation(F, "EAPOL not to the AP", eth[0], eth[5]);
+        }
+        if (F->Authorized) {
+            /* message 4 behind the pairwise key would go out encrypted */
+            violation(F, "EAPOL after the pairwise key", eth[15], 0);
+        } else if (eth[15] == 2 && !F->Eapol3Sent) {
+            F->Eapol3Sent = 1;
+            queue_eapol(F, 3);
+        }
+        return;
+    }
+    if (!F->Authorized) {
+        F->DataDropped++;           /* the port is closed until the pairwise key */
+        return;
+    }
+    /* ARP request for the gateway: answer it */
+    if (type == 0x0806 && elen >= 14 + 28 && get_be16(eth + 20) == 1 && memcmp(eth + 38, FakeGatewayIp, 4) == 0) {
+        unsigned char r[28];
+
+        memcpy(r, eth + 14, 8);
+        put_be16(r + 6, 2);
+        memcpy(r + 8, FakeGatewayMac, 6);
+        memcpy(r + 14, FakeGatewayIp, 4);
+        memcpy(r + 18, eth + 22, 10);   /* the asker's MAC and IP */
+        queue_data(F, FakeGatewayMac, 0x0806, r, sizeof(r));
+        F->ArpReplies++;
+    }
+}
+
+static int
+get_var(fake_chip *F, const char *name, unsigned char *out, unsigned dlen, int *status)
+{
+    const fake_ap *ap = F->Assoc >= 0 ? &FakeAps[F->Assoc] : NULL;
+
+    if (strcmp(name, "ver") == 0) {
+        static const char v4345[] = "wl0: Nov 24 2026 12:00:00 version 7.45.96.0 (bwltest) FWID 01-12345678\n";
+        static const char v43752[] = "wl0: Nov 24 2026 12:00:00 version 18.35.387.23.7 (bwltest) FWID 01-12345678\n";
+        const char *v = F->Model == FAKE_43752 ? v43752 : v4345;
+        unsigned vl = (unsigned)strlen(v) + 1;
+        memset(out, 0, dlen);
+        memcpy(out, v, vl < dlen ? vl : dlen);
+    } else if (strcmp(name, "cur_etheraddr") == 0) {
+        memcpy(out, sta_mac, 6);
+    } else if (strcmp(name, "clmload_status") == 0) {
+        int ok = !F->ClmBad && F->ExpectClm && F->ClmLen == F->ExpectClmLen &&
+                 memcmp(F->Clm, F->ExpectClm, F->ClmLen) == 0;
+        put_le32(out, ok ? 0 : 1);
+    } else if (strcmp(name, "cap") == 0) {
+        static const char cap4345[] = "ap sta wme 802.11d 802.11h rm cqa cac dualband ampdu ampdu_tx ampdu_rx "
+                                      "amsdurx radio_pwrsave p2p proptxstatus mchan wds dwds p2po anqpo "
+                                      "vht-prop-rates mfp idsup idauth";
+        static const char cap43752[] = "ap sta wme 802.11d 802.11h dualband ampdu amsdurx p2p mfp sae";
+        const char *c = F->Model == FAKE_43752 ? cap43752 : cap4345;
+        unsigned cl = (unsigned)strlen(c) + 1;
+        memset(out, 0, dlen);
+        memcpy(out, c, cl < dlen ? cl : dlen);
+    } else if (strcmp(name, "event_msgs") == 0) {
+        memset(out, 0, dlen);
+        memcpy(out, F->EventMask, dlen < sizeof(F->EventMask) ? dlen : sizeof(F->EventMask));
+    } else if (strcmp(name, "assoc_info") == 0 && ap != NULL && dlen >= 28) {
+        unsigned char tmp[300];
+        memset(out, 0, dlen);
+        put_le32(out + 0, ap_ies(ap, tmp, 1, F));
+        put_le32(out + 4, 10);
+        put_le16(out + 12, ap_cap(ap));
+        put_le16(out + 14, 10);
+        memcpy(out + 16, ap->Bssid, 6);
+        put_le16(out + 22, ap_cap(ap));
+        put_le16(out + 26, 0xC005);
+    } else if (strcmp(name, "assoc_req_ies") == 0 && ap != NULL) {
+        unsigned char tmp[300];
+        unsigned n = ap_ies(ap, tmp, 1, F);
+        memset(out, 0, dlen);
+        memcpy(out, tmp, n < dlen ? n : dlen);
+    } else if (strcmp(name, "assoc_resp_ies") == 0 && ap != NULL) {
+        static const unsigned char rsp[10] = { 1, 8, 0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24 };
+        memset(out, 0, dlen);
+        memcpy(out, rsp, dlen < 10 ? dlen : 10);
+    } else {
+        *status = -23;      /* BCME_UNSUPPORTED */
+        return 1;
+    }
+    return 0;
+}
+
+static int
+set_var(fake_chip *F, const char *name, const unsigned char *v, unsigned vlen, int *status)
+{
+    unsigned iv = vlen >= 4 ? get_le32(v) : 0;
+
+    if (strcmp(name, "clmload") == 0) {
+        const unsigned char *c = v;
+        unsigned fl = get_le16(c), ty = get_le16(c + 2), n = get_le32(c + 4);
+        if (!(fl & DLOAD_FLAG_HANDLER_VER) || ty != DLOAD_TYPE_CLM || n > BWL_DLOAD_MAX ||
+            12 + n > vlen || F->ClmLen + n > 64 * 1024) {
+            F->ClmBad = 1;
+        } else {
+            if (((fl & DLOAD_FLAG_BEGIN) != 0) != (F->ClmLen == 0)) F->ClmBad = 1;
+            memcpy(F->Clm + F->ClmLen, c + 12, n);
+            F->ClmLen += n;
+            if ((fl & DLOAD_FLAG_END) && F->ClmLen != F->ExpectClmLen) F->ClmBad = 1;
+        }
+    } else if (strcmp(name, "event_msgs") == 0) {
+        if (vlen < sizeof(F->EventMask)) {
+            *status = -14;  /* BCME_BUFTOOSHORT */
+            return 1;
+        }
+        memcpy(F->EventMask, v, sizeof(F->EventMask));
+        F->EventMaskSet = 1;
+    } else if (strcmp(name, "mpc") == 0) {
+        F->Mpc = iv;
+    } else if (strcmp(name, "roam_off") == 0) {
+        F->RoamOff = iv;
+    } else if (strcmp(name, "wsec") == 0) {
+        F->Wsec = iv;
+    } else if (strcmp(name, "wpa_auth") == 0) {
+        F->WpaAuth = iv;
+    } else if (strcmp(name, "sup_wpa") == 0) {
+        if (F->Model == FAKE_43752 && iv) {
+            *status = -23;  /* this model's firmware has no idsup */
+            return 1;
+        }
+        F->SupWpa = iv;
+    } else if (strcmp(name, "wpaie") == 0) {
+        F->WpaIeLen = vlen < sizeof(F->WpaIe) ? vlen : sizeof(F->WpaIe);
+        memcpy(F->WpaIe, v, F->WpaIeLen);
+    } else if (strcmp(name, "country") == 0 && vlen >= 12) {
+        F->Country = (unsigned)v[0] << 8 | v[1];
+    } else if (strcmp(name, "escan") == 0) {
+        if (vlen < ESCAN_PARAMS_FIXED || get_le32(v) != ESCAN_REQ_VERSION || get_le16(v + 4) != ESCAN_ACTION_START ||
+            v[8 + 42] != BSSTYPE_ANY || get_le32(v + 8 + 60) != 0) {
+            violation(F, "bad escan parameters", vlen, get_le32(v));
+        }
+        if (!F->Up) {
+            *status = -4;   /* BCME_NOTUP */
+            return 1;
+        }
+        /* the results come after the reply (handle_tx_frame) */
+        F->EscanPending = 1;
+        F->EscanSync = get_le16(v + 6);
+    } else if (strcmp(name, "wsec_key") == 0) {
+        set_key(F, v, vlen);
+    } else {
+        *status = -23;
+        return 1;
+    }
+    return 0;
+}
+
+/* A complete frame arrived on F2: a command to answer, or data. */
 static void
 handle_tx_frame(fake_chip *F, const unsigned char *p, unsigned len)
 {
     unsigned flen = get_le16(p), off, cmd, dlen, flags;
-    unsigned char reply[12 + 16 + 8192];
+    static unsigned char reply[12 + 16 + 8192];
     const unsigned char *d;
+    unsigned char *out;
     int err = 0, status = 0;
-    unsigned rlen;
+    unsigned rlen, before;
 
     if (((flen ^ get_le16(p + 2)) & 0xFFFF) != 0xFFFF || flen > len || flen < 12) {
         violation(F, "bad SDPCM header from the host", flen, len);
@@ -491,13 +922,30 @@ handle_tx_frame(fake_chip *F, const unsigned char *p, unsigned len)
     if (p[4] != F->ExpectSeq) {
         violation(F, "SDPCM sequence number out of order", p[4], F->ExpectSeq);
     }
+    if ((unsigned char)(F->AdvMaxSeq - p[4]) == 0 || ((unsigned char)(F->AdvMaxSeq - p[4]) & 0x80)) {
+        violation(F, "frame beyond the credit window", p[4], F->AdvMaxSeq);
+    }
     F->ExpectSeq = p[4] + 1;
-    if ((p[5] & 0x0F) != SDPCM_CH_CONTROL) {
-        violation(F, "host sent a non-control frame", p[5], 0);
+    off = p[7];
+    if (off < 12 || off > flen) {
+        violation(F, "bad data offset", off, flen);
         return;
     }
-    off = p[7];
-    if (off < 12 || off + 16 > flen) {
+    if ((p[5] & 0x0F) == SDPCM_CH_DATA) {
+        before = F->RxLen;
+        host_data(F, p + off, flen - off);
+        if (F->RxLen == before) {
+            /* no answer to carry the credit: a header-only frame does */
+            unsigned char none[1];
+            queue_frame(F, SDPCM_CH_DATA, none, 0);
+        }
+        return;
+    }
+    if ((p[5] & 0x0F) != SDPCM_CH_CONTROL) {
+        violation(F, "host sent a frame on neither the control nor the data channel", p[5], 0);
+        return;
+    }
+    if (off + 16 > flen) {
         violation(F, "bad data offset", off, flen);
         return;
     }
@@ -505,7 +953,7 @@ handle_tx_frame(fake_chip *F, const unsigned char *p, unsigned len)
     cmd = get_le32(d);
     dlen = get_le32(d + 4);
     flags = get_le32(d + 8);
-    if (off + 16 + dlen > flen) {
+    if (off + 16 + dlen > flen || dlen > 8192) {
         violation(F, "dcmd length past the frame", dlen, flen);
         return;
     }
@@ -513,46 +961,61 @@ handle_tx_frame(fake_chip *F, const unsigned char *p, unsigned len)
     memcpy(reply, d, 16 + dlen);
     rlen = 16 + dlen;
     d += 16;
+    out = reply + 16;
 
-    if (cmd == C_GET_VERSION && !(flags & BCDC_DCMD_SET)) {
-        put_le32(reply + 16, 2);
-    } else if (cmd == C_GET_VAR && !(flags & BCDC_DCMD_SET)) {
-        const char *name = (const char *)d;
-        if (strcmp(name, "ver") == 0) {
-            static const char v4345[] = "wl0: Nov 24 2026 12:00:00 version 7.45.96.0 (bwltest) FWID 01-12345678\n";
-            static const char v43752[] = "wl0: Nov 24 2026 12:00:00 version 18.35.387.23.7 (bwltest) FWID 01-12345678\n";
-            const char *v = F->Model == FAKE_43752 ? v43752 : v4345;
-            unsigned vl = (unsigned)strlen(v) + 1;
-            memset(reply + 16, 0, dlen);
-            memcpy(reply + 16, v, vl < dlen ? vl : dlen);
-        } else if (strcmp(name, "cur_etheraddr") == 0) {
-            static const unsigned char mac[6] = { 0x00, 0x90, 0x4c, 0xc5, 0x12, 0x38 };
-            memcpy(reply + 16, mac, 6);
-        } else if (strcmp(name, "clmload_status") == 0) {
-            int ok = !F->ClmBad && F->ExpectClm && F->ClmLen == F->ExpectClmLen &&
-                     memcmp(F->Clm, F->ExpectClm, F->ClmLen) == 0;
-            put_le32(reply + 16, ok ? 0 : 1);
-        } else {
-            err = 1;
-            status = -23;   /* BCME_UNSUPPORTED */
-        }
+    if (cmd == C_GET_VAR && !(flags & BCDC_DCMD_SET)) {
+        err = get_var(F, (const char *)d, out, dlen, &status);
     } else if (cmd == C_SET_VAR && (flags & BCDC_DCMD_SET)) {
-        const char *name = (const char *)d;
-        if (strcmp(name, "clmload") == 0) {
-            const unsigned char *c = d + 8;
-            unsigned fl = get_le16(c), ty = get_le16(c + 2), n = get_le32(c + 4);
-            if (!(fl & DLOAD_FLAG_HANDLER_VER) || ty != DLOAD_TYPE_CLM || n > BWL_DLOAD_MAX ||
-                12 + 8 + n > dlen || F->ClmLen + n > 64 * 1024) {
-                F->ClmBad = 1;
-            } else {
-                if (((fl & DLOAD_FLAG_BEGIN) != 0) != (F->ClmLen == 0)) F->ClmBad = 1;
-                memcpy(F->Clm + F->ClmLen, c + 12, n);
-                F->ClmLen += n;
-                if ((fl & DLOAD_FLAG_END) && F->ClmLen != F->ExpectClmLen) F->ClmBad = 1;
-            }
+        unsigned nl = 0;
+        while (nl < dlen && d[nl]) nl++;
+        nl++;
+        err = nl > dlen ? (status = -2, 1) : set_var(F, (const char *)d, d + nl, dlen - nl, &status);
+    } else if (cmd == C_GET_VERSION && !(flags & BCDC_DCMD_SET)) {
+        put_le32(out, 2);
+    } else if (!(flags & BCDC_DCMD_SET) && cmd == C_GET_BANDLIST && dlen >= 12) {
+        put_le32(out, 2); put_le32(out + 4, 1); put_le32(out + 8, 2);
+    } else if (!(flags & BCDC_DCMD_SET) && cmd == C_GET_RATE && dlen >= 4) {
+        if (F->Assoc < 0) { err = 1; status = -17; } else put_le32(out, 130);  /* 65 Mbit/s */
+    } else if (!(flags & BCDC_DCMD_SET) && cmd == C_GET_RSSI && dlen >= 4) {
+        if (F->Assoc < 0) { err = 1; status = -17; } else put_le32(out, (unsigned)-52);
+    } else if ((flags & BCDC_DCMD_SET) && dlen >= 4 &&
+               (cmd == C_UP || cmd == C_SET_PM || cmd == C_SET_INFRA || cmd == C_SET_AUTH)) {
+        unsigned v = get_le32(d);
+        if (cmd == C_UP) F->Up = 1;
+        else if (cmd == C_SET_PM) F->Pm = v;
+        else if (cmd == C_SET_INFRA) F->Infra = v;
+        else F->Auth = v;
+    } else if ((flags & BCDC_DCMD_SET) && cmd == C_SET_WSEC_PMK) {
+        unsigned kl = dlen >= 4 ? get_le16(d) : 0;
+        if (dlen < WSEC_PMK_LEN || kl > 64 || get_le16(d + 2) != WSEC_PASSPHRASE) {
+            err = 1; status = -2;
         } else {
-            err = 1;
-            status = -23;
+            memcpy(F->Pmk, d + 4, kl);
+            F->Pmk[kl] = 0;
+            F->PmkLen = kl;
+        }
+    } else if ((flags & BCDC_DCMD_SET) && cmd == C_SET_SSID) {
+        /* the reply first, the join's events after it */
+        queue_frame(F, SDPCM_CH_CONTROL, reply, rlen);
+        join(F, d, dlen);
+        return;
+    } else if ((flags & BCDC_DCMD_SET) && cmd == C_DISASSOC) {
+        queue_frame(F, SDPCM_CH_CONTROL, reply, rlen);
+        if (F->Assoc >= 0) {
+            leave(F, E_DISASSOC, dlen >= 4 ? get_le32(d) : 0);
+        }
+        return;
+    } else if ((flags & BCDC_DCMD_SET) && cmd == C_SCAN) {
+        F->ScanAborts++;
+        if (F->EscanPending) {
+            unsigned char e[12];
+            memset(e, 0, sizeof(e));
+            put_le32(e, 12);
+            put_le16(e + 8, F->EscanSync);
+            queue_frame(F, SDPCM_CH_CONTROL, reply, rlen);
+            F->EscanPending = 0;
+            queue_event_full(F, E_ESCAN_RESULT, 4, 0, 0, NULL, e, 12);  /* aborted */
+            return;
         }
     } else {
         err = 1;
@@ -573,6 +1036,10 @@ handle_tx_frame(fake_chip *F, const unsigned char *p, unsigned len)
         put_le32(reply + 4, dlen + extra);     /* and say so in the length */
     }
     queue_frame(F, SDPCM_CH_CONTROL, reply, rlen);
+    if (F->EscanPending && !F->HoldEscan) {
+        F->EscanPending = 0;
+        escan(F, F->EscanSync);
+    }
 }
 
 static int

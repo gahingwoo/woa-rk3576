@@ -255,7 +255,10 @@ jobs:
     # The Wi-Fi driver's SDIO, chip, firmware and protocol code is plain C
     # (drivers/net/bcmwlsdio/bwl*.c). Build it with tools/bwltest, which
     # runs it against a simulated BCM43456 and BCM43752: unit tests, then attach,
-    # download, start and control commands with synthetic files; then the
+    # download, start and control commands with synthetic files, then the
+    # station against simulated access points (escan, open and WPA2-PSK
+    # joins with the host's and the firmware's supplicant, keys, data
+    # frames through the credit window, deauthentication); then the
     # same bring-up with the real firmware files install-firmware.ps1
     # fetches, at the same pinned commits and hashes. The files are only
     # downloaded into the runner, never stored or uploaded.
@@ -266,7 +269,7 @@ jobs:
         run: |
           set -eux
           B=drivers/net/bcmwlsdio
-          SRC="$B/bwl_sdio.c $B/bwl_chip.c $B/bwl_bringup.c $B/bwl_fw.c $B/bwl_proto.c $B/bwl_ctl.c"
+          SRC="$B/bwl_sdio.c $B/bwl_chip.c $B/bwl_bringup.c $B/bwl_fw.c $B/bwl_proto.c $B/bwl_ctl.c $B/bwl_wlan.c $B/bwl_data.c"
           gcc -std=c99 -O2 -Wall -Wextra -Werror -o bwltest tools/bwltest/main.c tools/bwltest/fakechip.c $SRC
           gcc -std=c99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror \
               -o bwltest-asan tools/bwltest/main.c tools/bwltest/fakechip.c $SRC
@@ -1128,8 +1131,21 @@ jobs:
               Write-Host ("   {0,-14} {1}" -f $sig.Status, (Split-Path $sig.Path -Leaf))
               if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
             }
-            foreach ($f in "$n.inf", "$n.sys", "$n.cat") {
+            $need = @("$n.inf", "$n.sys", "$n.cat")
+            if ($n -eq 'bcmwlsdio') { $need += 'bcmwlwifi.inf', 'bcmwlwifi.cat' }
+            foreach ($f in $need) {
               if (-not (Test-Path (Join-Path $d $f))) { throw "$n package: $f missing" }
+            }
+            if ($n -eq 'bcmwlsdio') {
+              # the class extension versions the image binds, from its PreEntry text
+              $u = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes("$d\bcmwlsdio.sys"))
+              $m = [regex]::Match($u, 'binds NetAdapterCx [0-9.]+, WiFiCx [0-9.]+')
+              if (-not $m.Success) { throw 'bcmwlsdio.sys: no PreEntry version text' }
+              Write-Host "   bcmwlsdio.sys $($m.Value)"
+              if ($m.Value -ne 'binds NetAdapterCx 2.1, WiFiCx 1.0') { throw "unexpected binding: $($m.Value)" }
+            }
+            Get-ChildItem $d -Filter *.inf | ForEach-Object {
+              Write-Host ("   {0}: {1}" -f $_.Name, ((Select-String -Path $_.FullName -Pattern '^DriverVer').Line))
             }
           }
           Copy-Item drivers\net\bcmwlsdio\install-firmware.ps1, drivers\net\bcmwlsdio\README.md $pkg -Force

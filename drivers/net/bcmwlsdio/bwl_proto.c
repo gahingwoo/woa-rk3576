@@ -200,6 +200,7 @@ BwlEventParse(const u8 *Eth, u32 Len, bwl_event *E)
         return BWL_E_FORMAT;
     }
     m = h + EV_BCMETH;
+    E->Flags = BwlGetBe16(m + 2);
     E->Type = BwlGetBe32(m + 4);
     E->Status = BwlGetBe32(m + 8);
     E->Reason = BwlGetBe32(m + 12);
