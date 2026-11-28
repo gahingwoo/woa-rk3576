@@ -15,6 +15,9 @@
 #    Never marked: the SD/eMMC hosts (dwcsdhc, dwcmshc), which the running
 #    Windows may be booted from, and the Ethernet adapter (dwc_eqos) unless
 #    it has no driver at all. Their packages are staged only.
+#    On Windows 10 the same task also removes stornvme.inf from the
+#    DriverDatabase entry for PCI\CC_010802 when rk3xnvme is in the list,
+#    so the NVMe controller takes rk3xnvme (see rk3xnvme's README).
 # 4. Sets up the follow-up check: %ProgramData%\RK3576\drivers gets
 #    expected.json (each marked device and the package DriverVer it should
 #    be on after the restart), verify-bound.ps1 and mark-reinstall.ps1, and
@@ -56,6 +59,12 @@ function Say([string]$t) { $script:log += $t; Write-Host $t }
 $NeverMark = @{
     'dwcsdhc' = 'eMMC host: Windows may be running from it; staged only, it is taken by an offline install (install.cmd W:\ from WinPE)'
     'dwcmshc' = 'SD/SDIO host: Windows may be running from it; staged only, it is taken by an offline install (install.cmd W:\ from WinPE)'
+}
+# Windows 10 only: inbox INFs to take out of the DriverDatabase for an ID,
+# so the package's driver is the only one Plug and Play finds for it. An
+# inbox driver outranks a test-signed one whatever the ID (rk3xnvme README).
+$UnmapOnWin10 = @{
+    'rk3xnvme' = 'PCI\CC_010802 stornvme.inf'
 }
 $MarkOnlyIfNoDriver = @{
     'dwc_eqos' = 'network adapter with a driver: staged only, so a remote session keeps its connection'
@@ -256,6 +265,15 @@ foreach ($d in $dirs) {
     }
 }
 
+$unmap = @()
+if ($osk) {
+    foreach ($d in $dirs) { if ($UnmapOnWin10.ContainsKey($d)) { $unmap += $UnmapOnWin10[$d] } }
+}
+foreach ($u in $unmap) {
+    $f = $u -split ' '
+    Say "$(if ($Plan) { 'Would remove' } else { 'Removing' }) $($f[1]) from the DriverDatabase entry for $($f[0]) (Windows 10: the package's driver takes that ID)."
+}
+
 # expected.json for verify-bound.ps1.
 function Get-Expected {
     $devs = @($mark | ForEach-Object {
@@ -316,12 +334,13 @@ function Register-Followup {
     Register-ScheduledTask -TaskName $VerifyTask -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
 }
 
-if ($mark.Count) {
+if ($mark.Count -or $unmap.Count) {
     # The task runs mark-reinstall.ps1 from a folder with no spaces in it.
     if ($work -match '\s') { Say "The work folder has a space in its path: $work"; exit 1 }
     New-Item -ItemType Directory -Path $work | Out-Null
     Copy-Item -LiteralPath (Join-Path $here 'mark-reinstall.ps1') -Destination $work -Force
     $mark | Out-File -FilePath (Join-Path $work 'reinstall.txt') -Encoding ascii
+    if ($unmap.Count) { $unmap | Out-File -FilePath (Join-Path $work 'unmap.txt') -Encoding ascii }
     $mlog = Join-Path $work 'mark-reinstall.log'
     Remove-Item -LiteralPath $mlog -ErrorAction SilentlyContinue
     $task = 'rk3576-drivers-mark'
@@ -340,6 +359,12 @@ if ($mark.Count) {
                 $cf = 0
                 try { $cf = [int](Get-ItemProperty -LiteralPath $k -Name ConfigFlags).ConfigFlags } catch { }
                 if (-not ($cf -band 0x20)) { Say ("{0}: ConfigFlags 0x{1:x8}, the reinstall bit is not set." -f $id, $cf); $failed++ }
+            }
+            foreach ($u in $unmap) {
+                $f = $u -split ' '
+                if (Get-ItemProperty -LiteralPath "HKLM:\DRIVERS\DriverDatabase\DeviceIds\$($f[0])" -Name $f[1] -ErrorAction SilentlyContinue) {
+                    Say "$($f[0]): $($f[1]) is still in the DriverDatabase."; $failed++
+                }
             }
         }
     }

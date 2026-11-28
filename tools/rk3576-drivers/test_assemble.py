@@ -93,7 +93,7 @@ class Assemble(unittest.TestCase):
             with open(os.path.join(root, 'manifest.json')) as f:
                 m = json.load(f)
             for b in m['boards']:
-                want = [d['dir'] for d in m['drivers'] if b in d['default']]
+                want = [d['dir'] for d in m['drivers'] if b in d['default'] and d['os'] in ('all', 'win11')]
                 got = lines(os.path.join(root, 'boards', b + '.txt'))
                 self.assertEqual(want, got, b)
                 for d in EVERY_BOARD:
@@ -108,16 +108,21 @@ class Assemble(unittest.TestCase):
             self.assertIn('rk3576-drivers/drivers/csaudiork3x/csaudiork3x.sys', names)
 
     def test_win10_lists(self):
-        # Every row of the real table is for every Windows: the Windows 10
-        # lists are the Windows 11 ones and nothing is skipped.
+        # In the real table only rk3xnvme is for one Windows (win10): the
+        # Windows 10 lists are the Windows 11 ones plus rk3xnvme where it
+        # goes, and nothing is skipped.
         with tempfile.TemporaryDirectory() as top:
             r, out = run(top, *make_inputs(top))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             bd = os.path.join(out, 'rk3576-drivers', 'boards')
             for b in ('tspi3m', 'cm5io', 'rock4d'):
                 for kind in ('', '-optional'):
-                    self.assertEqual(lines(os.path.join(bd, f'{b}{kind}.txt')),
-                                     lines(os.path.join(bd, f'{b}-win10{kind}.txt')), b + kind)
+                    w11 = lines(os.path.join(bd, f'{b}{kind}.txt'))
+                    w10 = lines(os.path.join(bd, f'{b}-win10{kind}.txt'))
+                    self.assertNotIn('rk3xnvme', w11, b + kind)
+                    nvme = kind == '' and b in ('cm5io', 'rock4d')
+                    self.assertEqual('rk3xnvme' in w10, nvme, b + kind)
+                    self.assertEqual([d for d in w10 if d != 'rk3xnvme'], w11, b + kind)
             self.assertEqual(lines(os.path.join(bd, 'win10-skipped.txt')), [])
 
     def test_os_column(self):

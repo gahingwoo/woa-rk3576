@@ -19,6 +19,10 @@ has the untested build of `main`).
   pin controller, RTC, UART2, PCIe DBI), GPU (maliwddm) and NPU (rknpu).
 - TaishanPi 3M: also the GT9271 touch screen and Bluetooth.
 - CM5-IO and ROCK 4D: also the RK806 power button. ROCK 4D: the HAT EEPROM.
+- CM5-IO and ROCK 4D on Windows 10 only: NVMe (`rk3xnvme`; the inbox
+  stornvme faults there). Windows 10 installs also remove `stornvme.inf` from
+  the DriverDatabase entry for `PCI\CC_010802`, see
+  [its README](../../drivers/storage/rk3xnvme/README.md).
 - Optional (`/optional`): Bluetooth on the CM5-IO (untested).
 
 A driver whose device the firmware does not publish binds nothing.
