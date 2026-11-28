@@ -660,6 +660,11 @@ TxQueueCreate(
 
         NET_EXTENSION_QUERY query;
 
+#if !DWC_EQOS_NETCX20
+        // NetAdapterCx 2.0 knows no 802.1Q or GSO extension: asking for one
+        // is BUGCODE_NETADAPTER_DRIVER (0x19E) with the name as parameter 2,
+        // not a disabled NET_EXTENSION as 2.1 returns. The context is zeroed,
+        // so they stay disabled there.
         NET_EXTENSION_QUERY_INIT(&query,
             NET_PACKET_EXTENSION_IEEE8021Q_NAME,
             NET_PACKET_EXTENSION_IEEE8021Q_VERSION_1,
@@ -671,6 +676,7 @@ TxQueueCreate(
             NET_PACKET_EXTENSION_GSO_VERSION_1,
             NetExtensionTypePacket);
         NetTxQueueGetExtension(queue, &query, &context->packetGso);
+#endif
 
         NET_EXTENSION_QUERY_INIT(&query,
             NET_PACKET_EXTENSION_CHECKSUM_NAME,
