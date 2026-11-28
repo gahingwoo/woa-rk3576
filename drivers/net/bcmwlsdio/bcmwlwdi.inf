@@ -1,0 +1,119 @@
+;
+; bcmwlwdi.inf - Broadcom BCM43456 Wi-Fi (AMPAK AP6256, LCKFB TaishanPi 3M)
+; and BCM43752 Wi-Fi (BW3752-50B1, ArmSoM CM5 on the CM5-IO) on the RK3576
+; SDIO controller, as a WDI miniport for Windows' own Wi-Fi on Windows 10
+; 2004..22H2 (build 19041..19045), which has no WiFiCx.
+;
+; Windows 11 takes bcmwlwifi.inf (WiFiCx) instead: the models section for
+; build 22000 and later is empty, so this INF matches nothing there.
+; Binds SDIO function 1 only; the card's functions 2 and 3 stay without a
+; driver. The firmware files are not part of this package; see
+; docs/dev/wifi-win10.md and install-firmware.ps1.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Net
+ClassGuid   = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = bcmwlwdi.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+bcmwlwdi.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...19041,NTARM64.10.0...22000
+
+[Standard.NTARM64.10.0...19041]
+%BCMWL.DeviceDesc% = BCMWL_Inst,SD\VID_02D0&PID_A9BF&FN_1
+%BCMWL.DeviceDesc% = BCMWL_Inst,SD\VID_02D0&PID_4345&FN_1
+%BCMWL.43752Desc%  = BCMWL_Inst,SD\VID_02D0&PID_AAE8&FN_1
+%BCMWL.43752Desc%  = BCMWL_Inst,SD\VID_02D0&PID_AAE7&FN_1
+
+; Windows 11: bcmwlwifi.inf
+[Standard.NTARM64.10.0...22000]
+
+[BCMWL_Inst.NT]
+CopyFiles           = BCMWL_CopyFiles
+AddReg              = BCMWL_AddReg_Ndi
+Include             = netvwifibus.inf
+Needs               = VWiFiBus.CopyFiles
+Characteristics     = 0x84  ; NCF_PHYSICAL | NCF_HAS_UI
+BusType             = 15    ; PNPBus
+*IfType             = 71    ; IF_TYPE_IEEE80211
+*MediaType          = 16    ; NdisMediumNative802_11
+*PhysicalMediaType  = 9     ; NdisPhysicalMediumNative802_11
+*IfConnectorPresent = 1
+*ConnectionType     = 1     ; NET_IF_CONNECTION_DEDICATED
+*DirectionType      = 0     ; NET_IF_DIRECTION_SENDRECEIVE
+*AccessType         = 2     ; NET_IF_ACCESS_BROADCAST
+*HardwareLoopback   = 0
+
+[BCMWL_AddReg_Ndi]
+HKR, Ndi,            Service,    0, bcmwlwdi
+HKR, Ndi\Interfaces, UpperRange, 0, "ndis5"
+HKR, Ndi\Interfaces, LowerRange, 0, "wlan,ethernet,vwifi"
+
+[BCMWL_CopyFiles]
+bcmwlwdi.sys
+
+[BCMWL_Inst.NT.HW]
+AddReg  = BCMWL_Inst.NT.HW.AddReg
+Include = netvwifibus.inf
+Needs   = VWiFiBus.PnPFilterRegistration.HW
+
+[BCMWL_Inst.NT.HW.AddReg]
+; Device Parameters. FLG_ADDREG_NOCLOBBER (0x2) keeps a value already set
+; on the board across driver changes.
+; Stage: 3 is the Wi-Fi adapter; 0..2 stop the bring-up early (the
+; adapter then fails to open, and FwState says where it stopped).
+HKR,,"Stage",0x00010003,3
+HKR,,"MaxBlocks",0x00010003,32
+HKR,,"F2BlockMode",0x00010003,0
+HKR,,"Verify",0x00010003,1
+HKR,,"FirmwareDir",0x00000002,"\SystemRoot\System32\drivers\brcm"
+; the poller's interval while frames move and when idle (ms), the time a
+; connect task may take, and the firmware's own WPA2 supplicant (1: used
+; for the network FwSupSsid names, or any, with Passphrase; both REG_SZ,
+; set by hand; 0: Windows' supplicant).
+HKR,,"PollMs",0x00010003,2
+HKR,,"IdlePollMs",0x00010003,10
+HKR,,"ConnectTimeoutMs",0x00010003,15000
+HKR,,"FwSupplicant",0x00010003,0
+
+[BCMWL_Inst.NT.Services]
+AddService = bcmwlwdi,0x00000002,BCMWL_Service
+Include    = netvwifibus.inf
+Needs      = VWiFiBus.Services
+
+[BCMWL_Service]
+DisplayName   = %BCMWL.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\bcmwlwdi.sys
+LoadOrderGroup = NDIS
+
+[BCMWL_Inst.NT.Wdf]
+KmdfService = bcmwlwdi, BCMWL_wdfsect
+
+[BCMWL_wdfsect]
+KmdfLibraryVersion = 1.31
+
+[Strings]
+ProviderName      = "woa-rk3576"
+DiskName          = "Broadcom SDIO Wi-Fi (WDI) Installation Disk"
+BCMWL.DeviceDesc  = "Broadcom BCM43456 Wi-Fi (SDIO, WDI)"
+BCMWL.43752Desc   = "Broadcom BCM43752 Wi-Fi (SDIO, WDI)"
+BCMWL.SvcDesc     = "Broadcom SDIO Wi-Fi driver (Windows 10, WDI)"

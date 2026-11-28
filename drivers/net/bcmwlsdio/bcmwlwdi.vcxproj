@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  bcmwlwdi.sys: the Broadcom SDIO Wi-Fi (BCM43456, BCM43752) as an NDIS WDI
+  miniport for Windows 10 2004..22H2 (build 19041..19045, KMDF 1.31, NDIS
+  6.50+). Same sources as bcmwlsdio.vcxproj (the Windows 11 WiFiCx driver)
+  but for the front end: wdi.cpp and wdital.c instead of driver.c,
+  wificx.cpp and netadapter.c, built with BWL_WDI and against the WDI TLV
+  library (km\wlan\1.0) instead of WiFiCx's (km\wlan\2.0).
+
+  Build (EWDK prompt, after LaunchBuildEnv.cmd):
+      msbuild bcmwlwdi.vcxproj /p:Configuration=Release /p:Platform=ARM64
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{8C2F4B19-6D3A-4E57-A1B0-19041A9BF0D3}</ProjectGuid>
+    <TemplateGuid>{dd38f7fc-d7bd-488b-9242-7d8754cde80d}</TemplateGuid>
+    <RootNamespace>bcmwlwdi</RootNamespace>
+    <MinimumVisualStudioVersion>14.0</MinimumVisualStudioVersion>
+    <Configuration>Release</Configuration>
+    <Platform Condition="'$(Platform)' == ''">ARM64</Platform>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>KMDF</DriverType>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+    <!-- Windows 10 2004 (Vibranium, 19041; 19045 is the same catalog OS). -->
+    <Inf2CatWindowsVersionList>10_VB_ARM64</Inf2CatWindowsVersionList>
+    <!-- Windows 10 22H2 ships KMDF 1.31 (Wdf01000.sys 1.31.19041). -->
+    <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
+    <KMDF_VERSION_MINOR>31</KMDF_VERSION_MINOR>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <!-- Its own output and object directories: bcmwlsdio.vcxproj builds the
+       same source names in this directory. -->
+  <PropertyGroup>
+    <OutDir>$(MSBuildProjectDirectory)\$(Platform)\$(Configuration)\wdi\</OutDir>
+    <IntDir>$(MSBuildProjectDirectory)\$(Platform)\$(Configuration)\wdi\obj\</IntDir>
+    <TargetName>bcmwlwdi</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <!-- The WDI TLV generator/parser of Windows 10 (km\wlan\1.0). -->
+      <AdditionalIncludeDirectories>$(DDK_INC_PATH)wlan\1.0;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>BWL_WDI=1;NDIS_MINIPORT_DRIVER=1;NDIS650_MINIPORT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <!-- ndis.lib; sdbus.lib: SdBusOpenInterface and SdBusSubmitRequest;
+           TLVGeneratorParser.lib: Microsoft's WDI TLV library (C++);
+           libcntpr.lib: the __security_push/pop_cookie it references. -->
+      <AdditionalDependencies>$(DDK_LIB_PATH)ndis.lib;$(DDK_LIB_PATH)sdbus.lib;$(DDK_LIB_PATH)ntstrsafe.lib;$(DDK_LIB_PATH)wlan\1.0\TLVGeneratorParser.lib;$(DDK_LIB_PATH)libcntpr.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Inf>
+      <SpecifyArchitecture>true</SpecifyArchitecture>
+      <Architecture>arm64</Architecture>
+    </Inf>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="bringup.c" />
+    <ClCompile Include="sdbus.c" />
+    <ClCompile Include="files.c" />
+    <ClCompile Include="pool.c" />
+    <ClCompile Include="bwl_sdio.c" />
+    <ClCompile Include="bwl_chip.c" />
+    <ClCompile Include="bwl_bringup.c" />
+    <ClCompile Include="bwl_fw.c" />
+    <ClCompile Include="bwl_proto.c" />
+    <ClCompile Include="bwl_ctl.c" />
+    <ClCompile Include="bwl_wlan.c" />
+    <ClCompile Include="bwl_data.c" />
+    <ClCompile Include="wdital.c" />
+    <!-- C++, no sized deallocation (arrayofelements.hpp, C2956) -->
+    <ClCompile Include="wdicore.cpp">
+      <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="wdi.cpp">
+      <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="bcmwlsdio.h" />
+    <ClInclude Include="bwl.h" />
+    <ClInclude Include="bwl_regs.h" />
+    <ClInclude Include="wdicore.h" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Inf Include="bcmwlwdi.inf" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FilesToPackage Include="$(TargetPath)" />
+    <FilesToPackage Include="@(Inf->'%(CopyOutput)')" Condition="'@(Inf)'!=''" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

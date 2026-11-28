@@ -1158,6 +1158,87 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  wifi-win10-package:
+    name: Wi-Fi package for Windows 10, test-signed (dwcmshc + bcmwlwdi)
+    # For a Windows 10 22H2 board session: dwcmshc with the SDIO controller
+    # support and bcmwlwdi (the Broadcom SDIO Wi-Fi as a WDI miniport, KMDF
+    # 1.31), test-signed with a certificate made for this run, with
+    # signer.cer, install-firmware.ps1 and the README (docs/dev/wifi-win10.md).
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build, catalog and sign
+        shell: pwsh
+        run: |
+          msbuild build\RockchipDrivers.sln /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:SignMode=Off /p:WoaDriverBuild=${{ github.run_number }} /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'msbuild failed for RockchipDrivers.sln' }
+          msbuild drivers\net\bcmwlsdio\bcmwlwdi.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /p:SignMode=Off /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'msbuild failed for bcmwlwdi' }
+
+          $pkg = 'C:\wifi10-pkg'
+          foreach ($n in 'dwcmshc', 'bcmwlwdi') { New-Item -ItemType Directory -Force -Path "$pkg\$n" | Out-Null }
+          Get-ChildItem build\ARM64\Release\Output\dwcmshc -Recurse -Include *.sys,*.inf |
+            Copy-Item -Destination "$pkg\dwcmshc" -Force
+          Get-ChildItem drivers\net\bcmwlsdio\ARM64\Release\wdi -Recurse -Include *.sys,*.inf |
+            Where-Object { $_.FullName -notmatch '\\obj\\' } |
+            Copy-Item -Destination "$pkg\bcmwlwdi" -Force
+
+          $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
+          $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
+          $pw = 'rk3576-test'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=woa-rk3576 test signing' `
+                    -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(5)
+          $pfx = 'C:\wifi10-test.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $pw -Force -AsPlainText) | Out-Null
+          Export-Certificate -Cert $cert -FilePath "$pkg\signer.cer" | Out-Null
+          $os = @{ 'dwcmshc' = '10_RS3_ARM64'; 'bcmwlwdi' = '10_VB_ARM64' }
+          foreach ($n in 'dwcmshc', 'bcmwlwdi') {
+            $d = "$pkg\$n"
+            & $i2c /driver:"$d" /os:$($os[$n]) /verbose
+            if ($LASTEXITCODE) { throw "inf2cat failed for ${n}: $LASTEXITCODE" }
+            $files = Get-ChildItem $d -Include *.cat,*.sys -Recurse | Select-Object -ExpandProperty FullName
+            & $st sign /fd sha256 /f $pfx /p $pw $files
+            if ($LASTEXITCODE) { throw "signtool failed for ${n}: $LASTEXITCODE" }
+            foreach ($sig in Get-AuthenticodeSignature $files) {
+              Write-Host ("   {0,-14} {1}" -f $sig.Status, (Split-Path $sig.Path -Leaf))
+              if ($sig.Status -eq 'NotSigned') { throw "$($sig.Path) came out unsigned" }
+            }
+            foreach ($f in "$n.inf", "$n.sys", "$n.cat") {
+              if (-not (Test-Path (Join-Path $d $f))) { throw "$n package: $f missing" }
+            }
+            Get-ChildItem $d -Filter *.inf | ForEach-Object {
+              Write-Host ("   {0}: {1}" -f $_.Name, ((Select-String -Path $_.FullName -Pattern '^DriverVer').Line))
+            }
+          }
+          # Windows 10 has no WiFiCx or NetAdapterCx to bind, and KMDF 1.31 at
+          # most: the image imports NDIS (import names are ASCII in the file)
+          # and names no Windows 11 class extension.
+          $img = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes("$pkg\bcmwlwdi\bcmwlwdi.sys"))
+          if ($img -notmatch '(?i)ndis\.sys') { throw 'bcmwlwdi.sys does not import ndis.sys' }
+          if ($img -match '(?i)wificx|netadaptercx') { throw 'bcmwlwdi.sys names a Windows 11 class extension' }
+          $inf = Get-Content "$pkg\bcmwlwdi\bcmwlwdi.inf" -Raw
+          if ($inf -notmatch 'KmdfLibraryVersion\s*=\s*1\.31') { throw 'bcmwlwdi.inf does not ask for KMDF 1.31' }
+          if ($inf -notmatch 'NTARM64\.10\.0\.\.\.19041' -or $inf -notmatch 'NTARM64\.10\.0\.\.\.22000\]') {
+            throw 'bcmwlwdi.inf: expected the 19041 models and the empty 22000 section'
+          }
+          Copy-Item drivers\net\bcmwlsdio\install-firmware.ps1, drivers\net\bcmwlsdio\README.md $pkg -Force
+          Copy-Item docs\dev\wifi-win10.md $pkg -Force
+          "woa-rk3576 $env:GITHUB_SHA, run ${{ github.run_number }}" | Set-Content "$pkg\VERSION.txt" -Encoding ascii
+          Get-ChildItem $pkg -Recurse -File | Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifi-win10-signed-arm64
+          path: C:\wifi10-pkg\
+          retention-days: 30
+          if-no-files-found: error
+
   build:
     name: WDK build (${{ matrix.name }})
     runs-on: windows-2022
@@ -1180,6 +1261,7 @@ jobs:
           - { name: eepromtool, proj: tools/eeprom/eeprom.vcxproj }
           - { name: wdthang, proj: tools/wdthang/wdthang.vcxproj }
           - { name: wifi, proj: drivers/net/bcmwlsdio/bcmwlsdio.vcxproj }
+          - { name: wifi-win10, proj: drivers/net/bcmwlsdio/bcmwlwdi.vcxproj }
           - { name: pageverify, proj: tools/pageverify/pageverify.vcxproj }
     steps:
       - uses: actions/checkout@v4
