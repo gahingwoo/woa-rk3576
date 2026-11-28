@@ -69,6 +69,11 @@ DeviceGetRxPool20(_In_ DeviceContext* context);
 
 PHYSICAL_ADDRESS
 DeviceGetMaxPhysicalAddress(_In_ DeviceContext* context);
+
+// Called by txqueue.cpp TxQueueCreate.
+struct TxBounce20;
+TxBounce20*
+DeviceGetTxBounce20(_In_ DeviceContext* context);
 #endif
 
 // Called by rxqueue.cpp RxQueueAdvance.

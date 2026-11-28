@@ -84,6 +84,7 @@ struct DeviceContext
     UINT32 packetFilter20;              // NET_PACKET_FILTER_FLAGS from NetAdapterCx 2.0.
     PHYSICAL_ADDRESS maxPhysicalAddress20;
     RxPool20 rxPool20;                  // Driver-managed receive buffers (rxqueue.cpp).
+    TxBounce20 txBounce20;              // Transmit copies (txqueue.cpp).
 #endif
 
     // Diagnostics/statistics.
@@ -112,6 +113,12 @@ PHYSICAL_ADDRESS
 DeviceGetMaxPhysicalAddress(_In_ DeviceContext* context)
 {
     return context->maxPhysicalAddress20;
+}
+
+TxBounce20*
+DeviceGetTxBounce20(_In_ DeviceContext* context)
+{
+    return &context->txBounce20;
 }
 #endif
 
@@ -1662,7 +1669,16 @@ DevicePrepareHardware(
         dmaCaps.MaximumPhysicalAddress = maxPhysicalAddress;
 
         NET_ADAPTER_TX_CAPABILITIES txCaps;
+#if DWC_EQOS_NETCX20
+        // Not DMA mapped: NetAdapterCx 2.0 maps transmit buffers through the
+        // HAL's scatter/gather path, and on Windows 10 that corrupted the
+        // pool under load (bugcheck 0x13A in PutScatterGatherList, called
+        // from TranslateMdlChainToDmaMappedFragmentRangeUseHal). The driver
+        // copies each frame into its own write-combined slot (txqueue.cpp).
+        NET_ADAPTER_TX_CAPABILITIES_INIT(&txCaps, QueuesSupported);
+#else
         NET_ADAPTER_TX_CAPABILITIES_INIT_FOR_DMA(&txCaps, &dmaCaps, QueuesSupported);
+#endif
         txCaps.MaximumNumberOfFragments = TxMaximumNumberOfFragments;
 
         // TODO: Driver-managed buffering + multi-descriptor receive would
@@ -1861,6 +1877,7 @@ DeviceReleaseHardware(
 
 #if DWC_EQOS_NETCX20
     RxPool20Free(&context->rxPool20);
+    TxBounce20Free(&context->txBounce20);
 #endif
 
     TraceEntryExit(DeviceReleaseHardware, LEVEL_INFO);

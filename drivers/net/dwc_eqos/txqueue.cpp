@@ -22,6 +22,10 @@ struct TxQueueContext
     NET_EXTENSION packetGso;
     NET_EXTENSION packetChecksum;
     NET_EXTENSION fragmentLogical;
+#if DWC_EQOS_NETCX20
+    NET_EXTENSION fragmentVirtual;
+    TxBounce20* bounce;
+#endif
     UINT32 descCount;   // A power of 2 between QueueDescriptorMinCount and QueueDescriptorMaxCount.
     UINT16 vlanId;
     UINT8 txPbl;
@@ -32,6 +36,48 @@ struct TxQueueContext
     UINT32 descEnd;     // End of the TRANSMIT region, start of the EMPTY region.
 };
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(TxQueueContext, TxQueueGetContext)
+
+#if DWC_EQOS_NETCX20
+
+_Use_decl_annotations_
+void
+TxBounce20Free(TxBounce20* bounce)
+{
+    if (bounce->memory)
+    {
+        MmFreeContiguousMemory(bounce->memory);
+    }
+
+    *bounce = {};
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+static NTSTATUS
+TxBounce20Ensure(_Inout_ TxBounce20* bounce, UINT32 count, UINT32 slotSize, PHYSICAL_ADDRESS maxPhysicalAddress)
+{
+    if (bounce->memory != nullptr && bounce->count >= count && bounce->slotSize >= slotSize)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    TxBounce20Free(bounce);
+
+    PHYSICAL_ADDRESS lowest = {}, boundary = {};
+    bounce->memory = static_cast<UINT8*>(MmAllocateContiguousNodeMemory(
+        static_cast<SIZE_T>(slotSize) * count, lowest, maxPhysicalAddress, boundary,
+        PAGE_READWRITE | PAGE_WRITECOMBINE, MM_ANY_NODE_OK));
+    if (bounce->memory == nullptr)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    bounce->physicalAddress = MmGetPhysicalAddress(bounce->memory).QuadPart;
+    bounce->slotSize = slotSize;
+    bounce->count = count;
+    return STATUS_SUCCESS;
+}
+
+#endif // DWC_EQOS_NETCX20
 
 #if DBG
 
@@ -372,7 +418,11 @@ TxQueueAdvance(_In_ NETPACKETQUEUE queue)
                     : TxChecksumInsertionDisabled;
 
                 // We might need a context descriptor.
+#if DWC_EQOS_NETCX20
+                if (1u + contextTagNeeded > EMPTY_DESC_REMAINING(descIndex))
+#else
                 if (fragmentCount + contextTagNeeded > EMPTY_DESC_REMAINING(descIndex))
+#endif
                 {
                     // Wait until more descriptors are free.
                     break;
@@ -405,6 +455,61 @@ TxQueueAdvance(_In_ NETPACKETQUEUE queue)
                     fragIndex2 = NetRingIncrementIndex(context->fragmentRing, fragIndex2);
                 }
 
+#if DWC_EQOS_NETCX20
+                // One slot per descriptor: the slot of the data descriptor is
+                // the frame's until the MAC hands the descriptor back.
+                {
+                    auto const bounce = context->bounce;
+                    auto const slot = bounce->memory + static_cast<SIZE_T>(bounce->slotSize) * descIndex;
+                    auto const slotPhysical = bounce->physicalAddress + static_cast<UINT64>(bounce->slotSize) * descIndex;
+                    UINT32 copied = 0;
+                    for (unsigned i = 0; i != fragmentCount; i += 1)
+                    {
+                        auto const frag = NetRingGetFragmentAtIndex(context->fragmentRing, fragIndex);
+                        auto const length = static_cast<UINT32>(frag->ValidLength);
+                        if (copied + length <= bounce->slotSize)
+                        {
+                            auto const va = static_cast<UINT8 const*>(
+                                NetExtensionGetFragmentVirtualAddress(&context->fragmentVirtual, fragIndex)->VirtualAddress) + frag->Offset;
+                            RtlCopyMemory(slot + copied, va, length);
+                        }
+                        copied += length;
+                        fragIndex = NetRingIncrementIndex(context->fragmentRing, fragIndex);
+                        queuedFrags += 1;
+                    }
+
+                    if (copied > bounce->slotSize)
+                    {
+                        // Cannot happen (frames are at most *JumboPacket): send nothing useful
+                        // rather than overrun the slot. The MAC pads a runt.
+                        TraceWrite("TxQueueAdvance-frame-too-big", LEVEL_ERROR,
+                            TraceLoggingUInt32(copied), TraceLoggingUInt32(bounce->slotSize));
+                        RtlZeroMemory(slot, 60);
+                        copied = 0;
+                    }
+
+                    TxDescriptorRead descRead = {};
+                    descRead.Buf1Ap = static_cast<UINT32>(slotPhysical);
+                    descRead.Buf2Ap = static_cast<UINT32>(slotPhysical >> 32);
+                    descRead.Buf1Length = copied != 0 ? copied : 60u;
+                    descRead.VlanTagControl = vlanTagControl;
+                    descRead.InterruptOnCompletion = true;
+                    descRead.FrameLength = static_cast<UINT16>(copied != 0 ? copied : 60u);
+                    descRead.ChecksumInsertion = checksumInsertion;
+                    descRead.LastDescriptor = true;
+                    descRead.FirstDescriptor = true;
+                    descRead.Own = true;
+#if DBG
+                    descRead.PacketIndex = pktIndex;
+                    descRead.FragmentIndex = pkt->FragmentIndex;
+#endif
+
+                    NT_ASSERT(EMPTY_DESC_REMAINING(descIndex) != 0);
+                    context->descVirtual[descIndex].Read = descRead;
+                    descIndex = (descIndex + 1) & descMask;
+                }
+                UNREFERENCED_PARAMETER(frameLength);
+#else
                 for (unsigned i = 0; i != fragmentCount; i += 1)
                 {
                     auto const frag = NetRingGetFragmentAtIndex(context->fragmentRing, fragIndex);
@@ -433,6 +538,7 @@ TxQueueAdvance(_In_ NETPACKETQUEUE queue)
                     fragIndex = NetRingIncrementIndex(context->fragmentRing, fragIndex);
                     queuedFrags += 1;
                 }
+#endif
             } // segmentation offload enabled/disabled
         }
 
@@ -441,6 +547,9 @@ TxQueueAdvance(_In_ NETPACKETQUEUE queue)
 
     if (descIndex != descEnd)
     {
+#if DWC_EQOS_NETCX20
+        __dsb(_ARM64_BARRIER_SY); // Write-combined frame copies visible before the MAC reads them.
+#endif
         SetDescEnd(context, descIndex);
         context->packetRing->NextIndex = pktIndex;
     }
@@ -684,11 +793,49 @@ TxQueueCreate(
             NetExtensionTypePacket);
         NetTxQueueGetExtension(queue, &query, &context->packetChecksum);
 
+#if DWC_EQOS_NETCX20
+        NET_EXTENSION_QUERY_INIT(&query,
+            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
+            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
+            NetExtensionTypeFragment);
+        NetTxQueueGetExtension(queue, &query, &context->fragmentVirtual);
+        if (!context->fragmentVirtual.Enabled)
+        {
+            TraceWrite("TxQueueCreate-no-virtual-address", LEVEL_ERROR);
+            status = STATUS_NOT_SUPPORTED;
+            goto Done;
+        }
+
+        // The MAC reads the slots by physical address: the descriptor ring
+        // shows whether DMA logical addresses are physical.
+        if (MmGetPhysicalAddress(context->descVirtual).QuadPart != context->descPhysical.QuadPart)
+        {
+            TraceWrite("TxQueueCreate-logical-not-physical", LEVEL_ERROR);
+            status = STATUS_NOT_SUPPORTED;
+            goto Done;
+        }
+
+        context->bounce = DeviceGetTxBounce20(deviceContext);
+        status = TxBounce20Ensure(context->bounce, context->descCount,
+            (deviceConfig.jumboFrame + 8u + 63u) & ~63u,
+            DeviceGetMaxPhysicalAddress(deviceContext));
+        if (!NT_SUCCESS(status))
+        {
+            TraceWrite("TxQueueCreate-bounce-failed", LEVEL_ERROR,
+                TraceLoggingNTStatus(status));
+            goto Done;
+        }
+
+        DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+            "dwc_eqos: %u transmit slots of %u bytes at %p\n",
+            context->bounce->count, context->bounce->slotSize, context->bounce->memory);
+#else
         NET_EXTENSION_QUERY_INIT(&query,
             NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_NAME,
             NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1,
             NetExtensionTypeFragment);
         NetTxQueueGetExtension(queue, &query, &context->fragmentLogical);
+#endif
     }
 
     status = STATUS_SUCCESS;
