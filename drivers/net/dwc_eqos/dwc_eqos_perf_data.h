@@ -6,7 +6,10 @@ Needs to be kept in sync with dwc_eqos_perf.man.
 
 Performance counters are not installed by default.
 
-Install:    lodctr /m:dwc_eqos_perf.man
+Install:    lodctr /m:dwc_eqos_perf.man <folder of the running dwc_eqos.sys>
+            (the INF copies it to the driver store, DIRID 13, so pass that
+            folder: the manifest's applicationIdentity default of
+            System32\drivers is not where the binary is)
 Uninstall:  unlodctr /p:dwc_eqos
 
 Counter data can be collected using tools like perfmon or typeperf.
