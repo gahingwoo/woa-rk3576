@@ -8,7 +8,9 @@
 # DIR\woa-drivers\signer.cer, the layout assemble.py --woa reads. A <dir> is
 # found, in this order:
 #   - in build\RockchipDrivers.sln's output (build\ARM64\Release\Output\<dir>)
-#   - as drivers\**\<dir>.vcxproj, built on its own
+#   - as drivers\**\<dir>.vcxproj, built on its own; a project whose
+#     comment says "driver-package: infs a.inf b.inf" ships only those INFs
+#     (aic8800usb: its Ethernet-style bring-up INF stays out)
 #   - as drivers\**\<dir>.inf with no project: an INF-only (null driver)
 #     package, whose DriverVer is stamped here
 # N goes into DriverVer, so a package outranks the one installed before it.
@@ -96,6 +98,14 @@ foreach ($d in $dirs) {
                 /p:WindowsTargetPlatformVersion=$Wdk /p:SignMode=Off /m /nologo /v:minimal
         if ($LASTEXITCODE -ne 0) { throw "msbuild failed for $d" }
         Copy-Package (Join-Path $proj[0].DirectoryName 'ARM64\Release') $dst
+        $keep = Select-String -LiteralPath $proj[0].FullName -Pattern 'driver-package: infs (.+)$' | Select-Object -First 1
+        if ($keep) {
+            $names = @($keep.Matches[0].Groups[1].Value.Trim() -split '\s+')
+            foreach ($f in Get-ChildItem $dst -Filter *.inf) {
+                if ($names -notcontains $f.Name) { Write-Host "   leaving out $($f.Name)"; Remove-Item -LiteralPath $f.FullName -Force }
+            }
+            foreach ($n in $names) { if (-not (Test-Path (Join-Path $dst $n))) { throw "${d}: $n not built" } }
+        }
         Copy-Pdb $d @($proj[0].DirectoryName)
         continue
     }

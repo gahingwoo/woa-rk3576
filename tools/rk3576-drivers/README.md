@@ -25,7 +25,11 @@ has the untested build of `main`).
   offline, the SYSTEM task online), see
   [its README](../../drivers/storage/rk3xnvme/README.md). A tool that runs
   DISM itself instead of `install.cmd` runs `win10-nvme.cmd W:\` after it.
-- Optional (`/optional`): Bluetooth on the CM5-IO (untested).
+- Optional (`/optional`): Bluetooth on the CM5-IO (untested); Wi-Fi on the
+  ROCK 4D (AIC8800D80, untested): `aic8800usb` (WiFiCx) on Windows 11,
+  `aic8800wdi` (WDI) on Windows 10. It needs the firmware
+  (`install-firmware.ps1`) and Stage 2
+  ([docs/dev/aic8800.md](../../docs/dev/aic8800.md)).
 
 Windows 10 (19041 to 19045) and Windows 11 get the drivers for their
 build: on Windows 10, Ethernet is `dwc_eqos10` (NetAdapterCx 2.0) instead of

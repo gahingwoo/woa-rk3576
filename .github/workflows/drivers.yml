@@ -261,6 +261,17 @@ jobs:
             $unmap = [bool]($o | Where-Object { $_ -like 'Would remove stornvme.inf from the DriverDatabase entry for PCI\CC_010802*' })
             if ($stage -ne $case[1] -or $unmap -ne $case[1]) { $o | Out-Host; throw "build $($case[0]): rk3xnvme staged $stage, stornvme.inf removal $unmap, want $($case[1])" }
           }
+          # Wi-Fi (ROCK 4D, /optional): the WDI build (aic8800wdi) on Windows
+          # 10, the WiFiCx one (aic8800usb, loader and WiFiCx INFs only) on 11.
+          foreach ($case in @(@(19045, 'aic8800wdi', 'aic8800usb'), @(22631, 'aic8800usb', 'aic8800wdi'))) {
+            $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board rock4d -Optional -Plan -Build $case[0]
+            if ($LASTEXITCODE -ne 0) { $o | Out-Host; throw "rock4d /optional plan for $($case[0]): exit $LASTEXITCODE" }
+            $mine = @($o | Where-Object { $_ -like "$($case[1]): would stage *" })
+            if (-not ($mine | Where-Object { $_ -like '*USB\VID_A69C&PID_8D81&MI_02*' }) -or
+                -not ($mine | Where-Object { $_ -like '*USB\VID_A69C&PID_8D80*' })) { $o | Out-Host; throw "build $($case[0]): $($case[1]) does not stage both AIC8800 faces" }
+            if ($mine.Count -ne 2) { $o | Out-Host; throw "build $($case[0]): $($case[1]) stages $($mine.Count) INFs, want 2" }
+            if ($o | Where-Object { $_ -like "$($case[2]): would stage *" }) { throw "build $($case[0]): $($case[2]) planned too" }
+          }
           $o = & powershell -NoProfile -ExecutionPolicy Bypass -File pkg\rk3576-drivers\install-online.ps1 -Board nosuch -Plan
           if ($LASTEXITCODE -ne 2) { throw "an unknown board should exit 2, got $LASTEXITCODE" }
           $global:LASTEXITCODE = 0

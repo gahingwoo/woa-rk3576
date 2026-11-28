@@ -112,8 +112,9 @@ class Assemble(unittest.TestCase):
 
     def test_win10_lists(self):
         # The real table: Windows 10 takes dwc_eqos10 for dwc_eqos and adds
-        # rk3xnvme (CM5-IO, ROCK 4D); nothing else differs and nothing is
-        # skipped on either.
+        # rk3xnvme (CM5-IO, ROCK 4D); on the ROCK 4D's optional list it
+        # takes aic8800wdi for aic8800usb (Wi-Fi); nothing else differs and
+        # nothing is skipped on either.
         with tempfile.TemporaryDirectory() as top:
             r, out = run(top, *make_inputs(top))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -125,8 +126,13 @@ class Assemble(unittest.TestCase):
                     self.assertNotIn('rk3xnvme', w11, b + kind)
                     nvme = kind == '' and b in ('cm5io', 'rock4d')
                     self.assertEqual('rk3xnvme' in w10, nvme, b + kind)
-                    self.assertEqual([d for d in w11 if d != 'dwc_eqos'],
-                                     [d for d in w10 if d not in ('dwc_eqos10', 'rk3xnvme')], b + kind)
+                    self.assertEqual([d for d in w11 if d not in ('dwc_eqos', 'aic8800usb')],
+                                     [d for d in w10 if d not in ('dwc_eqos10', 'rk3xnvme', 'aic8800wdi')], b + kind)
+                    wifi = kind == '-optional' and b == 'rock4d'
+                    self.assertEqual('aic8800usb' in w11, wifi, b + kind)
+                    self.assertEqual('aic8800wdi' in w10, wifi, b + kind)
+                    self.assertNotIn('aic8800wdi', w11, b + kind)
+                    self.assertNotIn('aic8800usb', w10, b + kind)
                     if not kind:
                         self.assertIn('dwc_eqos', w11)
                         self.assertNotIn('dwc_eqos10', w11)

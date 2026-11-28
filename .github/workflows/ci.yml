@@ -145,14 +145,15 @@ jobs:
           ./layoutcheck
 
   aic8800-package:
-    name: AIC8800D80 Wi-Fi bring-up package, test-signed (aic8800usb)
+    name: AIC8800D80 Wi-Fi bring-up package, test-signed (aic8800usb, aic8800wdi)
     # For a ROCK 4D board session: aic8800usb.sys with its three INFs (the
     # loader, Class System; the network adapter, Class Net, as an
-    # Ethernet-style adapter or as a WiFiCx 1.0 Wi-Fi adapter), test-signed
-    # with a certificate made for this run, with signer.cer,
-    # install-firmware.ps1, the bring-up helper and the README, for pnputil
-    # on an installed Windows (docs/dev/aic8800.md). Not put on the WinPE
-    # media.
+    # Ethernet-style adapter or as a WiFiCx 1.0 Wi-Fi adapter) for Windows
+    # 11, and aic8800wdi.sys with its two (the loader and the WDI Wi-Fi
+    # adapter) for Windows 10, test-signed with a certificate made for this
+    # run, with signer.cer, install-firmware.ps1, the bring-up helper and
+    # the README, for pnputil on an installed Windows (docs/dev/aic8800.md
+    # and its Windows 10 section). Not put on the WinPE media.
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -166,11 +167,17 @@ jobs:
           msbuild drivers\net\aic8800usb\aic8800usb.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
                   /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /p:SignMode=Off /m /nologo /v:minimal
           if ($LASTEXITCODE -ne 0) { throw 'msbuild failed for aic8800usb' }
+          msbuild drivers\net\aic8800wdi\aic8800wdi.vcxproj /p:Configuration=Release /p:Platform=ARM64 `
+                  /p:WindowsTargetPlatformVersion=$env:WDK_VERSION /p:SignMode=Off /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'msbuild failed for aic8800wdi' }
           $pkg = 'C:\aic-pkg'
           $d = "$pkg\aic8800usb"
-          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          $w = "$pkg\aic8800wdi"
+          New-Item -ItemType Directory -Force -Path $d, $w | Out-Null
           Get-ChildItem drivers\net\aic8800usb\ARM64\Release -Recurse -Include *.sys,*.inf |
             Copy-Item -Destination $d -Force
+          Get-ChildItem drivers\net\aic8800wdi\ARM64\Release -Recurse -Include *.sys,*.inf |
+            Copy-Item -Destination $w -Force
           $kits = 'C:\Program Files (x86)\Windows Kits\10'
           $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
           $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
@@ -182,7 +189,10 @@ jobs:
           Export-Certificate -Cert $cert -FilePath "$pkg\signer.cer" | Out-Null
           & $i2c /driver:"$d" /os:10_RS3_ARM64 /verbose
           if ($LASTEXITCODE) { throw "inf2cat failed: $LASTEXITCODE" }
-          $files = Get-ChildItem $d -Include *.cat,*.sys -Recurse | Select-Object -ExpandProperty FullName
+          # Windows 10 2004 and later only (the INFs' floor is 19041)
+          & $i2c /driver:"$w" /os:10_VB_ARM64 /verbose
+          if ($LASTEXITCODE) { throw "inf2cat failed for aic8800wdi: $LASTEXITCODE" }
+          $files = Get-ChildItem $d, $w -Include *.cat,*.sys -Recurse | Select-Object -ExpandProperty FullName
           & $st sign /fd sha256 /f $pfx /p $pw $files
           if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
           foreach ($sig in Get-AuthenticodeSignature $files) {
@@ -192,6 +202,9 @@ jobs:
           foreach ($f in 'aic8800usb.inf', 'aic8800usb.sys', 'aic8800usb.cat', 'aic8800ldr.inf', 'aic8800ldr.cat',
                          'aic8800wifi.inf', 'aic8800wifi.cat') {
             if (-not (Test-Path (Join-Path $d $f))) { throw "package: $f missing" }
+          }
+          foreach ($f in 'aic8800wdi.inf', 'aic8800wdi.sys', 'aic8800wdi.cat', 'aic8800wdildr.inf', 'aic8800wdildr.cat') {
+            if (-not (Test-Path (Join-Path $w $f))) { throw "package: aic8800wdi\$f missing" }
           }
           Copy-Item drivers\net\aic8800usb\install-firmware.ps1, drivers\net\aic8800usb\aic-bringup.ps1, `
                     drivers\net\aic8800usb\README.md $pkg -Force
@@ -1293,6 +1306,7 @@ jobs:
           - { name: wdthang, proj: tools/wdthang/wdthang.vcxproj }
           - { name: wifi, proj: drivers/net/bcmwlsdio/bcmwlsdio.vcxproj }
           - { name: wifi-aic8800, proj: drivers/net/aic8800usb/aic8800usb.vcxproj }
+          - { name: wifi-aic8800-wdi, proj: drivers/net/aic8800wdi/aic8800wdi.vcxproj }
           - { name: pageverify, proj: tools/pageverify/pageverify.vcxproj }
           - { name: nvme, proj: drivers/storage/rk3xnvme/rk3xnvme.vcxproj }
     steps:

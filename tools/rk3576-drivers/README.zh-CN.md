@@ -19,7 +19,9 @@ Maskrom Studio 按所选的板子安装它。从 [0.5.0 正式版](https://githu
   装到 Windows 10 时还会从 `PCI\CC_010802` 的 DriverDatabase 条目中删去 `stornvme.inf`
   （离线用 `win10-nvme.cmd W:\`，在线由 SYSTEM 任务完成），见[它的 README](../../drivers/storage/rk3xnvme/README.md)。
   自己调用 DISM 而不用 `install.cmd` 的工具，要在 DISM 之后运行 `win10-nvme.cmd W:\`。
-- 可选（`/optional`）：CM5-IO 的蓝牙（未测试）。
+- 可选（`/optional`）：CM5-IO 的蓝牙（未测试）；ROCK 4D 的 Wi-Fi（AIC8800D80，未测试）：Windows 11 用
+  `aic8800usb`（WiFiCx），Windows 10 用 `aic8800wdi`（WDI）。需要固件（`install-firmware.ps1`）和 Stage 2
+  （[docs/dev/aic8800.zh-CN.md](../../docs/dev/aic8800.zh-CN.md)）。
 
 Windows 10（19041 到 19045）和 Windows 11 各装适合自己版本号的驱动：Windows 10 上以太网用
 `dwc_eqos10`（NetAdapterCx 2.0），不用 `dwc_eqos`。目标 Windows 版本还没有构建的驱动，`install.cmd` 会逐个说明。

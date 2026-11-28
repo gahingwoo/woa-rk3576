@@ -15,7 +15,8 @@
 #             later), "N-" (build N and later, e.g. 26100- for a driver that
 #             needs 24H2) or "N-M". ":<dir>" after it says the row is the
 #             build of <dir> for those builds (dwc_eqos10 is dwc_eqos for
-#             Windows 10). Left out, every Windows. install.cmd and
+#             Windows 10; aic8800wdi is aic8800usb's WDI build).
+#             Left out, every Windows. install.cmd and
 #             install-online.ps1 install the rows that cover the target's
 #             build and name each driver that has no build for it.
 #   what      what it is, for the manifest and the lists
@@ -43,6 +44,8 @@ rkled        all            -         woa    Board LEDs
 rkeeprom     rock4d         -         woa    HAT EEPROM (ROCK 4D)
 gt9271       tspi3m         -         woa    Touch screen (GT9271)
 bcm4345bt    tspi3m         cm5io     woa    Bluetooth (BCM4345C5; CM5-IO BCM4362A2 untested)
+aic8800usb   -              rock4d    woa    win11  Wi-Fi (AIC8800D80 USB, WiFiCx; untested, needs install-firmware.ps1 and Stage 2)
+aic8800wdi   -              rock4d    woa    win10:aic8800usb  Wi-Fi (AIC8800D80 USB), WDI build for Windows 10 (untested, needs install-firmware.ps1 and Stage 2)
 rk3xi2sbus   all            -         woa    Audio: SAI bus
 csaudiork3x  all            -         woa    Audio: HDMI and codec endpoints
 es8323       all            -         woa    Audio: ES8388 codec
