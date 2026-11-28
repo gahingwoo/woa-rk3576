@@ -35,14 +35,14 @@
 /* MaxCommandSize in the capabilities: a TASK_CONNECT carries whole beacons */
 #define BWL_WDI_MAX_COMMAND 0x10000
 
-typedef struct _BWL_WDI {
+typedef struct _BWL_FE {
     NDIS_HANDLE Adapter;                        /* MiniportAdapterHandle */
     NDIS_WDI_OPEN_ADAPTER_COMPLETE_HANDLER OpenComplete;
     NDIS_WDI_CLOSE_ADAPTER_COMPLETE_HANDLER CloseComplete;
     volatile LONG OpenPending;                  /* the worker owes the open's completion */
     NDIS_STATUS OpenStatus;
     BOOLEAN PortCreated;
-} BWL_WDI, *PBWL_WDI;
+} BWL_FE, *PBWL_FE;
 
 static NDIS_HANDLE g_Driver;
 static WCHAR g_Params[256];                     /* Services\bcmwlwdi\Parameters */
@@ -206,7 +206,7 @@ BwlFeReqId(_In_ BWL_REQ Request)
 VOID
 BwlFeReqComplete(_In_ PBWL_WIFI W, _In_ BWL_REQ Request, _In_ NTSTATUS Status, _In_ ULONG Bytes)
 {
-    PBWL_WDI fe = (PBWL_WDI)W->Fe;
+    PBWL_FE fe = (PBWL_FE)W->Fe;
     PNDIS_OID_REQUEST r = (PNDIS_OID_REQUEST)Request;
     NDIS_STATUS ns = NtToNdis(Status);
     PWDI_MESSAGE_HEADER h = (PWDI_MESSAGE_HEADER)r->DATA.METHOD_INFORMATION.InformationBuffer;
@@ -231,7 +231,7 @@ BOOLEAN
 BwlFeIndicate(_In_ PBWL_WIFI W, _In_ UINT16 MessageId, _In_ const WDI_MESSAGE_HEADER *Header,
               _In_reads_bytes_opt_(TlvLen) const UINT8 *Tlv, _In_ ULONG TlvLen)
 {
-    PBWL_WDI fe = (PBWL_WDI)W->Fe;
+    PBWL_FE fe = (PBWL_FE)W->Fe;
     PNDIS_STATUS_INDICATION ind;
     PWDI_MESSAGE_HEADER h;
     SIZE_T size = sizeof(*ind) + sizeof(*h) + TlvLen;
@@ -268,6 +268,17 @@ TaskReply(_In_ PBWL_WIFI W, _In_ UINT16 MessageId, _In_ const WDI_MESSAGE_HEADER
 
 /* ------------------------------------------------------ capabilities */
 
+static VOID
+FillRates(_Out_writes_(Count) WDI_DATA_RATE_LIST *List, _In_reads_(Count) const UINT16 *Rates, _In_ ULONG Count)
+{
+    ULONG i;
+
+    for (i = 0; i < Count; i++) {
+        List[i].DataRateFlag = (UINT8)(WDI_DATA_RATE_RX_RATE | WDI_DATA_RATE_TX_RATE);
+        List[i].DataRateValue = Rates[i];
+    }
+}
+
 /* What the station can do, as bcmwlsdio's WiFiCx front end reports it
  * (wificx.cpp BwlWifiReportCapabilities), in WDI's one TLV reply. */
 static VOID
@@ -275,23 +286,19 @@ GetCapabilities(_In_ PBWL_WIFI W, _In_ BWL_REQ Request, _In_ PWDI_MESSAGE_HEADER
 {
     static const UCHAR ch5[] = { 36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128,
                                  132, 136, 140, 144, 149, 153, 157, 161, 165 };
-    static WDI_ALGO_PAIRS unicast[] = {
-        { WDI_AUTH_ALGO_80211_OPEN, WDI_CIPHER_ALGO_NONE },
-        { WDI_AUTH_ALGO_RSNA_PSK, WDI_CIPHER_ALGO_CCMP },
-    };
-    static WDI_ALGO_PAIRS mgmt[] = { { WDI_AUTH_ALGO_80211_OPEN, WDI_CIPHER_ALGO_NONE } };
+    /* the TLV structures have constructors: no aggregate initializers */
+    static const UINT16 cckRates[] = { 2, 4, 11, 22 };
+    static const UINT16 erpRates[] = { 2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108 };
+    static const UINT16 ofdmRates[] = { 12, 18, 24, 36, 48, 72, 96, 108 };
+    /* HT20 1x1 MCS 0-7, 800 ns GI, in 500 kbit/s */
+    static const UINT16 htRates[] = { 13, 26, 39, 52, 78, 104, 117, 130 };
+    static WDI_ALGO_PAIRS unicast[2], mgmt[1];
     static WDI_PHY_TYPE phys24[] = { WDI_PHY_TYPE_HRDSSS, WDI_PHY_TYPE_ERP, WDI_PHY_TYPE_HT };
     static WDI_PHY_TYPE phys5[] = { WDI_PHY_TYPE_OFDM, WDI_PHY_TYPE_HT };
     static UINT32 width20 = 20;
     static UINT32 power[] = { 100 };
-#define R(x) { WDI_DATA_RATE_RX_RATE | WDI_DATA_RATE_TX_RATE, x }
-    static WDI_DATA_RATE_LIST cck[] = { R(2), R(4), R(11), R(22) };
-    static WDI_DATA_RATE_LIST erp[] = { R(2), R(4), R(11), R(22), R(12), R(18), R(24), R(36), R(48), R(72),
-                                        R(96), R(108) };
-    static WDI_DATA_RATE_LIST ofdm[] = { R(12), R(18), R(24), R(36), R(48), R(72), R(96), R(108) };
-    /* HT20 1x1 MCS 0-7, 800 ns GI, in 500 kbit/s */
-    static WDI_DATA_RATE_LIST ht[] = { R(13), R(26), R(39), R(52), R(78), R(104), R(117), R(130) };
-#undef R
+    static WDI_DATA_RATE_LIST cck[ARRAYSIZE(cckRates)], erp[ARRAYSIZE(erpRates)], ofdm[ARRAYSIZE(ofdmRates)],
+                              ht[ARRAYSIZE(htRates)];
     PBWL_DEVICE_CONTEXT ctx = W->Ctx;
     const bwl_wlan *w = &ctx->Bwl.Wlan;
     WDI_GET_ADAPTER_CAPABILITIES_PARAMETERS *P;
@@ -482,7 +489,7 @@ out:
 static VOID
 CreatePort(_In_ PBWL_WIFI W, _In_ BWL_REQ Request, _In_ PWDI_MESSAGE_HEADER H, _In_ UINT InLen)
 {
-    PBWL_WDI fe = (PBWL_WDI)W->Fe;
+    PBWL_FE fe = (PBWL_FE)W->Fe;
     WDI_TASK_CREATE_PORT_PARAMETERS P;
     WDI_INDICATION_CREATE_PORT_COMPLETE_PARAMETERS C;
     WDI_MESSAGE_HEADER h = *H;
@@ -528,7 +535,7 @@ CreatePort(_In_ PBWL_WIFI W, _In_ BWL_REQ Request, _In_ PWDI_MESSAGE_HEADER H, _
 static VOID
 DeletePort(_In_ PBWL_WIFI W, _In_ BWL_REQ Request, _In_ PWDI_MESSAGE_HEADER H)
 {
-    PBWL_WDI fe = (PBWL_WDI)W->Fe;
+    PBWL_FE fe = (PBWL_FE)W->Fe;
     WDI_MESSAGE_HEADER h = *H;
 
     BwlFeReqComplete(W, Request, STATUS_SUCCESS, sizeof(*H));          /* M3 */
@@ -584,7 +591,7 @@ BwlFeDispatch(_In_ PBWL_WIFI W, _In_ BWL_REQ Request, _In_ UINT16 Id, _In_ PWDI_
 VOID
 BwlFeWorkerStart(_In_ PBWL_WIFI W)
 {
-    PBWL_WDI fe = (PBWL_WDI)W->Fe;
+    PBWL_FE fe = (PBWL_FE)W->Fe;
     PBWL_DEVICE_CONTEXT ctx = W->Ctx;
     NDIS_STATUS ns = NDIS_STATUS_ADAPTER_NOT_READY;
     NTSTATUS status;
@@ -630,7 +637,7 @@ BwlWdiAllocateAdapter(_In_ NDIS_HANDLE NdisMiniportHandle, _In_ NDIS_HANDLE Mini
     PBWL_DEVICE_CONTEXT ctx;
     WDFDEVICE device;
     PBWL_WIFI W;
-    PBWL_WDI fe;
+    PBWL_FE fe;
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(MiniportDriverContext);
@@ -668,7 +675,7 @@ BwlWdiAllocateAdapter(_In_ NDIS_HANDLE NdisMiniportHandle, _In_ NDIS_HANDLE Mini
     /* Every CMD53 goes through this buffer: non-paged, for the MDLs */
     ctx->Bounce = (PUCHAR)BwlBufAlloc(POOL_FLAG_NON_PAGED, BWL_BOUNCE_MIN, "bounce");
     W = BwlWifiAlloc(ctx);
-    fe = (PBWL_WDI)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(BWL_WDI), BWL_WDI_TAG);
+    fe = (PBWL_FE)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(BWL_FE), BWL_WDI_TAG);
     status = BwlTalAlloc(ctx, NdisMiniportHandle);
     if (ctx->Bounce == NULL || W == NULL || fe == NULL || !NT_SUCCESS(status)) {
         if (fe != NULL) {
@@ -705,7 +712,7 @@ static NDIS_STATUS
 BwlWdiOpenAdapter(_In_ NDIS_HANDLE MiniportAdapterContext, _In_ PNDIS_MINIPORT_INIT_PARAMETERS MiniportInitParameters)
 {
     PBWL_DEVICE_CONTEXT ctx = (PBWL_DEVICE_CONTEXT)MiniportAdapterContext;
-    PBWL_WDI fe = (PBWL_WDI)ctx->Wifi->Fe;
+    PBWL_FE fe = (PBWL_FE)ctx->Wifi->Fe;
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(MiniportInitParameters);
@@ -734,7 +741,7 @@ static NDIS_STATUS
 BwlWdiCloseAdapter(_In_ NDIS_HANDLE MiniportAdapterContext)
 {
     PBWL_DEVICE_CONTEXT ctx = (PBWL_DEVICE_CONTEXT)MiniportAdapterContext;
-    PBWL_WDI fe = (PBWL_WDI)ctx->Wifi->Fe;
+    PBWL_FE fe = (PBWL_FE)ctx->Wifi->Fe;
 
     BwlCrumb(ctx, "wdi: close adapter");
     BwlStopWorker(ctx);
