@@ -109,7 +109,7 @@
       <FileDigestAlgorithm>sha256</FileDigestAlgorithm>
     </DriverSign>
     <Link>
-      <AdditionalDependencies>$(DDK_LIB_PATH)Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(DDK_LIB_PATH)Ksecdd.lib;$(DDK_LIB_PATH)aux_klib.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Ctrpp>
       <GenerateHeaderFileForCounter>false</GenerateHeaderFileForCounter>
@@ -135,7 +135,7 @@
       <FileDigestAlgorithm>sha256</FileDigestAlgorithm>
     </DriverSign>
     <Link>
-      <AdditionalDependencies>$(DDK_LIB_PATH)Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(DDK_LIB_PATH)Ksecdd.lib;$(DDK_LIB_PATH)aux_klib.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Ctrpp>
       <GenerateHeaderFileForCounter>false</GenerateHeaderFileForCounter>

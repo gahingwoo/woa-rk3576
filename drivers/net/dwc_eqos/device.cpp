@@ -80,6 +80,9 @@ struct DeviceContext
     InterruptsWanted interruptsWanted;  // Guarded by interrupt lock.
     NETPACKETQUEUE rxQueue;             // Guarded by queueLock.
     NETPACKETQUEUE txQueue;             // Guarded by queueLock.
+#if DWC_EQOS_NETCX20
+    UINT32 packetFilter20;              // NET_PACKET_FILTER_FLAGS from NetAdapterCx 2.0.
+#endif
 
     // Diagnostics/statistics.
 
@@ -494,15 +497,297 @@ AdapterCreateRxQueue(
 
 #if DWC_EQOS_NETCX20
 
-// NetAdapterCx 2.0 has no receive filter control: the MAC passes its own
-// address, broadcast and every multicast (IPv6 neighbour discovery, mDNS),
-// set at every D0Entry.
-static void
-DeviceSetDefaultReceiveFilter(_Inout_ DeviceContext* context)
+// NetAdapterCx 2.0 (Windows 10 19041 to 19045) answers
+// OID_GEN_CURRENT_PACKET_FILTER with STATUS_NOT_SUPPORTED unless the driver
+// declared packet filter capabilities, and tcpip then fails to bind
+// (Tcpip event 4207). Its translator handles that OID itself, so no driver
+// hook sees it. The declarations exist, NetAdapterSetPacketFilterCapabilities
+// and NetAdapterSetMulticastCapabilities, but only in the preview part of
+// the 2.0 function table that the public headers and stub library leave
+// out (index 82 and 83 of the 100 entries in NetAdapterCx 10.0.19041.x,
+// from its public symbols). Find that table in NetAdapterCx.sys by the 75
+// public entries the stub was given, check its header, and take the two
+// from it. If anything does not match, nothing is called and the adapter
+// works as before, without a packet filter.
+
+typedef UINT32 NET20_PACKET_FILTER_FLAGS;
+enum : UINT32
 {
+    Net20PacketFilterFlagDirected = 0x00000001,
+    Net20PacketFilterFlagMulticast = 0x00000002,
+    Net20PacketFilterFlagAllMulticast = 0x00000004,
+    Net20PacketFilterFlagBroadcast = 0x00000008,
+    Net20PacketFilterFlagPromiscuous = 0x00000020,
+};
+
+typedef void NET20_SET_PACKET_FILTER(
+    _In_ NETADAPTER adapter,
+    _In_ NET20_PACKET_FILTER_FLAGS packetFilter);
+
+typedef void NET20_SET_MULTICAST_LIST(
+    _In_ NETADAPTER adapter,
+    _In_ ULONG multicastAddressCount,
+    _In_reads_opt_(multicastAddressCount) NET_ADAPTER_LINK_LAYER_ADDRESS* multicastAddressList);
+
+// Layout checked against imp_NetAdapterSetPacketFilterCapabilities and
+// imp_NetAdapterSetMulticastCapabilities: Size must be 16.
+struct NET20_PACKET_FILTER_CAPABILITIES
+{
+    ULONG Size;
+    NET20_PACKET_FILTER_FLAGS SupportedPacketFilters;
+    NET20_SET_PACKET_FILTER* EvtSetPacketFilter;
+};
+static_assert(sizeof(NET20_PACKET_FILTER_CAPABILITIES) == 16, "2.0 ABI");
+
+struct NET20_MULTICAST_CAPABILITIES
+{
+    ULONG Size;
+    ULONG MaximumMulticastAddresses;
+    NET20_SET_MULTICAST_LIST* EvtSetMulticastList;
+};
+static_assert(sizeof(NET20_MULTICAST_CAPABILITIES) == 16, "2.0 ABI");
+
+typedef void NET20_ADAPTER_SET_PACKET_FILTER_CAPABILITIES(
+    _In_ PNET_DRIVER_GLOBALS globals,
+    _In_ NETADAPTER adapter,
+    _In_ NET20_PACKET_FILTER_CAPABILITIES const* capabilities);
+
+typedef void NET20_ADAPTER_SET_MULTICAST_CAPABILITIES(
+    _In_ PNET_DRIVER_GLOBALS globals,
+    _In_ NETADAPTER adapter,
+    _In_ NET20_MULTICAST_CAPABILITIES const* capabilities);
+
+static constexpr unsigned Net20PublicFunctionCount = NetFunctionTableNumEntries; // 75
+static constexpr unsigned Net20FullFunctionCount = 100;
+static constexpr unsigned Net20SetPacketFilterCapabilitiesIndex = 82;
+static constexpr unsigned Net20SetMulticastCapabilitiesIndex = 83;
+static constexpr ULONG Net20MaxMulticastAddresses = 32; // All multicast passes anyway.
+static_assert(Net20PublicFunctionCount == 75, "NetAdapterCx 2.0 headers expected");
+
+struct Net20PreviewFunctions
+{
+    NET20_ADAPTER_SET_PACKET_FILTER_CAPABILITIES* setPacketFilterCapabilities;
+    NET20_ADAPTER_SET_MULTICAST_CAPABILITIES* setMulticastCapabilities;
+};
+
+// Returns true and fills 'functions' only when every check passes.
+_IRQL_requires_(PASSIVE_LEVEL)
+__declspec(code_seg("PAGE"))
+static bool
+Net20FindPreviewFunctions(_Out_ Net20PreviewFunctions* functions)
+{
+    PAGED_CODE();
+    *functions = {};
+
+    auto const firstPublic = reinterpret_cast<UINT_PTR>(NetFunctions[0]);
+    char const* failure = nullptr;
+    UINT_PTR imageBase = 0;
+    ULONG imageSize = 0;
+    UINT_PTR tableAddress = 0;
+    ULONG tableHeader[2] = {};
+    AUX_MODULE_EXTENDED_INFO* modules = nullptr;
+
+    NTSTATUS status = AuxKlibInitialize();
+    ULONG modulesSize = 0;
+    if (NT_SUCCESS(status))
+    {
+        status = AuxKlibQueryModuleInformation(&modulesSize, sizeof(AUX_MODULE_EXTENDED_INFO), nullptr);
+    }
+    if (!NT_SUCCESS(status) || modulesSize == 0)
+    {
+        failure = "module-list";
+        goto Done;
+    }
+
+    modules = static_cast<AUX_MODULE_EXTENDED_INFO*>(ExAllocatePool2(POOL_FLAG_PAGED, modulesSize, 'qEwD'));
+    if (modules == nullptr)
+    {
+        failure = "module-alloc";
+        goto Done;
+    }
+
+    status = AuxKlibQueryModuleInformation(&modulesSize, sizeof(AUX_MODULE_EXTENDED_INFO), modules);
+    if (!NT_SUCCESS(status))
+    {
+        failure = "module-query";
+        goto Done;
+    }
+
+    for (ULONG i = 0; i != modulesSize / sizeof(AUX_MODULE_EXTENDED_INFO); i += 1)
+    {
+        auto const base = reinterpret_cast<UINT_PTR>(modules[i].BasicInfo.ImageBase);
+        if (firstPublic >= base && firstPublic - base < modules[i].ImageSize)
+        {
+            auto const name = reinterpret_cast<char const*>(modules[i].FullPathName + modules[i].FileNameOffset);
+            if (0 == _stricmp(name, "netadaptercx.sys"))
+            {
+                imageBase = base;
+                imageSize = modules[i].ImageSize;
+            }
+            break;
+        }
+    }
+
+    if (imageBase == 0)
+    {
+        failure = "not-netadaptercx";
+        goto Done;
+    }
+
+    {
+        auto const dos = reinterpret_cast<IMAGE_DOS_HEADER const*>(imageBase);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE ||
+            dos->e_lfanew <= 0 || static_cast<ULONG>(dos->e_lfanew) > imageSize - sizeof(IMAGE_NT_HEADERS64))
+        {
+            failure = "pe-dos";
+            goto Done;
+        }
+
+        auto const nt = reinterpret_cast<IMAGE_NT_HEADERS64 const*>(imageBase + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE)
+        {
+            failure = "pe-nt";
+            goto Done;
+        }
+
+        auto const sections = IMAGE_FIRST_SECTION(nt);
+        for (unsigned s = 0; s != nt->FileHeader.NumberOfSections && tableAddress == 0; s += 1)
+        {
+            auto const& section = sections[s];
+            if ((section.Characteristics & (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_DISCARDABLE)) != 0 ||
+                (section.Characteristics & IMAGE_SCN_MEM_READ) == 0 ||
+                section.VirtualAddress >= imageSize ||
+                section.Misc.VirtualSize > imageSize - section.VirtualAddress)
+            {
+                continue;
+            }
+
+            auto const start = imageBase + section.VirtualAddress;
+            auto const size = section.Misc.VirtualSize & ~7u;
+            if (size < (1 + Net20FullFunctionCount) * sizeof(UINT_PTR)) // Header + table.
+            {
+                continue;
+            }
+
+            // The table is 8-byte aligned, preceded by { ULONG Size; ULONG FuncCount; }.
+            for (UINT_PTR p = start + 8; p + Net20FullFunctionCount * sizeof(UINT_PTR) <= start + size; p += 8)
+            {
+                auto const table = reinterpret_cast<UINT_PTR const*>(p);
+                if (table[0] != firstPublic)
+                {
+                    continue;
+                }
+
+                unsigned matched = 1;
+                while (matched != Net20PublicFunctionCount &&
+                    table[matched] == reinterpret_cast<UINT_PTR>(NetFunctions[matched]))
+                {
+                    matched += 1;
+                }
+
+                if (matched == Net20PublicFunctionCount)
+                {
+                    tableAddress = p;
+                    break;
+                }
+            }
+        }
+
+        if (tableAddress == 0)
+        {
+            failure = "table-not-found";
+            goto Done;
+        }
+
+        auto const header = reinterpret_cast<ULONG const*>(tableAddress - 8);
+        tableHeader[0] = header[0];
+        tableHeader[1] = header[1];
+        if (tableHeader[1] != Net20FullFunctionCount ||
+            tableHeader[0] != 8 + Net20FullFunctionCount * sizeof(UINT_PTR))
+        {
+            failure = "table-header";
+            goto Done;
+        }
+
+        // Both entries must point at code in NetAdapterCx.
+        auto const table = reinterpret_cast<UINT_PTR const*>(tableAddress);
+        UINT_PTR const wanted[] = {
+            table[Net20SetPacketFilterCapabilitiesIndex],
+            table[Net20SetMulticastCapabilitiesIndex] };
+        for (auto const fn : wanted)
+        {
+            bool inCode = false;
+            for (unsigned s = 0; s != nt->FileHeader.NumberOfSections; s += 1)
+            {
+                auto const& section = sections[s];
+                if ((section.Characteristics & IMAGE_SCN_MEM_EXECUTE) != 0 &&
+                    fn >= imageBase + section.VirtualAddress &&
+                    fn - (imageBase + section.VirtualAddress) < section.Misc.VirtualSize)
+                {
+                    inCode = true;
+                }
+            }
+
+            if (!inCode)
+            {
+                failure = "entry-not-code";
+                goto Done;
+            }
+        }
+
+        functions->setPacketFilterCapabilities =
+            reinterpret_cast<NET20_ADAPTER_SET_PACKET_FILTER_CAPABILITIES*>(wanted[0]);
+        functions->setMulticastCapabilities =
+            reinterpret_cast<NET20_ADAPTER_SET_MULTICAST_CAPABILITIES*>(wanted[1]);
+    }
+
+Done:
+
+    if (modules != nullptr)
+    {
+        ExFreePoolWithTag(modules, 'qEwD');
+    }
+
+    TraceWrite("Net20FindPreviewFunctions", LEVEL_INFO,
+        TraceLoggingString(failure ? failure : "ok", "result"),
+        TraceLoggingNTStatus(status),
+        TraceLoggingPointer(reinterpret_cast<void*>(imageBase), "image"),
+        TraceLoggingPointer(reinterpret_cast<void*>(tableAddress), "table"),
+        TraceLoggingHexInt32(tableHeader[0], "tableSize"),
+        TraceLoggingUInt32(tableHeader[1], "tableCount"));
+    if (failure)
+    {
+        DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+            "dwc_eqos: NetAdapterCx 2.0 packet filter API not found (%s)\n", failure);
+    }
+    else
+    {
+        DbgPrintEx(DPFLTR_IHVNETWORK_ID, DPFLTR_ERROR_LEVEL,
+            "dwc_eqos: NetAdapterCx 2.0 packet filter API at %p, %p\n",
+            functions->setPacketFilterCapabilities, functions->setMulticastCapabilities);
+    }
+
+    return failure == nullptr;
+}
+
+// The MAC always passes its own address and every multicast (IPv6 neighbour
+// discovery, mDNS): the multicast list is a subset of that. Broadcast and
+// promiscuous follow the packet filter, re-applied at every D0Entry.
+static void
+DeviceApplyReceiveFilter20(_Inout_ DeviceContext* context)
+{
+    auto const flags = context->packetFilter20;
+
     MacPacketFilter_t filter = {};
-    filter.PassAllMulticast = true;
-    filter.DisableBroadcast = false;
+    if (flags & Net20PacketFilterFlagPromiscuous)
+    {
+        filter.PromiscuousMode = true;
+    }
+    else
+    {
+        filter.PassAllMulticast = true;
+        filter.DisableBroadcast = flags != 0 && 0 == (flags & Net20PacketFilterFlagBroadcast);
+    }
 
     SetOneMacAddress(context->regs, 0, context->currentMacAddress, true);
     auto const macAddrCount = context->feature0.MacAddrCount;
@@ -513,6 +798,32 @@ DeviceSetDefaultReceiveFilter(_Inout_ DeviceContext* context)
     }
 
     Write32(&context->regs->Mac_Packet_Filter, filter);
+}
+
+static NET20_SET_PACKET_FILTER AdapterSetPacketFilter20;
+static void
+AdapterSetPacketFilter20(
+    _In_ NETADAPTER adapter,
+    _In_ NET20_PACKET_FILTER_FLAGS packetFilter)
+{
+    auto const context = DeviceGetContext(AdapterGetContext(adapter)->device);
+    context->packetFilter20 = packetFilter;
+    DeviceApplyReceiveFilter20(context);
+    TraceEntryExit(AdapterSetPacketFilter20, LEVEL_INFO,
+        TraceLoggingHexInt32(packetFilter));
+}
+
+static NET20_SET_MULTICAST_LIST AdapterSetMulticastList20;
+static void
+AdapterSetMulticastList20(
+    _In_ NETADAPTER adapter,
+    _In_ ULONG multicastAddressCount,
+    _In_reads_opt_(multicastAddressCount) NET_ADAPTER_LINK_LAYER_ADDRESS* multicastAddressList)
+{
+    UNREFERENCED_PARAMETER(adapter);
+    UNREFERENCED_PARAMETER(multicastAddressList);
+    TraceEntryExit(AdapterSetMulticastList20, LEVEL_INFO,
+        TraceLoggingUInt32(multicastAddressCount));
 }
 
 static EVT_NET_ADAPTER_OFFLOAD_SET_CHECKSUM AdapterOffloadSetChecksum;
@@ -733,7 +1044,7 @@ DeviceD0Entry(
     Write32(&context->regs->Mac_Watchdog_Timeout, watchdogTimeout);
 
 #if DWC_EQOS_NETCX20
-    DeviceSetDefaultReceiveFilter(context);
+    DeviceApplyReceiveFilter20(context);
 #endif
 
     // Clear any pending interrupts, then unmask them.
@@ -1338,11 +1649,35 @@ DevicePrepareHardware(
 #if DWC_EQOS_NETCX20
 
         // NetAdapterCx 2.0: one checksum offload switch, both directions; no
-        // receive filter, GSO or 802.1Q offload (DeviceSetDefaultReceiveFilter).
+        // GSO or 802.1Q offload; the packet filter only through the preview
+        // table (Net20FindPreviewFunctions).
         NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES checksumCaps;
         NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES_INIT(&checksumCaps,
             TRUE, TRUE, TRUE, AdapterOffloadSetChecksum);
         NetAdapterOffloadSetChecksumCapabilities(context->adapter, &checksumCaps);
+
+        Net20PreviewFunctions preview;
+        if (Net20FindPreviewFunctions(&preview))
+        {
+            NET20_PACKET_FILTER_CAPABILITIES packetFilterCaps = {};
+            packetFilterCaps.Size = sizeof(packetFilterCaps);
+            packetFilterCaps.SupportedPacketFilters =
+                Net20PacketFilterFlagDirected |
+                Net20PacketFilterFlagMulticast |
+                Net20PacketFilterFlagAllMulticast |
+                Net20PacketFilterFlagBroadcast |
+                Net20PacketFilterFlagPromiscuous;
+            packetFilterCaps.EvtSetPacketFilter = AdapterSetPacketFilter20;
+            preview.setPacketFilterCapabilities(NetDriverGlobals, context->adapter, &packetFilterCaps);
+
+            // Required with the packet filter: the translator calls the
+            // multicast callback for every OID_802_3_MULTICAST_LIST.
+            NET20_MULTICAST_CAPABILITIES multicastCaps = {};
+            multicastCaps.Size = sizeof(multicastCaps);
+            multicastCaps.MaximumMulticastAddresses = Net20MaxMulticastAddresses;
+            multicastCaps.EvtSetMulticastList = AdapterSetMulticastList20;
+            preview.setMulticastCapabilities(NetDriverGlobals, context->adapter, &multicastCaps);
+        }
 
 #else // DWC_EQOS_NETCX20
 

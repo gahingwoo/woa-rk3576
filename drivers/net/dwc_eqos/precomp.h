@@ -16,6 +16,10 @@
 #ifndef DWC_EQOS_NETCX20
 #define DWC_EQOS_NETCX20 0
 #endif
+#if DWC_EQOS_NETCX20
+#include <ntimage.h>
+#include <aux_klib.h>
+#endif
 #include <net/gso.h>
 #include <net/ieee8021q.h>
 #include <net/logicaladdress.h>
