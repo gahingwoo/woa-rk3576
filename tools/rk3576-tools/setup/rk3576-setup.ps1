@@ -44,11 +44,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Windows 10 on Arm has no Arm64 Windows PowerShell: powershell.exe is the
+# x86 one, and WOW64 shows it Program Files (x86) and the 32-bit view of
+# HKLM\SOFTWARE. The files go to the real Program Files and the machine
+# values to the 64-bit view, where offline-install.cmd and rk-monitor see
+# them. On Windows 11 (Arm64 PowerShell) both are what they always were.
+if ([IntPtr]::Size -eq 4 -and $env:PROCESSOR_ARCHITEW6432 -and $env:ProgramW6432) { $env:ProgramFiles = $env:ProgramW6432 }
+$Hklm     = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
 $Dir      = Join-Path $env:ProgramFiles 'RK3576'
-$RunKey   = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+$RunKey   = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
 $RunName  = 'RK3576 Monitor'
-$Base     = 'HKLM:\SOFTWARE\RK3576'
-$Arp      = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RK3576Tools'
+$Base     = 'SOFTWARE\RK3576'
+$Arp      = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RK3576Tools'
 $Menu     = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\RK3576'
 $TaskPath = '\RK3576\'
 $TaskName = 'Performance counters'
@@ -63,6 +70,27 @@ function Say([string]$m) { "$(Get-Date -Format s) $m" | Tee-Object -FilePath $Lo
 function Test-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     return (New-Object Security.Principal.WindowsPrincipal $id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# HKLM\SOFTWARE values in the 64-bit view ($Base, $RunKey, $Arp)
+function Set-HklmValue([string]$Sub, [string]$Name, $Value, [string]$Kind = 'String') {
+    $k = $Hklm.CreateSubKey($Sub)
+    try { $k.SetValue($Name, $Value, [Microsoft.Win32.RegistryValueKind]$Kind) } finally { $k.Close() }
+}
+
+function Get-HklmValue([string]$Sub, [string]$Name) {
+    $k = $Hklm.OpenSubKey($Sub)
+    if (-not $k) { return $null }
+    try { return $k.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } finally { $k.Close() }
+}
+
+function Remove-HklmValue([string]$Sub, [string]$Name) {
+    $k = $Hklm.OpenSubKey($Sub, $true)
+    if ($k) { try { $k.DeleteValue($Name, $false) } finally { $k.Close() } }
+}
+
+function Remove-HklmKey([string]$Sub) {
+    try { $Hklm.DeleteSubKeyTree($Sub, $false) } catch { }
 }
 
 function Test-System { return [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem }
@@ -200,17 +228,16 @@ function Set-NpuAccess {
     $r = @(Set-NpuUserAccessIn $NpuEnum)
     if (-not $r.Count) { Say "NPU: no ACPI\RKCP3576 device (the firmware's NPU option is off); the counter task sets UserAccess once it is there"; return }
     if ($r -contains 'set') {
-        if (-not (Test-Path $Base)) { New-Item -Path $Base -Force | Out-Null }
-        New-ItemProperty -Path $Base -Name NpuUserAccess -PropertyType DWord -Value 1 -Force | Out-Null
+        Set-HklmValue $Base NpuUserAccess 1 DWord
         Say 'NPU: UserAccess = 1, ordinary users may use it from the next restart'
     } else { Say "NPU: UserAccess left as it was ($($r -join ', '))" }
 }
 
 function Remove-NpuAccess {
-    if ((Get-ItemProperty -Path $Base -Name NpuUserAccess -ErrorAction SilentlyContinue).NpuUserAccess -ne 1) { return }
+    if ((Get-HklmValue $Base NpuUserAccess) -ne 1) { return }
     if (-not (Test-System)) { Invoke-SelfAsSystem 'NpuAccessRemove'; return }
     $n = Remove-NpuUserAccessIn $NpuEnum
-    Remove-ItemProperty -Path $Base -Name NpuUserAccess -ErrorAction SilentlyContinue
+    Remove-HklmValue $Base NpuUserAccess
     Say "NPU: UserAccess taken out again ($n)"
 }
 
@@ -228,14 +255,10 @@ function Set-MachineRegistry {
     $vf = Join-Path $Dir 'VERSION.txt'
     if (Test-Path $vf) { $ver = (Get-Content $vf -TotalCount 1).Trim() }
 
-    if (-not (Test-Path "$Base\Monitor")) { New-Item -Path "$Base\Monitor" -Force | Out-Null }
-    if ($null -eq (Get-ItemProperty -Path "$Base\Monitor" -Name Widget -ErrorAction SilentlyContinue)) {
-        New-ItemProperty -Path "$Base\Monitor" -Name Widget -PropertyType DWord -Value 1 | Out-Null
-    }
-    New-ItemProperty -Path $Base -Name InstallDir -PropertyType ExpandString -Value '%ProgramFiles%\RK3576' -Force | Out-Null
-    New-ItemProperty -Path $Base -Name Version -PropertyType String -Value $ver -Force | Out-Null
+    if ($null -eq (Get-HklmValue "$Base\Monitor" Widget)) { Set-HklmValue "$Base\Monitor" Widget 1 DWord }
+    Set-HklmValue $Base InstallDir '%ProgramFiles%\RK3576' ExpandString
+    Set-HklmValue $Base Version $ver
 
-    if (-not (Test-Path $Arp)) { New-Item -Path $Arp -Force | Out-Null }
     $kb = [int]((Get-ChildItem $Dir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1024)
     $vals = @{
         DisplayName     = 'RK3576 tools'
@@ -246,9 +269,9 @@ function Set-MachineRegistry {
         UninstallString = '"' + (Join-Path $Dir 'setup\uninstall.cmd') + '"'
         URLInfoAbout    = 'https://github.com/gahingwoo/woa-rk3576'
     }
-    foreach ($k in $vals.Keys) { New-ItemProperty -Path $Arp -Name $k -PropertyType String -Value $vals[$k] -Force | Out-Null }
-    foreach ($k in 'NoModify', 'NoRepair') { New-ItemProperty -Path $Arp -Name $k -PropertyType DWord -Value 1 -Force | Out-Null }
-    New-ItemProperty -Path $Arp -Name EstimatedSize -PropertyType DWord -Value $kb -Force | Out-Null
+    foreach ($k in $vals.Keys) { Set-HklmValue $Arp $k $vals[$k] }
+    foreach ($k in 'NoModify', 'NoRepair') { Set-HklmValue $Arp $k 1 DWord }
+    Set-HklmValue $Arp EstimatedSize $kb DWord
     Say "registry: Monitor\Widget, RK3576, Uninstall\RK3576Tools ($ver)"
 }
 
@@ -266,8 +289,8 @@ function Set-LogonTask {
     Register-ScheduledTask -TaskPath $TaskPath -TaskName $LogonTask -Action $a -Trigger $t -Principal $p `
         -Settings $s -Description 'Starts the RK3576 Monitor tray app and desktop widget at logon.' `
         -Force | Out-Null
-    New-ItemProperty -Path "$Base\Monitor" -Name AutostartTask -PropertyType DWord -Value 1 -Force | Out-Null
-    Remove-ItemProperty -Path $RunKey -Name $RunName -ErrorAction SilentlyContinue
+    Set-HklmValue "$Base\Monitor" AutostartTask 1 DWord
+    Remove-HklmValue $RunKey $RunName
     Say "task: $TaskPath$LogonTask (Users, at logon); no Run entry"
 }
 
@@ -332,7 +355,7 @@ function Complete-Setup {
     Set-CounterTask
     Invoke-Counters @('-Force')
     Invoke-BrowserGpu 'Install'
-    Remove-ItemProperty -Path $Base -Name FirstBootPending -ErrorAction SilentlyContinue
+    Remove-HklmValue $Base FirstBootPending
 }
 
 # Every user's own rk-monitor state: loaded hives in HKEY_USERS, and the
@@ -414,9 +437,9 @@ switch ($Action) {
             $svc.GetFolder('\').DeleteFolder('RK3576', 0)
         } catch { }
         Remove-Item $Menu -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-ItemProperty -Path $RunKey -Name $RunName -ErrorAction SilentlyContinue
-        Remove-Item $Base -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item $Arp -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-HklmValue $RunKey $RunName
+        Remove-HklmKey $Base
+        Remove-HklmKey $Arp
         Remove-UserState
         if (Test-Path $Dir) { Remove-Item $Dir -Recurse -Force }
         Say 'removed'
