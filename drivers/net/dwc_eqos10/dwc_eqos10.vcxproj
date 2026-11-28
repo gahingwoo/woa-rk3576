@@ -3,6 +3,7 @@
   dwc_eqos10: the Windows 10 (19041 to 19045) build of ..\dwc_eqos, from the
   same sources, against NetAdapterCx 2.0 (DWC_EQOS_NETCX20, precomp.h) and
   KMDF 1.31. It builds dwc_eqos.sys with its own INF, dwc_eqos10.inf.
+  check-structure: sources in ../dwc_eqos
 -->
 <Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
