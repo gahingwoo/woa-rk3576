@@ -33,9 +33,11 @@ can live on the NVMe drive (ROCK 4D has no eMMC).
 
 `stornvme.inf` matches the same ID, `PCI\CC_010802`, and an inbox driver
 always outranks a test-signed one, whatever the ID. So the package does not
-rely on ranking: on Windows 10, `install.cmd` (offline and `/online`) deletes
-the value `stornvme.inf` under
-`HKLM\DRIVERS\DriverDatabase\DeviceIds\PCI\CC_010802`. That leaves rk3xnvme
+rely on ranking: on Windows 10 the value `stornvme.inf` under
+`HKLM\DRIVERS\DriverDatabase\DeviceIds\PCI\CC_010802` is deleted, offline
+by the package's `win10-nvme.cmd W:\` (which `install.cmd W:\` runs; a tool
+that runs DISM itself, such as Maskrom Studio, has to run it after DISM) and
+online by `install.cmd /online`'s SYSTEM task. That leaves rk3xnvme
 the only driver Plug and Play finds for an NVMe controller. `stornvme`'s
 service is left as it is. A Windows update that reinstalls `stornvme.inf`
 can bring the value back: run `install.cmd /online <board>` again after one.

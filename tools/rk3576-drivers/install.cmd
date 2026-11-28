@@ -79,32 +79,12 @@ echo RK3576 drivers %VER% added to %T%\.
 exit /b 0
 
 :unmapnvme
-rem Windows 10 with rk3xnvme in the lists: stornvme.inf, an inbox driver,
-rem would outrank it for PCI\CC_010802 and fault (bugcheck 0x7E). Remove
-rem stornvme.inf from that ID's DriverDatabase entry, so rk3xnvme is the only
-rem driver Plug and Play finds for an NVMe controller (rk3xnvme's README).
+rem Windows 10 with rk3xnvme in the lists: win10-nvme.cmd keeps stornvme off
+rem the NVMe controller (it would fault there, bugcheck 0x7E).
 set NV=
 for %%L in (%LISTS%) do findstr /x /i "rk3xnvme" %%L >nul 2>&1 && set NV=1
 if not defined NV exit /b 0
-reg load HKLM\RKDRVDB "%T%\Windows\System32\config\DRIVERS" >nul 2>&1 || (
-  echo Could not load the DRIVERS hive of %T%\: stornvme would take the NVMe drive.
-  set E=1
-  exit /b 0
-)
-set K=HKLM\RKDRVDB\DriverDatabase\DeviceIds\PCI\CC_010802
-reg query "%K%" /v stornvme.inf >nul 2>&1 && (
-  reg delete "%K%" /v stornvme.inf /f >nul 2>&1 && (
-    echo Removed stornvme.inf from the DriverDatabase entry for PCI\CC_010802: the NVMe drive takes rk3xnvme.
-  ) || (
-    echo Could not remove stornvme.inf from %K%.
-    set E=1
-  )
-) || echo stornvme.inf is not in the DriverDatabase entry for PCI\CC_010802.
-reg query "%K%" 2>nul | findstr /i "oem" >nul || (
-  echo No added driver is registered for PCI\CC_010802: rk3xnvme did not go in.
-  set E=1
-)
-reg unload HKLM\RKDRVDB >nul 2>&1
+call "%HERE%win10-nvme.cmd" %T%\ || set E=1
 exit /b 0
 
 :lists

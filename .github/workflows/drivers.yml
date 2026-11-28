@@ -137,6 +137,7 @@ jobs:
             --script tools/rk3576-drivers/install-online.ps1 \
             --script tools/rk3576-drivers/mark-reinstall.ps1 \
             --script tools/rk3576-drivers/verify-bound.ps1 \
+            --script tools/rk3576-drivers/win10-nvme.cmd \
             --readme tools/rk3576-drivers/README.md \
             --readme tools/rk3576-drivers/README.zh-CN.md \
             --woa in/woa --gpu "$gpuin" --npu in/npu/rknpu-windows-arm64.zip \
