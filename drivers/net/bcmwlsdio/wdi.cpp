@@ -316,6 +316,16 @@ GetCapabilities(_In_ PBWL_WIFI W, _In_ BWL_REQ Request, _In_ PWDI_MESSAGE_HEADER
         BwlFeReqComplete(W, Request, STATUS_DEVICE_NOT_READY, 0);
         return;
     }
+    unicast[0].AuthAlgorithm = WDI_AUTH_ALGO_80211_OPEN;
+    unicast[0].CipherAlgorithm = WDI_CIPHER_ALGO_NONE;
+    unicast[1].AuthAlgorithm = WDI_AUTH_ALGO_RSNA_PSK;
+    unicast[1].CipherAlgorithm = WDI_CIPHER_ALGO_CCMP;
+    mgmt[0].AuthAlgorithm = WDI_AUTH_ALGO_80211_OPEN;
+    mgmt[0].CipherAlgorithm = WDI_CIPHER_ALGO_NONE;
+    FillRates(cck, cckRates, ARRAYSIZE(cckRates));
+    FillRates(erp, erpRates, ARRAYSIZE(erpRates));
+    FillRates(ofdm, ofdmRates, ARRAYSIZE(ofdmRates));
+    FillRates(ht, htRates, ARRAYSIZE(htRates));
 #pragma warning(suppress : 4291)    /* no placement delete: the constructors do not throw */
     P = new ((ULONG_PTR)0) WDI_GET_ADAPTER_CAPABILITIES_PARAMETERS;
     bands = (WDI_BAND_INFO_CONTAINER *)ExAllocatePool2(POOL_FLAG_NON_PAGED, 2 * sizeof(*bands), BWL_WDI_TAG);
