@@ -5,6 +5,9 @@
   Build (EWDK prompt, after LaunchBuildEnv.cmd):
       msbuild aic8800usb.vcxproj /p:Configuration=Release /p:Platform=ARM64
   See ..\..\..\docs\BUILDING.md (ARM64 host builds this natively).
+  The driver package (tools\rk3576-drivers, Windows 11) takes the loader and
+  the WiFiCx INF; aic8800usb.inf (Ethernet-style) is for aic-bringup.ps1:
+  driver-package: infs aic8800ldr.inf aic8800wifi.inf
 -->
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
@@ -73,7 +76,7 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <!-- _KERNEL_MODE is predefined by the WDK toolset; redefining it is C4117. -->
       <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <!-- the WDI TLV generator/parser (wificx.cpp) -->
+      <!-- the WDI TLV generator/parser (wdicore.cpp, wificx.cpp) -->
       <AdditionalIncludeDirectories>$(DDK_INC_PATH)wlan\2.0;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -99,8 +102,12 @@
     <ClCompile Include="aic_data.c" />
     <ClCompile Include="aic_wpa.c" />
     <ClCompile Include="aic_crypto.c" />
-    <!-- C++: the WiFiCx front end. No sized deallocation: with it the
-         array placement new in arrayofelements.hpp is ill-formed (C2956). -->
+    <!-- C++: the WDI messages (wdicore.cpp, shared with aic8800wdi) and the
+         WiFiCx front end. No sized deallocation: with it the array
+         placement new in arrayofelements.hpp is ill-formed (C2956). -->
+    <ClCompile Include="wdicore.cpp">
+      <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="wificx.cpp">
       <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
@@ -110,6 +117,7 @@
     <ClInclude Include="aic8800usb.h" />
     <ClInclude Include="aic.h" />
     <ClInclude Include="aic_proto.h" />
+    <ClInclude Include="wdicore.h" />
   </ItemGroup>
 
   <ItemGroup>

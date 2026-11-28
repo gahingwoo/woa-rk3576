@@ -10,6 +10,11 @@
  * registry key (Device Parameters), flushed, so a board session can read
  * it afterwards; docs/dev/aic8800.md lists the values.
  *
+ * The same sources also build aic8800wdi.sys (AIC_WDI, drivers/net/
+ * aic8800wdi): Windows 10 has no WiFiCx, so there the WLAN face is a WDI
+ * miniport (wdi.cpp, wdital.c) with the same WDI message handling
+ * (wdicore.cpp) and the same loader; docs/dev/aic8800.md (Windows 10).
+ *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -17,14 +22,22 @@
 #pragma once
 
 #include <ntddk.h>
+#ifdef AIC_WDI
+#include <ndis.h>
+#endif
 #include <wdf.h>
+#ifdef AIC_WDI
+#include <wdfminiport.h>
+#endif
 #include <usb.h>
 #include <usbdlib.h>
 #include <wdfusb.h>
 #include <ntstrsafe.h>
 #include <bcrypt.h>
+#ifndef AIC_WDI
 #include <netadaptercx.h>
 #include <net/virtualaddress.h>
+#endif
 
 EXTERN_C_START
 
@@ -33,7 +46,8 @@ EXTERN_C_START
 
 #define AIC_POOL_TAG    'u8cA'
 
-struct _AIC_WIFI;                   /* wificx.cpp */
+struct _AIC_WIFI;                   /* wdicore.h */
+struct _AIC_TAL;                    /* wdital.c (AIC_WDI) */
 
 #define AIC_LOG(fmt, ...) \
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "aic8800usb: " fmt "\n", __VA_ARGS__)
@@ -97,6 +111,12 @@ struct _AIC_WIFI;                   /* wificx.cpp */
 
 typedef struct _AIC_DEVICE_CONTEXT {
     WDFDEVICE Device;
+#ifdef AIC_WDI
+    /* the WDI miniport (a miniport-mode WDFDEVICE): the device objects NDIS
+     * gave, and the absolute path of Device Parameters (OpenKey) */
+    PDEVICE_OBJECT Pdo, NextDevice;
+    UNICODE_STRING DevKeyPath;
+#endif
     WDFUSBDEVICE UsbDevice;
     WDFUSBINTERFACE UsbInterface;
     WDFUSBPIPE InPipe[AIC_MAX_IN_PIPES];     /* data, then message (runtime) */
@@ -133,12 +153,18 @@ typedef struct _AIC_DEVICE_CONTEXT {
 
     PUCHAR TxBuf;
 
-    /* the network adapter (runtime service only) */
+    /* the network adapter (runtime service only), or the WDI data path */
+#ifndef AIC_WDI
     NETADAPTER Adapter;
+#else
+    struct _AIC_TAL *Tal;
+#endif
     BOOLEAN FwReady;                /* runtime init done in PrepareHardware */
     BOOLEAN LinkReported;
     KSPIN_LOCK DataLock;            /* the queues, the FIFO, the TX slots */
+#ifndef AIC_WDI
     NETPACKETQUEUE TxQueue, RxQueue;
+#endif
     BOOLEAN TxNotify, RxNotify;
     aic_frameq *RxQ;
     WDFREQUEST TxReq[AIC_TX_SLOTS];
@@ -159,6 +185,7 @@ typedef struct _AIC_DEVICE_CONTEXT {
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(AIC_DEVICE_CONTEXT, AicGetContext)
 
+#ifndef AIC_WDI
 typedef struct _AIC_ADAPTER_CONTEXT {
     WDFDEVICE Device;
 } AIC_ADAPTER_CONTEXT, *PAIC_ADAPTER_CONTEXT;
@@ -169,11 +196,14 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(AIC_ADAPTER_CONTEXT, AicAdapterGetContext)
 /* netadapter.c. In WiFiCx mode Init is the one WiFiCx hands to
  * EvtWifiDeviceCreateAdapter; in Ethernet mode NULL (allocated here). */
 NTSTATUS AicNetCreateAdapter(_In_ PAIC_DEVICE_CONTEXT Ctx, _Inout_opt_ NETADAPTER_INIT *Init);
+NTSTATUS AicNetStart(_In_ PAIC_DEVICE_CONTEXT Ctx);
+#endif
+/* netadapter.c (Windows 11) or wdital.c (WDI, Windows 10): the data path */
+/* Ethernet mode: report the link to Windows (WDI: nothing, WDI reports it) */
+VOID AicNetUpdateLink(_In_ PAIC_DEVICE_CONTEXT Ctx);
 VOID AicNetRxRelease(_In_ PAIC_DEVICE_CONTEXT Ctx);
 BOOLEAN AicNetTxIdle(_In_ PAIC_DEVICE_CONTEXT Ctx);
-NTSTATUS AicNetStart(_In_ PAIC_DEVICE_CONTEXT Ctx);
 VOID AicNetFree(_In_ PAIC_DEVICE_CONTEXT Ctx);
-VOID AicNetUpdateLink(_In_ PAIC_DEVICE_CONTEXT Ctx);
 VOID AicNetRxFrame(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_reads_(Len) const UCHAR *Frame, _In_ ULONG Len);
 
 /* usb.c */
@@ -195,11 +225,24 @@ VOID AicPutBinary(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_reads_byte
 ULONG AicGetULong(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _In_ ULONG Default);
 NTSTATUS AicOpenParams(_In_ ACCESS_MASK Access, _Out_ WDFKEY *Key);
 VOID AicPutStats(_In_ PAIC_DEVICE_CONTEXT Ctx);
+/* driver.c: the worker thread, and the runtime's firmware init (readers
+ * running); the WDI front end runs them from its open */
+NTSTATUS AicStartWorker(_In_ PAIC_DEVICE_CONTEXT Ctx);
+VOID AicStopWorker(_In_ PAIC_DEVICE_CONTEXT Ctx);
+VOID AicRuntimeInit(_In_ PAIC_DEVICE_CONTEXT Ctx);
+#ifdef AIC_WDI
+/* wdi.cpp: DriverEntry of the WDI miniport service (driver.c's DriverEntry
+ * hands over to it unless this image runs as aic8800ldr) */
+NTSTATUS AicDriverEntryWdi(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath);
+#endif
 
 /* wificx.cpp: the WiFiCx front end (Mode 1) */
+#ifndef AIC_WDI
 NTSTATUS AicWifiPreDeviceCreate(_Inout_ PWDFDEVICE_INIT DeviceInit);
 NTSTATUS AicWifiPostDeviceCreate(_In_ PAIC_DEVICE_CONTEXT Ctx);
 NTSTATUS AicWifiReportCapabilities(_In_ PAIC_DEVICE_CONTEXT Ctx);
+#endif
+/* wdicore.cpp: WDI messages, both front ends */
 VOID AicWifiRun(_In_ PAIC_DEVICE_CONTEXT Ctx);
 VOID AicWifiScanBss(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_ const aic_bss *Bss, _In_reads_(Len) const UCHAR *Body,
                     _In_ ULONG Len, _In_ int ProbeResp);

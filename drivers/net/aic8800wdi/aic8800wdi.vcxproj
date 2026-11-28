@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  aic8800wdi: the Windows 10 (19041 to 19045) build of ..\aic8800usb, from
+  the same sources: a WDI miniport (AIC_WDI: wdi.cpp, wdital.c) in place of
+  NetAdapterCx and WiFiCx, which Windows 10 does not have, KMDF 1.31. It
+  builds aic8800wdi.sys with its own INFs, aic8800wdi.inf (the WLAN face)
+  and aic8800wdildr.inf (the ROM loader face). docs/dev/aic8800.md (Windows 10).
+  check-structure: sources in ../aic8800usb
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{9D2E7B51-4C3A-4F18-A69C-19041A8D80D2}</ProjectGuid>
+    <TemplateGuid>{dd38f7fc-d7bd-488b-9242-7d8754cde80d}</TemplateGuid>
+    <RootNamespace>aic8800wdi</RootNamespace>
+    <MinimumVisualStudioVersion>14.0</MinimumVisualStudioVersion>
+    <Configuration>Release</Configuration>
+    <Platform Condition="'$(Platform)' == ''">ARM64</Platform>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>KMDF</DriverType>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+    <!-- Windows 10 2004 (Vibranium, 19041; 19045 is the same catalog OS). -->
+    <Inf2CatWindowsVersionList>10_VB_ARM64</Inf2CatWindowsVersionList>
+    <!-- Windows 10 22H2 ships KMDF 1.31 (Wdf01000.sys 1.31.19041). -->
+    <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
+    <KMDF_VERSION_MINOR>31</KMDF_VERSION_MINOR>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <!-- The sources' own folder for their headers, and the WDI TLV
+           generator/parser of Windows 10 (km\wlan\1.0). -->
+      <AdditionalIncludeDirectories>..\aic8800usb;$(DDK_INC_PATH)wlan\1.0;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>AIC_WDI=1;NDIS_MINIPORT_DRIVER=1;NDIS650_MINIPORT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <!-- ndis.lib; ksecdd.lib: BCryptGenRandom (driver.c, the
+           Ethernet mode's handshake nonce, linked but not used here);
+           TLVGeneratorParser.lib: Microsoft's WDI TLV library (C++);
+           libcntpr.lib: the __security_push/pop_cookie it references. -->
+      <AdditionalDependencies>$(DDK_LIB_PATH)ndis.lib;$(DDK_LIB_PATH)ksecdd.lib;$(DDK_LIB_PATH)ntstrsafe.lib;$(DDK_LIB_PATH)wlan\1.0\TLVGeneratorParser.lib;$(DDK_LIB_PATH)libcntpr.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Inf>
+      <SpecifyArchitecture>true</SpecifyArchitecture>
+      <Architecture>arm64</Architecture>
+    </Inf>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\aic8800usb\driver.c" />
+    <ClCompile Include="..\aic8800usb\usb.c" />
+    <ClCompile Include="..\aic8800usb\files.c" />
+    <ClCompile Include="..\aic8800usb\aic_core.c" />
+    <ClCompile Include="..\aic8800usb\aic_fw.c" />
+    <ClCompile Include="..\aic8800usb\aic_wlan.c" />
+    <ClCompile Include="..\aic8800usb\aic_data.c" />
+    <ClCompile Include="..\aic8800usb\aic_wpa.c" />
+    <ClCompile Include="..\aic8800usb\aic_crypto.c" />
+    <ClCompile Include="..\aic8800usb\wdital.c" />
+    <!-- C++, no sized deallocation (arrayofelements.hpp, C2956) -->
+    <ClCompile Include="..\aic8800usb\wdicore.cpp">
+      <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="..\aic8800usb\wdi.cpp">
+      <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\aic8800usb\aic8800usb.h" />
+    <ClInclude Include="..\aic8800usb\aic.h" />
+    <ClInclude Include="..\aic8800usb\aic_proto.h" />
+    <ClInclude Include="..\aic8800usb\wdicore.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Inf Include="aic8800wdi.inf" />
+    <Inf Include="aic8800wdildr.inf" />
+  </ItemGroup>
+  <!--
+    Stage the built .sys (and the stamped INFs) into the package directory,
+    or inf2cat's signability test fails with 22.9.1 ("aic8800wdi.sys ... is
+    missing").
+  -->
+  <ItemGroup>
+    <FilesToPackage Include="$(TargetPath)" />
+    <FilesToPackage Include="@(Inf->'%(CopyOutput)')" Condition="'@(Inf)'!=''" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

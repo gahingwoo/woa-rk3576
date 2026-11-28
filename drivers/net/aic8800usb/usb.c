@@ -274,9 +274,13 @@ AicOpRxEth(void *C, const u8 *Frame, u32 Len)
 {
     PAIC_DEVICE_CONTEXT ctx = (PAIC_DEVICE_CONTEXT)C;
 
+#ifndef AIC_WDI
     if (ctx->Adapter != NULL) {
         AicNetRxFrame(ctx, Frame, Len);
     }
+#else
+    AicNetRxFrame(ctx, Frame, Len);     /* wdital.c: dropped without a data path */
+#endif
 }
 
 static void

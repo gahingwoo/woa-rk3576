@@ -11,6 +11,10 @@
  * SelfManagedIoInit), and ReleaseHardware stops it too, for a start that
  * failed after PrepareHardware.
  *
+ * Windows 10 (AIC_WDI, aic8800wdi.sys): the loader instance runs as here;
+ * the WLAN face is the WDI miniport of wdi.cpp, which opens the USB device
+ * and starts the worker itself, and DriverEntry hands over to it.
+ *
  * The loader instance (PID_8D80) downloads the firmware and records that in
  * a volatile key, so that the runtime instance (PID_8D81) can tell firmware
  * it started this boot from firmware left running across a warm reboot; for
@@ -33,8 +37,8 @@ static EVT_WDF_DEVICE_SELF_MANAGED_IO_INIT AicEvtSelfManagedIoInit;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_SUSPEND AicEvtSelfManagedIoSuspend;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_RESTART AicEvtSelfManagedIoRestart;
 static KSTART_ROUTINE AicWorkerMain;
-static NTSTATUS StartWorker(_In_ PAIC_DEVICE_CONTEXT Ctx);
-static VOID StopWorker(_In_ PAIC_DEVICE_CONTEXT Ctx);
+#define StartWorker AicStartWorker
+#define StopWorker AicStopWorker
 
 static BOOLEAN g_LoaderService;     /* this image runs as aic8800ldr */
 
@@ -50,6 +54,13 @@ static BOOLEAN g_LoaderService;     /* this image runs as aic8800ldr */
 static NTSTATUS
 OpenKey(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_ ACCESS_MASK Access, _Out_ WDFKEY *Key)
 {
+#ifdef AIC_WDI
+    /* a miniport-mode WDFDEVICE is not a PnP device of KMDF's: Device
+     * Parameters by the path wdi.cpp found (IoOpenDeviceRegistryKey) */
+    if (Ctx->DevKeyPath.Buffer != NULL) {
+        return WdfRegistryOpenKey(NULL, &Ctx->DevKeyPath, Access, WDF_NO_OBJECT_ATTRIBUTES, Key);
+    }
+#endif
     return WdfDeviceOpenRegistryKey(Ctx->Device, PLUGPLAY_REGKEY_DEVICE, Access, WDF_NO_OBJECT_ATTRIBUTES, Key);
 }
 
@@ -384,7 +395,11 @@ PutStats(_In_ PAIC_DEVICE_CONTEXT Ctx)
     AicPutULong(Ctx, L"UsbRingDrops", Ctx->RingDrops);
     AicPutULong(Ctx, L"UsbReaderErrors", Ctx->ReaderErrors);
     AicPutULong(Ctx, L"LinkState", (ULONG)d->Link);
+#ifndef AIC_WDI
     if (Ctx->Adapter) {
+#else
+    if (Ctx->Tal) {
+#endif
         AicPutULong(Ctx, L"NetTxFrames", Ctx->TxFrames);
         AicPutULong(Ctx, L"NetTxDrops", Ctx->TxDrops);
         AicPutULong(Ctx, L"NetTxErrors", Ctx->TxErrors);
@@ -636,12 +651,13 @@ ScanAndJoin(_In_ PAIC_DEVICE_CONTEXT Ctx, _In_ int Join)
 }
 
 /*
- * In PrepareHardware (readers running): the stale-firmware check, the chip
- * ID, and from stage 2 the firmware init, so that the adapter can start
- * with the module's MAC address. Sets Ctx->FwReady.
+ * In PrepareHardware (readers running; WDI: the adapter's open): the
+ * stale-firmware check, the chip ID, and from stage 2 the firmware init,
+ * so that the adapter can start with the module's MAC address. Sets
+ * Ctx->FwReady.
  */
-static VOID
-RuntimeInit(_In_ PAIC_DEVICE_CONTEXT Ctx)
+VOID
+AicRuntimeInit(_In_ PAIC_DEVICE_CONTEXT Ctx)
 {
     aic_dev *d = &Ctx->Aic;
     CHAR mac[18];
@@ -778,8 +794,11 @@ AicEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
     if (g_LoaderService) {
         return STATUS_SUCCESS;
     }
+#ifdef AIC_WDI
+    return STATUS_NOT_SUPPORTED;        /* only the loader is a KMDF PnP device here */
+#else
     if (ctx->Runtime && ctx->Stage >= AIC_STAGE_FIRMWARE && NT_SUCCESS(AicUsbStartReaders(ctx))) {
-        RuntimeInit(ctx);
+        AicRuntimeInit(ctx);
     }
     if (ctx->Mode == AIC_MODE_WIFICX) {
         /* the capabilities now; WiFiCx then asks for the adapter
@@ -801,6 +820,7 @@ AicEvtPrepareHardware(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Raw, _In_ WDFCMRE
     status = AicNetStart(ctx);
     AicPutULong(ctx, L"AdapterStartStatus", (ULONG)status);
     return status;
+#endif
 }
 
 static NTSTATUS
@@ -849,8 +869,8 @@ AicEvtD0Exit(_In_ WDFDEVICE Device, _In_ WDF_POWER_DEVICE_STATE TargetState)
 NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(_In_ HANDLE Handle, _In_ BOOLEAN Alertable,
                                               _In_opt_ PLARGE_INTEGER Timeout);
 
-static NTSTATUS
-StartWorker(_In_ PAIC_DEVICE_CONTEXT Ctx)
+NTSTATUS
+AicStartWorker(_In_ PAIC_DEVICE_CONTEXT Ctx)
 {
     HANDLE h;
     NTSTATUS status;
@@ -878,8 +898,8 @@ StartWorker(_In_ PAIC_DEVICE_CONTEXT Ctx)
     return status;
 }
 
-static VOID
-StopWorker(_In_ PAIC_DEVICE_CONTEXT Ctx)
+VOID
+AicStopWorker(_In_ PAIC_DEVICE_CONTEXT Ctx)
 {
     if (Ctx->Worker == NULL) {
         return;
@@ -934,6 +954,7 @@ AicEvtDeviceCleanup(_In_ WDFOBJECT Object)
     AicNetFree(AicGetContext((WDFDEVICE)Object));
 }
 
+#ifndef AIC_WDI
 /* Mode from the device's hardware key (Device Parameters), which its INF
  * writes; before WdfDeviceCreate, so through the FDO init. */
 static ULONG
@@ -952,6 +973,7 @@ ReadMode(_In_ PWDFDEVICE_INIT DeviceInit)
     }
     return v == AIC_MODE_WIFICX ? AIC_MODE_WIFICX : AIC_MODE_ETHERNET;
 }
+#endif
 
 static NTSTATUS
 AicEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
@@ -964,6 +986,7 @@ AicEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     ULONG mode = AIC_MODE_ETHERNET;
 
     UNREFERENCED_PARAMETER(Driver);
+#ifndef AIC_WDI
     if (!g_LoaderService) {
         mode = ReadMode(DeviceInit);
         status = NetDeviceInitConfig(DeviceInit);
@@ -977,6 +1000,7 @@ AicEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
             }
         }
     }
+#endif
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = AicEvtPrepareHardware;
     pnp.EvtDeviceReleaseHardware = AicEvtReleaseHardware;
@@ -1004,6 +1028,9 @@ AicEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     if (g_LoaderService) {
         return STATUS_SUCCESS;
     }
+#ifdef AIC_WDI
+    return STATUS_NOT_SUPPORTED;        /* never: the WLAN face is the WDI miniport */
+#else
     AicPutULong(ctx, L"ActiveMode", mode);
     if (mode == AIC_MODE_WIFICX) {
         /* the adapter comes later, when WiFiCx asks for it */
@@ -1012,6 +1039,7 @@ AicEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
         return status;
     }
     return AicNetCreateAdapter(ctx, NULL);
+#endif
 }
 
 NTSTATUS
@@ -1030,6 +1058,11 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
         RtlInitUnicodeString(&want, ldr);
         g_LoaderService = RtlEqualUnicodeString(&tail, &want, TRUE);
     }
+#ifdef AIC_WDI
+    if (!g_LoaderService) {
+        return AicDriverEntryWdi(DriverObject, RegistryPath);
+    }
+#endif
 
     WDF_DRIVER_CONFIG_INIT(&config, AicEvtDeviceAdd);
     return WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &config, WDF_NO_HANDLE);

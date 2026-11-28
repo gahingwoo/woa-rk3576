@@ -1,0 +1,73 @@
+;
+; aic8800wdildr.inf - AICSemi AIC8800D80 USB Wi-Fi (Radxa ROCK 4D), the ROM
+; loader face of the chip on Windows 10 2004..22H2 (build 19041..19045):
+; USB\VID_A69C&PID_8D80 at power-on. The driver (aic8800wdi.sys, here as
+; the service aic8800ldr, a KMDF function driver as aic8800ldr.inf's on
+; Windows 11) downloads the firmware and the Bluetooth patch; the chip then
+; leaves the bus and comes back as PID_8D81, whose WLAN interface
+; aic8800wdi.inf binds and whose Bluetooth interfaces the in-box BthUsb
+; binds. Install both INFs.
+;
+; Windows 11 takes aic8800ldr.inf instead (the models section for build
+; 22000 and later is empty). Settings (Stage, FirmwareDir) are read from
+; HKLM\SYSTEM\CurrentControlSet\Services\aic8800usb\Parameters; at Stage 0
+; nothing is sent to the chip.
+;
+; Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
+; SPDX-License-Identifier: GPL-2.0-only
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = aic8800wdildr.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+aic8800wdi.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...19041,NTARM64.10.0...22000
+
+[Standard.NTARM64.10.0...19041]
+%AIC.LoaderDesc% = AICLDR_Inst,USB\VID_A69C&PID_8D80
+
+; Windows 11: aic8800ldr.inf
+[Standard.NTARM64.10.0...22000]
+
+[AICLDR_Inst.NT]
+CopyFiles = AICLDR_CopyFiles
+
+[AICLDR_CopyFiles]
+aic8800wdi.sys
+
+[AICLDR_Inst.NT.Services]
+AddService = aic8800ldr,0x00000002,AICLDR_Service
+
+[AICLDR_Service]
+DisplayName   = %AIC.LdrSvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\aic8800wdi.sys
+
+[AICLDR_Inst.NT.Wdf]
+KmdfService = aic8800ldr, AICLDR_wdfsect
+
+[AICLDR_wdfsect]
+KmdfLibraryVersion = 1.31
+
+[Strings]
+ProviderName    = "woa-rk3576"
+DiskName        = "AIC8800D80 Wi-Fi (WDI) Installation Disk"
+AIC.LoaderDesc  = "AIC8800D80 USB Wi-Fi (firmware loader)"
+AIC.LdrSvcDesc  = "AIC8800D80 USB Wi-Fi firmware loader (Windows 10)"
