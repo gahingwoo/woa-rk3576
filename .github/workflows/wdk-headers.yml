@@ -35,6 +35,11 @@ jobs:
           foreach ($sub in 'km', 'shared') {
             Copy-Item "$inc\$sub" "$out\$sub" -Recurse -ErrorAction SilentlyContinue
           }
+          # Which wlan libraries (WDI TLV parser for Windows 10, WiFiCx's for 11)
+          # the WDK carries, per architecture.
+          Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Lib\$ver\km" -Recurse -File |
+            Where-Object { $_.FullName -match 'wlan|wdi|tlv|ndis' } |
+            ForEach-Object { "$($_.Length) $($_.FullName)" } | Set-Content "$out\LIBS.txt"
           "WDK $ver headers from runner image $env:ImageVersion" |
             Set-Content "$out\PROVENANCE.txt"
           Get-ChildItem $out -Recurse -File | Measure-Object -Property Length -Sum |
