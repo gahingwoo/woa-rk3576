@@ -1642,19 +1642,7 @@ DevicePrepareHardware(
         // TODO: Driver-managed buffering + multi-descriptor receive would
         // reduce memory overhead of Jumbo Packets.
         NET_ADAPTER_RX_CAPABILITIES rxCaps;
-#if DWC_EQOS_NETCX20
-        // Cached receive buffers, cache line aligned and a whole number of
-        // lines long: Windows 10 maps uncached ones as Device memory, where
-        // tcpip's misaligned reads fault. rxqueue.cpp keeps them coherent.
-        NET_ADAPTER_DMA_CAPABILITIES rxDmaCaps = dmaCaps;
-        rxDmaCaps.CacheEnabled = WdfTrue;
-        static constexpr UINT16 RxCacheLineMax = 128; // >= CTR_EL0 DminLine of any ARM64 core.
-        UINT16 const rxFrameSize = (context->config.RxBufferSize() + RxCacheLineMax - 1) & ~(RxCacheLineMax - 1);
-        NET_ADAPTER_RX_CAPABILITIES_INIT_SYSTEM_MANAGED_DMA(&rxCaps, &rxDmaCaps, rxFrameSize, QueuesSupported);
-        rxCaps.FragmentBufferAlignment = RxCacheLineMax;
-#else
         NET_ADAPTER_RX_CAPABILITIES_INIT_SYSTEM_MANAGED_DMA(&rxCaps, &dmaCaps, context->config.RxBufferSize(), QueuesSupported);
-#endif
 
         NetAdapterSetDataPathCapabilities(context->adapter, &txCaps, &rxCaps);
 
