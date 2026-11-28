@@ -3,10 +3,11 @@
 English | [简体中文](README.zh-CN.md)
 
 Every Windows driver for the RK3576 boards in one zip,
-`rk3576-drivers-arm64.zip`, with one version and one install script.
-Maskrom Studio installs it for the chosen board. The CI build is on the
-[`ci` pre-release](https://github.com/gahingwoo/woa-rk3576/releases/tag/ci)
-and is untested on boards.
+`rk3576-drivers-arm64-<version>.zip`, with one version and one install
+script. Maskrom Studio installs it for the chosen board. Get it from
+[release 0.5.0](https://github.com/gahingwoo/woa-rk3576/releases/tag/0.5.0)
+(the [`ci` pre-release](https://github.com/gahingwoo/woa-rk3576/releases/tag/ci)
+has the untested build of `main`).
 
 ## What is in it
 
@@ -18,7 +19,18 @@ and is untested on boards.
   pin controller, RTC, UART2, PCIe DBI), GPU (maliwddm) and NPU (rknpu).
 - TaishanPi 3M: also the GT9271 touch screen and Bluetooth.
 - CM5-IO and ROCK 4D: also the RK806 power button. ROCK 4D: the HAT EEPROM.
+- CM5-IO and ROCK 4D on Windows 10 only: NVMe (`rk3xnvme`; the inbox
+  stornvme faults there). Windows 10 installs also remove `stornvme.inf` from
+  the DriverDatabase entry for `PCI\CC_010802` (`win10-nvme.cmd W:\`
+  offline, the SYSTEM task online), see
+  [its README](../../drivers/storage/rk3xnvme/README.md). A tool that runs
+  DISM itself instead of `install.cmd` runs `win10-nvme.cmd W:\` after it.
 - Optional (`/optional`): Bluetooth on the CM5-IO (untested).
+
+Windows 10 (19041 to 19045) and Windows 11 get the drivers for their
+build: on Windows 10, Ethernet is `dwc_eqos10` (NetAdapterCx 2.0) instead of
+`dwc_eqos`. `install.cmd` names any driver that has no build for the
+target's Windows yet.
 
 A driver whose device the firmware does not publish binds nothing.
 The packages are test-signed; `certs\` holds the signers.
@@ -37,7 +49,16 @@ starts now) and marks the present devices with no driver or an older one
 for reinstall at the next boot. It never marks the SD/eMMC hosts (dwcsdhc,
 dwcmshc), which Windows may run from, nor the Ethernet adapter unless it has
 no driver; their new drivers are staged only and come in with an offline
-install. To see what would be marked, without changing anything:
+install.
+
+Two minutes after that restart a SYSTEM task (`rk3576-drivers-verify`)
+checks that every marked device took its new driver. One that did not is
+marked once more and needs one more restart: the task restarts Windows by
+itself only when nobody is signed in, and otherwise says so (a message, a
+notice at sign-in, the Application event log). Then it removes itself. Its
+log is `%ProgramData%\RK3576\drivers\verify-bound.log`.
+
+To see what would be marked, without changing anything:
 
     powershell -ExecutionPolicy Bypass -File install-online.ps1 -Board rock4d -Plan
 
@@ -53,4 +74,5 @@ The board is `tspi3m`, `cm5io` or `rock4d`.
 from the same commit (`build-woa.ps1`), takes maliwddm and rknpu from the
 latest successful builds of wddm-mali-g52 and woa-rk3576-npu, and runs
 `assemble.py`. `test_assemble.py` tests it; the workflow also plans an
-online install of each board on a Windows runner.
+online install of each board on a Windows runner, and `test_online.ps1`
+runs the follow-up check against made-up devices.

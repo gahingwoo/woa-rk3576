@@ -25,14 +25,13 @@ RK3576 是 ARMv8.0。Windows 11 24H2 及以后的版本需要 ARMv8.1 原子指�
 - [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576/releases/latest) 的固件，**以完整映像**写到 eMMC
   （这样才会建立脚本要检查的固件分区）。用浏览器：[flash.gahingwoo.com](https://flash.gahingwoo.com/)，选
   "UEFI firmware, whole image"。方法见 [edk2-rk3576 刷写固件](https://edk2.gahingwoo.com/flash.zh-CN.html)。
-- 本仓库[最新正式版](https://github.com/gahingwoo/woa-rk3576/releases/latest)（0.1.1 或更新）的 WinPE 映像，以及一个装得下它和 `install.wim` 的 U 盘。
+- 本仓库[最新正式版](https://github.com/gahingwoo/woa-rk3576/releases/latest)（0.5.0）的 WinPE 映像，以及一个装得下它和 `install.wim` 的 U 盘。
 - Windows 11 23H2 ARM64 ISO 里的 `install.wim` 或 `install.esd`。
 - 一个 USB 键盘。泰山派 3M 还需要 HDMI 显示器或立创的 DSI 屏。
 
 不要用旧版本：0.3.0 之前（泰山派 3M）或 0.4.0 之前（CM5-IO）的固件，以及 0.1.0 的驱动，把 eMMC 跑在 148.5 MHz，可能悄悄损坏文件。
 
-在泰山派 3M 上，触摸、蓝牙、耳机孔、HDMI 音频和 USB-C 需要 0.4.1 之后的固件：下一个正式版发布前，用 edk2-rk3576
-的 [`ci` 构建](https://edk2.gahingwoo.com/flash.zh-CN.html#滚动的-ci-构建)。安装本身用 0.4.1 就可以。
+请用 edk2-rk3576 [0.5.0](https://github.com/gahingwoo/edk2-rk3576/releases/tag/0.5.0) 或更新的固件。更早的版本在 ROCK 4D 上启动不了 Windows，在泰山派 3M 上没有触摸、蓝牙、音频和 USB-C。
 
 装好后的布局：eMMC 第 1 分区是固件（不动），eMMC 其余部分是 Windows，NVMe（如果有）不动。
 
@@ -71,7 +70,7 @@ Windows 会完成初始设置（不联网也能完成），进入桌面，右下
 第一次启动后：
 
 - 按[故障排查](troubleshooting.zh-CN.md#每次启动后时间都不对)设置时钟（泰山派 3M）；
-- 按需加装驱动：[硬件功能](features.zh-CN.md)，GPU 驱动见 [wddm-mali-g52](https://github.com/gahingwoo/wddm-mali-g52)。
+- 安装[驱动包](https://github.com/gahingwoo/woa-rk3576/releases/tag/0.5.0) `rk3576-drivers-arm64-0.5.0.zip`：运行 `install.cmd /online <板子>`，然后重启。它包含全部驱动，GPU 驱动也在内（见[驱动包](../tools/rk3576-drivers/README.zh-CN.md)）。
 
 `tools/woa-deploy/add-drivers.cmd` 可以在 WinPE 下给已安装的系统添加或更新驱动，不会清除任何东西。其他方法见[驱动](drivers.zh-CN.md)。
 
@@ -94,7 +93,7 @@ Windows 会完成初始设置（不联网也能完成），进入桌面，右下
 ### Radxa ROCK 4D
 
 - 没有 eMMC：固件在 SPI NOR 里，Windows 装在 NVMe 上。
-- 需要 edk2-rk3576 的 `main`（它的 `ci` 构建）：0.4.1 及更早的版本没有为这块板编译 ACPI，启动不了 Windows。
+- 需要 edk2-rk3576 0.5.0 或更新：更早的版本没有这块板的 ACPI，启动不了 Windows。
 - `main` 上的部署脚本只装到 eMMC。装到 NVMe 的功能在 `rock4d-nvme` 分支上，还没合并。
 - Windows 下没有 Wi-Fi 和蓝牙（AIC8800D80，`main` 上没有驱动）。请用以太网。
 

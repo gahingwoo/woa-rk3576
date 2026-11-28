@@ -10,14 +10,17 @@ bundle that installs into `%ProgramFiles%\RK3576`:
 | `rk-monitor.exe` | the tray monitor and desktop widget: CPU, GPU and NPU use, temperatures ([tools/rk-monitor](../rk-monitor/README.md)) | woa-rk3576 |
 | `npu\rknputest.exe` | the NPU driver's test tool (`rknputest info`, `rknputest m6`) | woa-rk3576-npu |
 | `npu\charsiu_run.exe` | runs a language model (gguf) on the NPU | woa-rk3576-npu (charsiu, built for Windows) |
+| `npu\bin\charsiu.cmd`, `npu\charsiu.ps1` | the `charsiu` command (on the machine Path): `charsiu`, `charsiu run`, `charsiu pull`, `charsiu serve`, `charsiu doctor` | woa-rk3576-npu (`win/`) |
+| `npu\charsiu_serve.exe`, `npu\charsiu_check.exe`, `npu\zoo.txt`, `npu\config.ini` | what `charsiu serve` and `charsiu pull` use; Charsiu Desktop runs `charsiu serve` | woa-rk3576-npu |
 | `npu\rknpu-perfcounters.ps1` | registers the NPU counters by hand (the installer does it on its own) | woa-rk3576-npu |
 | `setup\` | the installer's scripts, kept for the first boot, the counter task and uninstalling | woa-rk3576 |
 | `setup\rk3576-browser-gpu.ps1` | takes out the browser switch an earlier bundle added ([BROWSER-GPU.md](BROWSER-GPU.md)) | woa-rk3576 |
 | `VERSION.txt` | the bundle version and the commits it was built from | CI |
 
 CI builds it on every push of woa-rk3576 as the artifact `rk3576-tools-arm64`:
-rk-monitor from this repository, rknputest and charsiu_run from
-woa-rk3576-npu at the commit `NPU_REF` in `.github/workflows/ci.yml` names.
+rk-monitor from this repository, rknputest and charsiu (as its
+`win/mkpkg.sh` packages it, without the installer) from woa-rk3576-npu at
+the commit `NPU_REF` in `.github/workflows/ci.yml` names.
 
 ## Install on a running Windows
 
@@ -31,7 +34,20 @@ administrator rights). It:
   `\RK3576\RK3576 Monitor` (any user's logon, run as that user, not
   elevated, no delay). It shows "..." for about 5 s until the first sample;
 - adds `Start menu\Programs\RK3576`: RK3576 Monitor, RK3576 tools folder,
-  Uninstall RK3576 tools; and the entry in Settings, Apps;
+  Charsiu chat, Uninstall RK3576 tools; and the entry in Settings, Apps;
+- puts `%ProgramFiles%\RK3576\npu\bin` on the machine Path, so `charsiu`
+  works in every new console, cmd or PowerShell, elevated or not. It sets
+  the NPU variables itself (`charsiu --show` prints them); models and the
+  config are per user, in `%LOCALAPPDATA%\charsiu`
+  ([charsiu on Windows](https://github.com/gahingwoo/woa-rk3576-npu/blob/main/docs/charsiu.md));
+- lets ordinary users open the NPU: `Device Parameters\UserAccess` = 1 on
+  `ACPI\RKCP3576`, only where no value is set (a `0` someone chose stays).
+  rknpu.sys reads it when the device starts, so **it works from the next
+  restart**; until then only an administrator console or app gets the NPU,
+  and charsiu says so and answers on the CPU. With the NPU off in the
+  firmware there is no device yet: the counter task sets it at the first
+  start after the NPU is turned on. On a machine with several users read
+  "Who may use the NPU" in the page above first;
 - registers the GPU (`RK3576 GPU`, maliwddm) and NPU (`RK3576 NPU`, rknpu)
   performance counters with lodctr, from the manifests in the driver store,
   and adds the task `\RK3576\Performance counters` (SYSTEM, 30 s after every
@@ -50,7 +66,8 @@ starting rk-monitor now. Log: `%ProgramData%\RK3576\setup.log`.
 Settings, Apps, RK3576 tools; or the Start menu's Uninstall RK3576 tools; or
 `uninstall.cmd` (next to `install.cmd`, or in `%ProgramFiles%\RK3576\setup`).
 It removes everything the install added: the folder, the shortcuts, the
-logon task (and the Run entry of an offline install), `HKLM\SOFTWARE\RK3576`,
+logon task (and the Run entry of an offline install), the Path entry, the
+NPU's `UserAccess` if the install set it, `HKLM\SOFTWARE\RK3576`,
 the Apps entry, the counter task and the task folder, the
 counter registrations it made, the browser switch of an earlier bundle (taken out of every
 shortcut and command, policies given back), `%ProgramData%\RK3576`, and every user's
@@ -103,8 +120,8 @@ The natural place is `<root>\Windows\Setup\Scripts\SetupComplete.cmd`.
 `/hook` appends that line to it (or creates it). An installer that writes
 its own `SetupComplete.cmd` after calling `offline-install.cmd` (Maskrom
 Studio copies its own over it) should leave out `/hook` and put the line in
-its file. The step adds the shortcuts, the logon task and the counter task and
-registers the counters; it always exits 0, logs to `%ProgramData%\RK3576`, and
+its file. The step adds the shortcuts, the Path entry, the NPU's `UserAccess`, the
+logon task and the counter task and registers the counters; it always exits 0, logs to `%ProgramData%\RK3576`, and
 `install.cmd` on the running system repairs anything it could not do.
 
 `offline-install.cmd` exits 0 on success, 1 for usage, 2 when `<root>` is
@@ -115,7 +132,8 @@ failed (the hive is unloaded again).
 
 | Check | Expected |
 |---|---|
-| after `install.cmd` | tray icon and widget (top right of the main screen); three entries under Start menu > RK3576 |
+| after `install.cmd` | tray icon and widget (top right of the main screen); four entries under Start menu > RK3576 |
+| new console, `charsiu doctor` | the NPU device, its driver, `npu access` ok after a restart |
 | `Get-ScheduledTask -TaskPath \RK3576\` | the tasks listed above |
 | `Get-Counter -ListSet "RK3576 NPU","RK3576 GPU"` | both sets; `%ProgramData%\RK3576\counters.log` says what was registered |
 | reboot and sign in | rk-monitor within a few seconds; no "RK3576 Monitor" in `HKLM\...\CurrentVersion\Run` |

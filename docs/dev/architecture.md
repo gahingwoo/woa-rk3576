@@ -86,7 +86,7 @@ tools/
   pageverify/           page-by-page integrity test for large files
   make-woa-usb.sh       a Windows Setup stick that boots without NVRAM
   rk-monitor/           tray app and desktop widget: CPU, GPU and NPU load, temperatures
-  rk3576-tools/         installer of the user tools (rk-monitor, rknputest, charsiu_run)
+  rk3576-tools/         installer of the user tools (rk-monitor, rknputest, charsiu)
 docs/
 .github/workflows/      CI and the WinPE image
 ```

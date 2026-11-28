@@ -9,7 +9,16 @@ rem                                             install-online.ps1 trusts
 rem                                             certs\*.cer, stages the drivers
 rem                                             (pnputil /add-driver, never
 rem                                             /install) and marks the devices
-rem                                             to take them at the next boot
+rem                                             to take them at the next boot;
+rem                                             a task checks after that boot
+rem                                             that they did (verify-bound.ps1)
+rem
+rem Which drivers go in depends on the target's Windows build:
+rem boards\<board>-builds.txt (and -builds-optional.txt) give each driver the
+rem builds it is for (drivers.tsv's os column), and the ones that cover the
+rem build are installed: a Windows 10 build of a driver (dwc_eqos10) on
+rem Windows 10, its Windows 11 build (dwc_eqos) from 22000. boards\skipped.txt
+rem names what has no build for the target yet, and this says so.
 rem
 rem <board> is tspi3m, cm5io or rock4d. boards\<board>.txt lists the driver
 rem folders installed by default, boards\<board>-optional.txt the ones added
@@ -32,8 +41,7 @@ if not exist "%HERE%boards\%B%.txt" (
   echo There is no board %B% in this package ^(boards\%B%.txt^).
   exit /b 2
 )
-set LISTS="%HERE%boards\%B%.txt"
-if /i "%~3"=="/optional" set LISTS=%LISTS% "%HERE%boards\%B%-optional.txt"
+set OPTARG=%~3
 set VER=unknown
 if exist "%HERE%VERSION.txt" set /p VER=<"%HERE%VERSION.txt"
 echo RK3576 driver package %VER%, board %B%.
@@ -45,6 +53,18 @@ if not exist "%T%\Windows\System32\config\SYSTEM" (
   echo No Windows at %T%\ ^(no %T%\Windows\System32\config\SYSTEM^).
   exit /b 2
 )
+rem Which Windows: the build picks the drivers (:lists).
+set BUILD=
+reg load HKLM\RKDRVSW "%T%\Windows\System32\config\SOFTWARE" >nul 2>&1
+if not errorlevel 1 (
+  for /f "tokens=3" %%v in ('reg query "HKLM\RKDRVSW\Microsoft\Windows NT\CurrentVersion" /v CurrentBuildNumber 2^>nul ^| find "CurrentBuildNumber"') do set BUILD=%%v
+  reg unload HKLM\RKDRVSW >nul 2>&1
+)
+if "%BUILD%"=="" (
+  echo Could not read the Windows build of %T%\ ^(its SOFTWARE hive^); taking the Windows 11 ^(22000^) drivers.
+  set BUILD=22000
+)
+call :lists %BUILD%
 set E=0
 for %%L in (%LISTS%) do (
   for /f "usebackq eol=# delims=" %%d in (%%L) do (
@@ -55,8 +75,51 @@ for %%L in (%LISTS%) do (
     )
   )
 )
+rem rk3xnvme in the selection (Windows 10): win10-nvme.cmd keeps stornvme off
+rem the NVMe controller, where it faults (bugcheck 0x7E).
+set NV=
+for %%L in (%LISTS%) do findstr /x /i "rk3xnvme" %%L >nul 2>&1 && set NV=1
+if exist "%SEL%" del "%SEL%" >nul 2>&1
 if not "%E%"=="0" exit /b 1
+if defined NV (
+  call "%HERE%win10-nvme.cmd" %T%\ || exit /b 1
+)
 echo RK3576 drivers %VER% added to %T%\.
+exit /b 0
+
+:lists
+rem %1 = the build. Sets LISTS to the drivers for that build (a list file
+rem written from boards\<board>-builds*.txt) and names what has no build for it.
+set SEL=
+if not exist "%HERE%boards\%B%-builds.txt" goto :lists_old
+set SEL=%TEMP%\rk3576-drivers-%B%-%RANDOM%.txt
+type nul > "%SEL%"
+set BL="%HERE%boards\%B%-builds.txt"
+if /i "%OPTARG%"=="/optional" set BL=%BL% "%HERE%boards\%B%-builds-optional.txt"
+for %%L in (%BL%) do (
+  if exist %%L for /f "usebackq eol=# tokens=1-3 delims=	" %%a in (%%L) do (
+    if %1 GEQ %%b if %1 LEQ %%c >>"%SEL%" echo %%a
+  )
+)
+set LISTS="%SEL%"
+if %1 LSS 22000 (echo Windows build %1: the Windows 10 drivers.) else (echo Windows build %1: the Windows 11 drivers.)
+if exist "%HERE%boards\skipped.txt" (
+  for /f "usebackq eol=# tokens=1-4,* delims=	" %%a in ("%HERE%boards\skipped.txt") do (
+    if %1 GEQ %%b if %1 LEQ %%c (
+      echo ,%%d, | find ",%B%," >nul && echo Skipped %%a ^(%%e^): it has no driver for build %1 yet.
+    )
+  )
+)
+exit /b 0
+
+:lists_old
+rem A package from before boards\<board>-builds.txt: the two lists.
+set OSK=
+if %1 LSS 22000 set OSK=-win10
+if not exist "%HERE%boards\%B%%OSK%.txt" set OSK=
+set LISTS="%HERE%boards\%B%%OSK%.txt"
+if /i "%OPTARG%"=="/optional" set LISTS=%LISTS% "%HERE%boards\%B%%OSK%-optional.txt"
+echo Windows build %1.
 exit /b 0
 
 :online

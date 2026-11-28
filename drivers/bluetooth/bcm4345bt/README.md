@@ -14,8 +14,8 @@ link to the in-box BthMini.
 
 ## What it binds
 
-`ACPI\RKCP4345`, declared by the TaishanPi 3M firmware (edk2-rk3576 newer
-than 0.4.1) as `\_SB.BTH0`, with in this order:
+`ACPI\RKCP4345`, declared by the TaishanPi 3M firmware (edk2-rk3576 0.5.0
+or later) as `\_SB.BTH0`, with in this order:
 
 - `Memory32Fixed (0x2ad90000, 0x100)`: UART6's registers;
 - `Interrupt { 114 }`: UART6, level high;
@@ -107,7 +107,7 @@ It goes to `%SystemRoot%\System32\drivers\brcm\BCM4345C5.hcd`; the
 
 ## Install
 
-1. Firmware with `\_SB.BTH0` (edk2-rk3576 newer than 0.4.1), rk3xgpio
+1. Firmware with `\_SB.BTH0` (edk2-rk3576 0.5.0 or later), rk3xgpio
    installed. Replacing drivers that are already running:
    [docs/drivers.md](https://github.com/gahingwoo/woa-rk3576/blob/main/docs/drivers.md).
 2. `powershell -ExecutionPolicy Bypass -File install-firmware.ps1` as

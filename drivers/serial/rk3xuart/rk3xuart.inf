@@ -62,7 +62,7 @@ Dependencies   = SerCx2
 KmdfService = rk3xuart, RKUART_wdfsect
 
 [RKUART_wdfsect]
-KmdfLibraryVersion = 1.33
+KmdfLibraryVersion = 1.31
 
 [Strings]
 ProviderName      = "woa-rk3576"

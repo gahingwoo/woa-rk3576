@@ -21,13 +21,13 @@ Both options are under Setup, ACPI / Device Tree, and take effect at the
 next boot. They need ACPI mode (the default). They do nothing for Linux with
 a device tree.
 
-Firmware support per board:
+Firmware support per board, edk2-rk3576 0.5.0 or later:
 
-| Board | Branch | Status |
-|---|---|---|
-| TaishanPi 3M | `main` | both options |
-| CM5-IO | `cm5io-parity` | both options, not merged to `main` yet |
-| ROCK 4D | `main` | both options, not tried on the board |
+| Board | Status |
+|---|---|
+| TaishanPi 3M | both options |
+| CM5-IO | both options, not tried on the board |
+| ROCK 4D | both options, not tried on the board |
 
 The debug console UART (UART0) is never one of the header UARTs here, on
 any board, and rk3xuart refuses to start on it.

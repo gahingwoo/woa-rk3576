@@ -172,7 +172,7 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
             NT_ASSERT(descWrite.PacketLength >= 4); // PacketLength includes CRC
             frag->ValidLength = descWrite.PacketLength - 4;
 
-            if (descWrite.Rdes0Valid && descWrite.OuterVlanTag != 0)
+            if (descWrite.Rdes0Valid && descWrite.OuterVlanTag != 0 && context->packetIeee8021Q.Enabled)
             {
                 NET_PACKET_IEEE8021Q tag = {};
                 tag.PriorityCodePoint = descWrite.OuterVlanTag >> 13;
@@ -185,7 +185,7 @@ RxQueueAdvance(_In_ NETPACKETQUEUE queue)
             // If checksum offload is disabled by hardware then no IP headers will be
             // detected. If checksum offload is disabled by software then NetAdapterCx
             // will ignore our evaluation.
-            if (descWrite.IPv4HeaderPresent | descWrite.IPv6HeaderPresent)
+            if ((descWrite.IPv4HeaderPresent | descWrite.IPv6HeaderPresent) && context->packetChecksum.Enabled)
             {
                 auto const checksum = NetExtensionGetPacketChecksum(&context->packetChecksum, pktIndex);
                 checksum->Layer2 = NetPacketRxChecksumEvaluationValid;
@@ -419,7 +419,9 @@ RxQueueCreate(
 
         context->descVirtual = static_cast<RxDescriptor*>(
             WdfCommonBufferGetAlignedVirtualAddress(context->descBuffer));
-        memset(context->descVirtual, 0, sizeof(RxDescriptor) * context->descCount);
+        // A common buffer: uncached, Device memory under Windows 10, where the
+        // DC ZVA of memset faults. Aligned 8-byte stores (rk_devmem.h).
+        RkDevZero(context->descVirtual, sizeof(RxDescriptor) * context->descCount);
         context->descPhysical =
             WdfCommonBufferGetAlignedLogicalAddress(context->descBuffer);
         TraceWrite("RxQueueCreate-desc", LEVEL_VERBOSE,
@@ -428,11 +430,17 @@ RxQueueCreate(
 
         NET_EXTENSION_QUERY query;
 
+#if !DWC_EQOS_NETCX20
+        // NetAdapterCx 2.0 knows no 802.1Q or GSO extension: asking for one
+        // is BUGCODE_NETADAPTER_DRIVER (0x19E) with the name as parameter 2,
+        // not a disabled NET_EXTENSION as 2.1 returns. The context is zeroed,
+        // so they stay disabled there.
         NET_EXTENSION_QUERY_INIT(&query,
             NET_PACKET_EXTENSION_IEEE8021Q_NAME,
             NET_PACKET_EXTENSION_IEEE8021Q_VERSION_1,
             NetExtensionTypePacket);
         NetRxQueueGetExtension(queue, &query, &context->packetIeee8021Q);
+#endif
 
         NET_EXTENSION_QUERY_INIT(&query,
             NET_PACKET_EXTENSION_CHECKSUM_NAME,

@@ -14,12 +14,12 @@ env:
   # version; the km class extensions (sdport, SpbCx, GpioClx, NetAdapterCx)
   # come from the WDK half.
   WDK_VERSION: '10.0.26100.0'
-  # The RK3576 tools bundle takes rknputest and charsiu_run from
-  # woa-rk3576-npu at this commit (its main once npu-perfcounters, whose
-  # merge of main this is, is fast-forwarded there), built with the same
-  # llvm-mingw pin as that repository's CI.
+  # The RK3576 tools bundle takes rknputest and charsiu (charsiu_run,
+  # charsiu_serve, charsiu_check and the charsiu.ps1 front door, as
+  # win/mkpkg.sh packages them) from woa-rk3576-npu at this commit (its
+  # main), built with the same llvm-mingw pin as that repository's CI.
   NPU_REPO: 'gahingwoo/woa-rk3576-npu'
-  NPU_REF: '553cda8c97a9f209b04d4bc1e4451c05ea9ffcd7'
+  NPU_REF: '7cdd81c4d082db09f664c361ba7541df0181cd55'
   LLVM_MINGW_TAG: '20261020'
   LLVM_MINGW_SHA256: '55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335'
 
@@ -531,7 +531,7 @@ jobs:
           if-no-files-found: error
 
   npu-charsiu:
-    name: charsiu_run for the RK3576 tools (llvm-mingw)
+    name: charsiu for the RK3576 tools (llvm-mingw)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -556,6 +556,17 @@ jobs:
           out="$RUNNER_TEMP/npu"
           mkdir -p "$out/licenses"
           cp port/build/win/charsiu_run.exe tools/rknpu-perfcounters.ps1 "$out/"
+          # the rest of charsiu for Windows, from the package charsiu-install.ps1
+          # installs: the front door and bin\charsiu.cmd, the server and the
+          # model check (Charsiu Desktop runs `charsiu serve`), the zoo, the
+          # config template. Not the installer: the tools are updated as a whole.
+          sh win/mkpkg.sh port/build/win "$RUNNER_TEMP/pkg"
+          pk="$RUNNER_TEMP/pkg/charsiu-windows-arm64"
+          cmp "$pk/charsiu_run.exe" port/build/win/charsiu_run.exe
+          mkdir -p "$out/charsiu/bin"
+          cp "$pk/charsiu_serve.exe" "$pk/charsiu_check.exe" "$pk/charsiu.ps1" "$pk/config.ini" \
+             "$pk/zoo.txt" "$pk/VERSION" "$out/charsiu/"
+          cp "$pk/bin/charsiu.cmd" "$out/charsiu/bin/"
           cp external/charsiu/LICENSE "$out/licenses/charsiu-LICENSE.txt"
           cp port/libm/LICENSE.optimized-routines "$out/licenses/optimized-routines-LICENSE.txt"
           cp LICENSE "$out/licenses/woa-rk3576-npu-LICENSE.txt"
@@ -771,6 +782,7 @@ jobs:
             Copy-Item npu\tools\rknputest\ARM64\Release\rknputest.exe "$p\npu"
             Copy-Item npu-built\charsiu_run.exe, npu-built\rknpu-perfcounters.ps1 "$p\npu"
             Copy-Item npu-built\licenses\* "$p\npu\licenses"
+            Copy-Item npu-built\charsiu\* "$p\npu" -Recurse -Force
             Copy-Item tools\rk3576-tools\setup\* "$p\setup"
             Copy-Item tools\rk3576-tools\README.md, tools\rk3576-tools\BROWSER-GPU.md $p
             Copy-Item tools\rk3576-tools\README.md, tools\rk3576-tools\*.cmd $out
@@ -791,6 +803,13 @@ jobs:
             [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$e)
             if ($e) { $e; throw "parse errors in $($f.Name)" }
           }
+      - name: The charsiu command, from the bundle (Windows PowerShell 5.1, then pwsh)
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\rk3576-tools\tests\charsiu-cli.tests.ps1 -Npu test\rk3576-tools\RK3576\npu
+          if ($LASTEXITCODE -ne 0) { throw 'charsiu-cli.tests.ps1 (5.1)' }
+          & tools\rk3576-tools\tests\charsiu-cli.tests.ps1 -Npu test\rk3576-tools\RK3576\npu
+          if ($LASTEXITCODE -ne 0) { throw 'charsiu-cli.tests.ps1 (pwsh)' }
       - name: Install, check, uninstall, check (x64 build)
         shell: pwsh
         run: |
@@ -800,6 +819,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content "$env:ProgramData\RK3576\setup.log"; throw "install.cmd exited $LASTEXITCODE" }
           Get-Content "$env:ProgramData\RK3576\setup.log"
           foreach ($f in 'rk-monitor.exe', 'npu\rknputest.exe', 'npu\charsiu_run.exe', 'npu\rknpu-perfcounters.ps1',
+                         'npu\charsiu.ps1', 'npu\bin\charsiu.cmd', 'npu\charsiu_serve.exe', 'npu\charsiu_check.exe',
+                         'npu\config.ini', 'npu\zoo.txt', 'npu\VERSION',
                          'setup\rk3576-setup.ps1', 'setup\rk3576-counters.ps1', 'setup\uninstall.cmd',
                          'setup\firstboot.cmd', 'setup\rk3576-browser-gpu.ps1',
                          'VERSION.txt', 'LICENSE.txt') {
@@ -816,7 +837,7 @@ jobs:
           if ((Get-ItemProperty 'HKLM:\SOFTWARE\RK3576\Monitor').AutostartTask -ne 1) { throw 'AutostartTask' }
           if ((Get-ItemProperty 'HKLM:\SOFTWARE\RK3576\Monitor').Widget -ne 1) { throw 'Widget default' }
           if (-not (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RK3576Tools').UninstallString) { throw 'ARP' }
-          foreach ($l in 'RK3576 Monitor.lnk', 'RK3576 tools folder.lnk', 'Uninstall RK3576 tools.lnk') {
+          foreach ($l in 'RK3576 Monitor.lnk', 'RK3576 tools folder.lnk', 'Charsiu chat.lnk', 'Uninstall RK3576 tools.lnk') {
             if (-not (Test-Path (Join-Path $menu $l))) { throw "missing shortcut $l" }
           }
           # an offline install's Run entry, which the install must replace with the task
@@ -832,6 +853,11 @@ jobs:
           $p = Start-Process -FilePath (Join-Path $dir 'rk-monitor.exe') -ArgumentList '--once' -Wait -PassThru -NoNewWindow -RedirectStandardOutput once.txt
           Get-Content once.txt
           if ($p.ExitCode -ne 0) { throw 'rk-monitor --once' }
+          # charsiu on the machine Path, a new console finds it; no NPU here, so no UserAccess
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\rk3576-tools\tests\charsiu-cli.tests.ps1 -Npu (Join-Path $dir 'npu') -Installed
+          if ($LASTEXITCODE -ne 0) { throw 'charsiu-cli.tests.ps1 on the installed tools' }
+          if ((Get-ItemProperty 'HKLM:\SOFTWARE\RK3576' -Name NpuUserAccess -ErrorAction SilentlyContinue)) { throw 'NpuUserAccess without an NPU' }
+          if (Get-ScheduledTask -TaskPath '\RK3576\' -TaskName 'NPU access*' -ErrorAction SilentlyContinue) { throw 'the NPU access task was left behind' }
           # a per-user setting, to see the uninstall take it away
           New-Item -Path 'HKCU:\Software\RK3576\Monitor' -Force | New-ItemProperty -Name WidgetX -Value 5 -PropertyType DWord | Out-Null
           # upgrade in place
@@ -848,6 +874,8 @@ jobs:
           }
           if ((Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run').GetValue('RK3576 Monitor')) { $left += 'Run value' }
           if (Get-ScheduledTask -TaskPath '\RK3576\' -ErrorAction SilentlyContinue) { $left += 'task' }
+          $mp = (Get-Item 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          if ($mp -match 'RK3576\\npu\\bin') { $left += 'Path entry' }
           if ($left) { throw "left after uninstall: $($left -join ', ')" }
           Write-Host 'uninstall removed everything'
       - name: Offline install into a stand-in Windows root
@@ -1266,6 +1294,7 @@ jobs:
           - { name: wifi, proj: drivers/net/bcmwlsdio/bcmwlsdio.vcxproj }
           - { name: wifi-aic8800, proj: drivers/net/aic8800usb/aic8800usb.vcxproj }
           - { name: pageverify, proj: tools/pageverify/pageverify.vcxproj }
+          - { name: nvme, proj: drivers/storage/rk3xnvme/rk3xnvme.vcxproj }
     steps:
       - uses: actions/checkout@v4
 

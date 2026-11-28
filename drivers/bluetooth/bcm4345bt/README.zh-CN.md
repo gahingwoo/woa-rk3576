@@ -12,7 +12,7 @@
 
 ## 绑定的设备
 
-`ACPI\RKCP4345`，由泰山派 3M 固件（比 0.4.1 新的 edk2-rk3576）声明为 `\_SB.BTH0`，资源依次是：
+`ACPI\RKCP4345`，由泰山派 3M 固件（edk2-rk3576 0.5.0 或更新）声明为 `\_SB.BTH0`，资源依次是：
 
 - `Memory32Fixed (0x2ad90000, 0x100)`：UART6 的寄存器；
 - `Interrupt { 114 }`：UART6，高电平触发；
@@ -77,7 +77,7 @@ ACPI\RKCP4345          bcm4345bt.sys  (this driver, class System)
 
 ## 安装
 
-1. 固件要带 `\_SB.BTH0`（比 0.4.1 新的 edk2-rk3576），并已装好 rk3xgpio。替换已经在运行的驱动，见
+1. 固件要带 `\_SB.BTH0`（edk2-rk3576 0.5.0 或更新），并已装好 rk3xgpio。替换已经在运行的驱动，见
    [docs/drivers.zh-CN.md](https://github.com/gahingwoo/woa-rk3576/blob/main/docs/drivers.zh-CN.md)。
 2. 以管理员身份运行 `powershell -ExecutionPolicy Bypass -File install-firmware.ps1`。
 3. 信任驱动包里的 `signer.cer`（Root 和 TrustedPublisher，和其他驱动一样，见 [INSTALL](../../../docs/INSTALL.zh-CN.md)）。

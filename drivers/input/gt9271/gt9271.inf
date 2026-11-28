@@ -63,7 +63,7 @@ ServiceBinary = %13%\gt9271.sys
 KmdfService = gt9271, GT9271_wdfsect
 
 [GT9271_wdfsect]
-KmdfLibraryVersion = 1.33
+KmdfLibraryVersion = 1.31
 
 [Strings]
 ProviderName       = "woa-rk3576"

@@ -30,6 +30,57 @@ FROM = ('woa', 'gpu', 'npu')
 # Files a driver folder may carry; symbols and documentation stay out.
 DRIVER_FILES = ('.inf', '.cat', '.sys', '.dll', '.man')
 NULL_DRIVERS = ('malivop', 'rk3576-null')
+# drivers.tsv's os column: which Windows builds a driver is for.
+#   win10       builds below 22000 (Windows 10 is 19041 to 19045 here)
+#   win11       build 22000 and later
+#   N-          build N and later (22621-: Windows 11 22H2 and later)
+#   N-M         builds N to M
+# Any of them may end in :<dir>, "this is the build of <dir> for these
+# builds": install.cmd then says nothing about <dir> being left out there.
+# Left out, every Windows.
+BUILD_MAX = 99999
+OS_NAMED = {'all': (0, BUILD_MAX), 'win10': (0, 21999), 'win11': (22000, BUILD_MAX)}
+WIN10_BUILD = 19045   # the Windows 10 the -win10 lists are for
+WIN11_BUILD = 22000   # the first Windows 11: the plain lists
+
+
+def os_range(tok):
+    """(min, max, stands_in_for) of an os token, or None if it is not one."""
+    base, _, of = tok.partition(':')
+    if base in OS_NAMED:
+        lo, hi = OS_NAMED[base]
+    else:
+        a, dash, b = base.partition('-')
+        if not dash or not a.isdigit() or (b and not b.isdigit()):
+            return None
+        lo, hi = int(a), int(b) if b else BUILD_MAX
+        if lo > hi:
+            return None
+    return lo, hi, of or None
+
+
+def covers(r, build):
+    return r['builds'][0] <= build <= r['builds'][1]
+
+
+def gaps(rows):
+    """Per driver limited to builds N and later: the builds that neither it
+    nor a stand-in (a row with :<dir>) covers, as (row, lo, hi)."""
+    out = []
+    for r in rows:
+        # Only a driver for the newest Windows is missing anywhere: one for
+        # older builds only (a workaround) is not, above its range.
+        if r['of'] or tuple(r['builds']) == (0, BUILD_MAX) or r['builds'][1] != BUILD_MAX:
+            continue
+        spans = sorted(tuple(x['builds']) for x in rows if x is r or x['of'] == r['dir'])
+        at = 0
+        for lo, hi in spans:
+            if lo > at:
+                out.append((r, at, lo - 1))
+            at = max(at, hi + 1)
+        if at <= BUILD_MAX:
+            out.append((r, at, BUILD_MAX))
+    return out
 
 
 def boards(field, line):
@@ -55,15 +106,26 @@ def read_table(path):
             if len(parts) != 5:
                 sys.exit(f'drivers.tsv line {n}: want 5 columns, got {len(parts)}')
             d, dflt, opt, frm, what = parts
+            # The optional sixth column, before "what": which Windows builds
+            # the driver is for (OS_NAMED, N-, N-M, :<dir>). Rows without it
+            # are for every Windows.
+            osv, rng = 'all', OS_NAMED['all'] + (None,)
+            first, _, rest = what.partition(' ')
+            if rest.strip() and os_range(first):
+                osv, rng, what = first, os_range(first), rest.strip()
             if frm not in FROM:
                 sys.exit(f'drivers.tsv line {n}: unknown source {frm}')
             de, op = boards(dflt, n), boards(opt, n)
             if set(de) & set(op):
                 sys.exit(f'drivers.tsv line {n}: a board is both default and optional')
-            rows.append({'dir': d, 'what': what, 'from': frm, 'default': de, 'optional': op})
+            rows.append({'dir': d, 'what': what, 'from': frm, 'default': de, 'optional': op,
+                         'os': osv, 'builds': [rng[0], rng[1]], 'of': rng[2]})
     names = [r['dir'] for r in rows]
     if len(set(names)) != len(names):
         sys.exit('drivers.tsv names a folder twice')
+    for r in rows:
+        if r['of'] and r['of'] not in names:
+            sys.exit(f"drivers.tsv: {r['dir']} is the build of {r['of']}, which is not in the table")
     return rows
 
 
@@ -191,13 +253,35 @@ def main():
             sys.exit(f'no signer certificate {src}')
         shutil.copy2(src, os.path.join(certs, name))
 
+    # boards\<board>-builds.txt (and -builds-optional.txt): each driver with
+    # the builds it is for, "dir<TAB>min<TAB>max"; install.cmd and
+    # install-online.ps1 take the lines that cover the target's build.
+    # skipped.txt: "dir<TAB>min<TAB>max<TAB>boards<TAB>what", the builds a
+    # driver has no build for (not itself, not a stand-in), to say so.
+    # boards\<board>.txt is the list for Windows 11 (build 22000) as before
+    # the os column, boards\<board>-win10.txt the one for 19045, and
+    # win10-skipped.txt what 19045 goes without, for readers of those.
     os.makedirs(os.path.join(root, 'boards'))
+    bd = os.path.join(root, 'boards')
     for b in BOARDS:
         for kind, key in (('', 'default'), ('-optional', 'optional')):
-            with open(os.path.join(root, 'boards', f'{b}{kind}.txt'), 'w', newline='\r\n') as f:
-                for r in rows:
-                    if b in r[key]:
-                        f.write(r['dir'] + '\n')
+            mine = [r for r in rows if b in r[key]]
+            with open(os.path.join(bd, f'{b}-builds{kind}.txt'), 'w', newline='\r\n') as f:
+                for r in mine:
+                    f.write(f"{r['dir']}\t{r['builds'][0]}\t{r['builds'][1]}\n")
+            for osk, build in (('', WIN11_BUILD), ('-win10', WIN10_BUILD)):
+                with open(os.path.join(bd, f'{b}{osk}{kind}.txt'), 'w', newline='\r\n') as f:
+                    for r in mine:
+                        if covers(r, build):
+                            f.write(r['dir'] + '\n')
+    missing = gaps(rows)
+    with open(os.path.join(bd, 'skipped.txt'), 'w', newline='\r\n') as f:
+        for r, lo, hi in missing:
+            f.write(f"{r['dir']}\t{lo}\t{hi}\t{','.join(r['default'] + r['optional'])}\t{r['what']}\n")
+    with open(os.path.join(bd, 'win10-skipped.txt'), 'w', newline='\r\n') as f:
+        for r, lo, hi in missing:
+            if lo <= WIN10_BUILD <= hi:
+                f.write(f"{r['dir']}\t{','.join(r['default'] + r['optional'])}\t{r['what']}\n")
 
     sources = {}
     for s in a.source:
@@ -209,7 +293,7 @@ def main():
         'version': a.version,
         'boards': list(BOARDS),
         'sources': sources,
-        'drivers': [{k: r[k] for k in ('dir', 'what', 'from', 'default', 'optional', 'infs')} for r in rows],
+        'drivers': [{k: r[k] for k in ('dir', 'what', 'from', 'default', 'optional', 'os', 'builds', 'of', 'infs')} for r in rows],
     }
     with open(os.path.join(root, 'manifest.json'), 'w', newline='\n') as f:
         json.dump(manifest, f, indent=2)

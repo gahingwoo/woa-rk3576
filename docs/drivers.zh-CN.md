@@ -8,7 +8,7 @@
 
 ## 一次装全部
 
-[驱动包](../tools/rk3576-drivers/README.zh-CN.md)（发布页上的 `rk3576-drivers-arm64.zip`）里有三块板子的全部驱动，
+[驱动包](../tools/rk3576-drivers/README.zh-CN.md)（[0.5.0 正式版](https://github.com/gahingwoo/woa-rk3576/releases/tag/0.5.0)里的 `rk3576-drivers-arm64-0.5.0.zip`）里有三块板子的全部驱动，
 它的 `install.cmd` 会装好这块板子要的那些。
 
 ## 先校准时钟
