@@ -161,10 +161,11 @@ jobs:
           import json, os
           m = json.load(open('manifest.json'))
           for b in m['boards']:
-              want = [d['dir'] for d in m['drivers'] if b in d['default']]
+              # the Windows 11 list: every driver for all Windows plus the win11 ones
+              want = [d['dir'] for d in m['drivers'] if b in d['default'] and d.get('os', 'all') in ('all', 'win11')]
               got = [l.strip() for l in open(f'boards/{b}.txt') if l.strip()]
               assert want == got, (b, want, got)
-              for d in want:
+              for d in [d['dir'] for d in m['drivers'] if b in d['default']]:
                   assert os.listdir(f'drivers/{d}'), d
               # every board boots from its storage with these, and has
               # audio and the no-driver devices
