@@ -8,6 +8,13 @@
 #include "dwc_eqos_perf_data.h"
 
 #define CTRPP_VERIFY_COUNTER_SIZES 1
+#if DWC_EQOS_NETCX20
+// The ctrpp helpers register with PCW_CURRENT_VERSION, which the 26100 WDK
+// makes PCW_VERSION_2 (20348 and later). Windows 10 19041's PcwRegister takes
+// only PCW_VERSION_1 and fails anything else with STATUS_INVALID_PARAMETER_2.
+#undef PCW_CURRENT_VERSION
+#define PCW_CURRENT_VERSION PCW_VERSION_1
+#endif
 #include <dwc_eqos_perf.h>
 
 #include <acpiutil.hpp>
@@ -41,6 +48,12 @@ static auto constexpr DsmSetTxClockIndex = 1u;
 // Updated by DevicePerfRegister/DevicePerfUnregister.
 static WDFWAITLOCK g_devicesLock = nullptr; // Guards g_devices.
 static WDFCOLLECTION g_devices = nullptr;   // Guarded by g_devicesLock.
+// The ctrpp Unregister helpers hand PcwUnregister whatever the Register
+// helper left in the registration handle, and PcwUnregister(nullptr)
+// faults (19041: pcw.sys+0xc090, ldr x0, [x20, #0x20]):
+// unregister only what registered.
+static bool g_perfMacRegistered = false;
+static bool g_perfDebugRegistered = false;
 
 enum InterruptsWanted : UCHAR
 {
@@ -2249,6 +2262,7 @@ DevicePerfRegister(_In_ WDFDRIVER driver)
     }
 
     status = RegisterPERF_MAC_COUNTERSET(PerfCallback<PERF_MAC_DATA>, nullptr);
+    g_perfMacRegistered = NT_SUCCESS(status);
     if (!NT_SUCCESS(status))
     {
         TraceWrite("RegisterPERF_MAC_COUNTERSET", LEVEL_WARNING,
@@ -2256,6 +2270,7 @@ DevicePerfRegister(_In_ WDFDRIVER driver)
     }
 
     status = RegisterPERF_DEBUG_COUNTERSET(PerfCallback<PERF_DEBUG_DATA>, nullptr);
+    g_perfDebugRegistered = NT_SUCCESS(status);
     if (!NT_SUCCESS(status))
     {
         TraceWrite("RegisterPERF_DEBUG_COUNTERSET", LEVEL_WARNING,
@@ -2276,8 +2291,17 @@ DevicePerfUnregister()
 {
     PAGED_CODE();
 
-    UnregisterPERF_DEBUG_COUNTERSET();
-    UnregisterPERF_MAC_COUNTERSET();
+    if (g_perfDebugRegistered)
+    {
+        UnregisterPERF_DEBUG_COUNTERSET();
+        g_perfDebugRegistered = false;
+    }
+
+    if (g_perfMacRegistered)
+    {
+        UnregisterPERF_MAC_COUNTERSET();
+        g_perfMacRegistered = false;
+    }
 
     if (g_devices)
     {
